@@ -10,7 +10,6 @@ import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../../domain/use_cases/threading.dart';
 import '../database/app_database.dart';
-import '../database/tables.dart';
 import 'mail_connection.dart';
 
 /// Senkronizasyon sonucu.
@@ -576,8 +575,15 @@ class SyncEngine {
   }
 
   /// Bekleyen işlem kuyruğundaki iletilerin UID'leri.
+  ///
+  /// `dueOperations` yerine `activeOperations` kullanılır: `dueOperations`
+  /// yalnızca zamanı GELMİŞ (backoff beklemeyen) işlemleri döner. Bir işlem
+  /// geçici hatadan sonra geri çekilme (backoff) beklerken de kilitli
+  /// kalmalıdır — aksi hâlde tam bu pencerede araya giren bir senkronizasyon,
+  /// sunucudaki eski bayrağı yerelin üzerine yazıp kullanıcının az önceki
+  /// değişikliğini sessizce geri alabilir.
   Future<Set<int>> _lockedUids(int accountId, int mailboxId) async {
-    final pending = await _db.dueOperations(accountId, limit: 200);
+    final pending = await _db.activeOperations(accountId, limit: 200);
     final locked = <int>{};
     for (final op in pending) {
       try {

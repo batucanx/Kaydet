@@ -5,7 +5,6 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/result.dart';
-import '../../../data/database/tables.dart';
 import '../../../data/repositories/account_repository.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/theme/tokens.dart';

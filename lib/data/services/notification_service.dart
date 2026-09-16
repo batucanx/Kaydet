@@ -29,6 +29,10 @@ class NotificationService {
     priority: Priority.high,
     groupKey: 'kaydet_inbox',
     styleInformation: BigTextStyleInformation(''),
+    // Kilit ekranında gönderen/konu görünmez, yalnızca "yeni bildirim"
+    // yazar — hassas bir konu başlığı (ör. sağlık/finans) başkasına
+    // görünmesin diye.
+    visibility: NotificationVisibility.private,
   );
 
   Future<void> initialize() async {
@@ -86,6 +90,7 @@ class NotificationService {
           priority: Priority.high,
           groupKey: 'kaydet_inbox',
           setAsGroupSummary: true,
+          visibility: NotificationVisibility.private,
         ),
       ),
     );

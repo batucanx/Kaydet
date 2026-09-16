@@ -5,7 +5,7 @@ import 'package:workmanager/workmanager.dart';
 
 import '../core/result.dart';
 import '../data/database/app_database.dart';
-import '../data/database/tables.dart';
+import '../domain/models/mail_models.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/sync_engine.dart';

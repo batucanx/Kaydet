@@ -7,7 +7,6 @@ import 'package:synchronized/synchronized.dart';
 
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
-import '../database/tables.dart';
 
 /// IMAP işlemlerinin sözleşmesi.
 ///

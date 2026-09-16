@@ -17,7 +17,7 @@ import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/text_extraction.dart';
-import '../../../data/services/smtp_service.dart';
+import '../../../domain/use_cases/threading.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
@@ -146,12 +146,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   Future<void> _prefill() async {
-    final db = ref.read(databaseProvider);
     final account = ref.read(activeAccountProvider).value;
 
     if (widget.draftId != null) {
-      final row = await db.messageById(widget.draftId!);
-      final body = await db.bodyOf(widget.draftId!);
+      final row = await ref.read(messageProvider(widget.draftId!).future);
+      final body = await ref.read(messageBodyProvider(widget.draftId!).future);
       if (row != null) {
         _to.text = EmailAddress.decodeList(
           row.toAddrJson,
@@ -167,7 +166,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _inReplyTo = row.inReplyTo;
         _references = row.referencesRaw;
         _showCcBcc = _cc.text.isNotEmpty || _bcc.text.isNotEmpty;
-        final existing = await db.attachmentsOf(widget.draftId!);
+        final existing = await ref.read(
+          attachmentsProvider(widget.draftId!).future,
+        );
         _attachments.addAll(
           existing
               .where((a) => a.isOutgoing && a.localPath != null)
@@ -176,8 +177,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _labels.addAll(_decodeLabels(row.labelsJson));
       }
     } else if (widget.replyToId != null) {
-      final row = await db.messageById(widget.replyToId!);
-      final body = await db.bodyOf(widget.replyToId!);
+      final row = await ref.read(messageProvider(widget.replyToId!).future);
+      final body = await ref.read(
+        messageBodyProvider(widget.replyToId!).future,
+      );
       if (row != null) {
         _applyReply(row, body, account?.email);
       }
@@ -284,7 +287,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // konuşmaya bağlayamaz.
     if (widget.mode != ComposeMode.forward) {
       _inReplyTo = row.messageIdHeader;
-      _references = MimeBuilder.buildReferences(
+      _references = Threading.buildReferences(
         originalReferences: row.referencesRaw,
         originalMessageId: row.messageIdHeader,
       );

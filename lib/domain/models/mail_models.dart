@@ -1,13 +1,49 @@
 import 'dart:convert';
 
 import '../../core/turkish.dart';
-import '../../data/database/tables.dart';
 
 /// Servis sınırındaki tipler.
 ///
 /// `enough_mail` tipleri yalnızca `data/services/` içinde kullanılır; bu
 /// dosyadaki tipler o sınırı geçer. Paket bir gün değişirse yalnızca
 /// servis uygulamaları yeniden yazılır, uygulamanın geri kalanı etkilenmez.
+
+/// Sunucu bağlantı güvenliği.
+enum SocketSecurity { none, startTls, ssl }
+
+/// Hesabın kimlik doğrulama biçimi.
+///
+/// `password` varsayılandır (mevcut hesapların tümü bu — geriye dönük
+/// uyumluluk için indeks 0). `googleOAuth` şifre yerine [SecureStore]'da
+/// saklanan OAuth token'ını kullanır (bkz. `google_oauth_service.dart`).
+enum AuthMethod { password, googleOAuth }
+
+/// IMAP özel klasör türü.
+///
+/// Sunucudaki klasör adı ne olursa olsun (`INBOX.Sent`, `Gönderilmiş Öğeler`,
+/// `Sent Items`...) uygulama bu türle çalışır.
+enum SpecialUse { inbox, sent, drafts, trash, junk, archive, custom }
+
+/// Giden kutusundaki iletinin durumu.
+enum OutboxState { none, queued, sending, failed, sent }
+
+/// Kuyruğa alınmış sunucu işlemi.
+enum PendingOpType {
+  markSeen,
+  markUnseen,
+  flag,
+  unflag,
+  addKeyword,
+  removeKeyword,
+  move,
+  deletePermanently,
+  appendDraft,
+  deleteDraft,
+  send,
+}
+
+/// Kuyruk durumu.
+enum PendingOpStatus { pending, running, failed, done }
 
 /// E-posta adresi + görünen ad.
 class EmailAddress {
@@ -33,9 +69,9 @@ class EmailAddress {
   Map<String, dynamic> toMap() => {'e': email, if (name != null) 'n': name};
 
   static EmailAddress fromMap(Map<String, dynamic> map) => EmailAddress(
-        email: (map['e'] ?? '') as String,
-        name: map['n'] as String?,
-      );
+    email: (map['e'] ?? '') as String,
+    name: map['n'] as String?,
+  );
 
   static String encodeList(List<EmailAddress> list) =>
       jsonEncode(list.map((a) => a.toMap()).toList());
@@ -86,10 +122,12 @@ class EmailAddress {
         if (name.startsWith('"') && name.endsWith('"') && name.length > 1) {
           name = name.substring(1, name.length - 1);
         }
-        result.add(EmailAddress(
-          email: match.group(2)!.trim(),
-          name: name.isEmpty ? null : name,
-        ));
+        result.add(
+          EmailAddress(
+            email: match.group(2)!.trim(),
+            name: name.isEmpty ? null : name,
+          ),
+        );
       } else {
         result.add(EmailAddress(email: text));
       }
@@ -104,15 +142,15 @@ class EmailAddress {
 
   bool get isValid => _emailPattern.hasMatch(email);
 
-  static bool isValidEmail(String value) => _emailPattern.hasMatch(value.trim());
+  static bool isValidEmail(String value) =>
+      _emailPattern.hasMatch(value.trim());
 
   @override
   String toString() => formatted;
 
   @override
   bool operator ==(Object other) =>
-      other is EmailAddress &&
-      other.email.toLowerCase() == email.toLowerCase();
+      other is EmailAddress && other.email.toLowerCase() == email.toLowerCase();
 
   @override
   int get hashCode => email.toLowerCase().hashCode;
@@ -200,17 +238,12 @@ class FetchedEnvelope {
   bool get isDeleted => flags.contains(r'\Deleted');
 
   /// `\` ile başlamayan bayraklar kullanıcı etiketleridir.
-  List<String> get keywords =>
-      flags.where((f) => !f.startsWith(r'\')).toList();
+  List<String> get keywords => flags.where((f) => !f.startsWith(r'\')).toList();
 }
 
 /// Sunucudan çekilen ileti gövdesi.
 class FetchedBody {
-  const FetchedBody({
-    this.plainText,
-    this.html,
-    this.attachments = const [],
-  });
+  const FetchedBody({this.plainText, this.html, this.attachments = const []});
 
   final String? plainText;
   final String? html;

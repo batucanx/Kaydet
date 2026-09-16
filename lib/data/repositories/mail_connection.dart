@@ -3,7 +3,6 @@ import 'dart:async';
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
-import '../database/tables.dart';
 import '../services/google_oauth_service.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
@@ -33,7 +32,6 @@ class MailConnection {
   Timer? _keepAlive;
   int? _accountId;
   ServerCapabilities _capabilities = ServerCapabilities.unknown;
-  int _reconnectAttempt = 0;
   Completer<Result<void>>? _connecting;
 
   ImapService get imap => _imap;
@@ -87,7 +85,6 @@ class MailConnection {
     return result.fold(
       (capabilities) {
         _capabilities = capabilities;
-        _reconnectAttempt = 0;
         _startKeepAlive();
         return okVoid;
       },
@@ -97,20 +94,6 @@ class MailConnection {
       },
     );
   }
-
-  /// Bağlantı koptuysa üstel geri çekilmeyle yeniden dener.
-  ///
-  /// Gecikmeler: 1s, 2s, 4s, 8s, 16s, 32s, sonra 60s sabit.
-  Future<Result<void>> reconnectWithBackoff(int accountId) async {
-    final attempt = _reconnectAttempt;
-    final seconds = attempt >= 6 ? 60 : (1 << attempt);
-    _reconnectAttempt = attempt + 1;
-    await Future<void>.delayed(Duration(seconds: seconds));
-    return ensureConnected(accountId);
-  }
-
-  /// Geri çekilme sayacını sıfırlar (ağ geri geldiğinde).
-  void resetBackoff() => _reconnectAttempt = 0;
 
   void _startKeepAlive() {
     _stopKeepAlive();

@@ -1,9 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/core/avatar.dart';
 import 'package:kaydet/core/date_format.dart';
-import 'package:kaydet/data/services/smtp_service.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
 import 'package:kaydet/domain/use_cases/text_extraction.dart';
+import 'package:kaydet/domain/use_cases/threading.dart';
 
 void main() {
   group('HTML → düz metin', () {
@@ -89,6 +89,32 @@ void main() {
       expect(stripped, isNot(contains('https://izleme')));
       expect(stripped, contains('data-blocked'));
     });
+
+    test('protokolsüz (//) adresler de tespit edilir', () {
+      expect(
+        TextExtraction.hasRemoteImages('<img src="//izleme.com/px.gif">'),
+        isTrue,
+      );
+    });
+
+    test('srcset üzerinden yüklenen adresler tespit edilir ve kaldırılır', () {
+      const html =
+          '<img srcset="https://izleme/a.png 1x, https://izleme/b.png 2x">';
+      expect(TextExtraction.hasRemoteImages(html), isTrue);
+      final stripped = TextExtraction.stripRemoteImages(html);
+      expect(stripped, isNot(contains('https://izleme')));
+      expect(stripped, contains('data-blocked'));
+    });
+
+    test('CSS background-image üzerinden yüklenen adresler tespit edilir '
+        've kaldırılır', () {
+      const html =
+          '<div style="background-image:url(https://izleme/bg.png)">';
+      expect(TextExtraction.hasRemoteImages(html), isTrue);
+      final stripped = TextExtraction.stripRemoteImages(html);
+      expect(stripped, isNot(contains('https://izleme')));
+      expect(stripped, contains('background-image:none'));
+    });
   });
 
   group('e-posta adresi', () {
@@ -150,7 +176,7 @@ void main() {
 
   group('yanıt zinciri (References)', () {
     test('orijinal zincire yeni kimlik eklenir', () {
-      final references = MimeBuilder.buildReferences(
+      final references = Threading.buildReferences(
         originalReferences: '<a@x.com> <b@x.com>',
         originalMessageId: '<c@x.com>',
       );
@@ -159,7 +185,7 @@ void main() {
 
     test('zincir yoksa tek kimlikle başlar', () {
       expect(
-        MimeBuilder.buildReferences(
+        Threading.buildReferences(
           originalReferences: null,
           originalMessageId: 'c@x.com',
         ),
@@ -169,7 +195,7 @@ void main() {
 
     test('aynı kimlik iki kez eklenmez', () {
       expect(
-        MimeBuilder.buildReferences(
+        Threading.buildReferences(
           originalReferences: '<a@x.com>',
           originalMessageId: '<a@x.com>',
         ),
@@ -179,7 +205,7 @@ void main() {
 
     test('çok uzun zincir kırpılır', () {
       final long = List.generate(40, (i) => '<m$i@x.com>').join(' ');
-      final result = MimeBuilder.buildReferences(
+      final result = Threading.buildReferences(
         originalReferences: long,
         originalMessageId: '<son@x.com>',
       );
