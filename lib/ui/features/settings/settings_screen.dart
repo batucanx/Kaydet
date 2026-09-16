@@ -1,4 +1,3 @@
-import 'package:drift/drift.dart' show Value;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -7,7 +6,7 @@ import '../../../app/providers.dart';
 import '../../../app/sync_controller.dart';
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
-import '../../../data/database/tables.dart';
+import '../../../domain/models/mail_models.dart';
 import '../../../data/services/app_settings.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
@@ -143,7 +142,7 @@ class SettingsScreen extends ConsumerWidget {
                               name: label.name,
                               toneIndex: label.toneIndex,
                               onDeleted: () => ref
-                                  .read(databaseProvider)
+                                  .read(accountRepositoryProvider)
                                   .deleteLabel(label.id),
                             ),
                         ],
@@ -544,14 +543,8 @@ class SettingsScreen extends ConsumerWidget {
     if (name.isEmpty) return;
 
     await ref
-        .read(databaseProvider)
-        .insertLabel(
-          LabelsCompanion.insert(
-            accountId: accountId,
-            name: name,
-            toneIndex: Value(tone),
-          ),
-        );
+        .read(accountRepositoryProvider)
+        .createLabel(accountId: accountId, name: name, toneIndex: tone);
   }
 
   Future<void> _clearCache(BuildContext context, WidgetRef ref) async {
@@ -565,8 +558,8 @@ class SettingsScreen extends ConsumerWidget {
     );
     if (confirmed != true) return;
     final removed = await ref
-        .read(databaseProvider)
-        .pruneOldBodies(keep: Duration.zero);
+        .read(mailRepositoryProvider)
+        .pruneCachedBodies(keep: Duration.zero);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$removed ileti içeriği temizlendi.')),

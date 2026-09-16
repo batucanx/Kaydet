@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/database/app_database.dart';
-import '../data/database/tables.dart';
+import '../domain/models/mail_models.dart';
 import '../data/repositories/account_repository.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';

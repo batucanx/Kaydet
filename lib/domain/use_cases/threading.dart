@@ -85,6 +85,45 @@ abstract final class Threading {
   static String _uniqueFallbackId() =>
       'single:${DateTime.now().microsecondsSinceEpoch}:${_fallbackCounter++}';
 
+  /// Yanıt için `References` zinciri oluşturur.
+  ///
+  /// RFC 5322: yeni referans zinciri = eski References + orijinalin
+  /// Message-ID'si. Zincir kopunca alıcının istemcisi konuşmayı bölerek
+  /// gösterir. Yazma ekranı yanıt/tümünü-yanıtla akışında bunu çağırır;
+  /// gönderim anında `MailRepository` bu değeri olduğu gibi kullanır.
+  static String buildReferences({
+    required String? originalReferences,
+    required String? originalMessageId,
+  }) {
+    final parts = <String>[];
+    if (originalReferences != null && originalReferences.trim().isNotEmpty) {
+      parts.addAll(
+        RegExp(
+          r'<[^<>]+>',
+        ).allMatches(originalReferences).map((m) => m.group(0)!),
+      );
+    }
+    if (originalMessageId != null && originalMessageId.trim().isNotEmpty) {
+      final bracketed = _bracket(originalMessageId);
+      if (!parts.contains(bracketed)) parts.add(bracketed);
+    }
+    // Çok uzun zincirler bazı sunucularda başlık sınırını aşar.
+    if (parts.length > 20) {
+      return [parts.first, ...parts.sublist(parts.length - 19)].join(' ');
+    }
+    return parts.join(' ');
+  }
+
+  static String _bracket(String id) =>
+      id.startsWith('<') ? id : '<${_unbracket(id)}>';
+
+  static String _unbracket(String id) {
+    var value = id.trim();
+    if (value.startsWith('<')) value = value.substring(1);
+    if (value.endsWith('>')) value = value.substring(0, value.length - 1);
+    return value;
+  }
+
   /// Bir grup ileti için toplu konuşma ataması.
   ///
   /// [items] tarih sırasına göre (eskiden yeniye) verilmelidir; böylece
@@ -106,7 +145,8 @@ abstract final class Threading {
       var finalThread = threadId;
 
       // Başlık bilgisi yoksa konu üzerinden birleştirmeyi dene.
-      final hasHeaders = (item.messageId != null && item.messageId!.isNotEmpty) ||
+      final hasHeaders =
+          (item.messageId != null && item.messageId!.isNotEmpty) ||
           (item.references != null && item.references!.isNotEmpty) ||
           (item.inReplyTo != null && item.inReplyTo!.isNotEmpty);
       final subjKey = subjectKey(item.subject);

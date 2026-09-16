@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:kaydet/core/result.dart';
-import 'package:kaydet/data/database/tables.dart';
 import 'package:kaydet/data/services/imap_service.dart';
 import 'package:kaydet/data/services/smtp_service.dart';
 import 'package:kaydet/domain/models/mail_models.dart';

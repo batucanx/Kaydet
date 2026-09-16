@@ -1,7 +1,7 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/data/database/app_database.dart';
-import 'package:kaydet/data/database/tables.dart';
+import 'package:kaydet/domain/models/mail_models.dart';
 
 import 'helpers/test_db.dart';
 

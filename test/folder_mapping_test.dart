@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:kaydet/data/database/tables.dart';
+import 'package:kaydet/domain/models/mail_models.dart';
 import 'package:kaydet/domain/use_cases/folder_mapping.dart';
 
 void main() {

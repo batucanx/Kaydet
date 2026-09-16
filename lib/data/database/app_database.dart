@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
 
 import '../../core/turkish.dart';
+import '../../domain/models/mail_models.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -254,8 +255,12 @@ class AppDatabase extends _$AppDatabase {
             .map((m) => m.id)
             .get();
     if (ids.isEmpty) return;
-    await _deleteFtsFor(ids);
-    await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+    // FTS silme + satır silme tek transaction'da: kesinti anında FTS
+    // girdileri silinip mesaj satırları kalması gibi bir tutarsızlığı önler.
+    await transaction(() async {
+      await _deleteFtsFor(ids);
+      await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+    });
   }
 
   // ----------------------------------------------------------------- iletiler
@@ -314,11 +319,21 @@ class AppDatabase extends _$AppDatabase {
       (select(messages)..where((m) => m.id.isIn(ids))).get();
 
   /// Klasördeki sunucu kaynaklı UID'ler.
+  ///
+  /// Yalnızca `uid` sütunu projekte edilir. Büyük bir klasörde (100K+ mesaj)
+  /// her senkronizasyon turunda tüm satırı (~25 sütun: subject, preview,
+  /// toAddrJson...) tam `MessageRow` nesnesi olarak belleğe çekmek yerine
+  /// yalnızca ihtiyaç duyulan tek sütunu okur — bu metot her senkronizasyonda
+  /// (`_syncDeletions`, CONDSTORE'suz `_syncFlags`) çağrılır.
   Future<List<int>> uidsOf(int mailboxId) async {
-    final rows = await (select(
-      messages,
-    )..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isNotNull())).get();
-    return rows.map((r) => r.uid!).toList();
+    final rows =
+        await (selectOnly(messages)
+              ..addColumns([messages.uid])
+              ..where(
+                messages.mailboxId.equals(mailboxId) & messages.uid.isNotNull(),
+              ))
+            .get();
+    return rows.map((r) => r.read(messages.uid)!).toList();
   }
 
   Future<int?> lowestUid(int mailboxId) async {
@@ -426,10 +441,36 @@ class AppDatabase extends _$AppDatabase {
     await (update(messages)..where((m) => m.id.isIn(ids))).write(patch);
   }
 
+  /// Yalnızca ileti henüz gönderilmediyse "gönderiliyor" durumuna geçirir.
+  ///
+  /// Dönüş 0 ise ileti az önce başka bir işlemci tarafından zaten
+  /// gönderilmiş demektir (bkz. `claimDueOperations` — arka plan
+  /// senkronizasyonu ayrı bir isolate'ta çalıştığından aynı `send` işlemi
+  /// teorik olarak iki işlemci tarafından eşzamanlı sahiplenebilir);
+  /// çağıran bu durumda göndermeyi ATLAMALIDIR, aksi hâlde alıcı aynı
+  /// e-postayı iki kez alır. Koşullu `UPDATE ... WHERE outboxState != sent`
+  /// bunu tek bir atomik SQL ifadesiyle garanti eder.
+  Future<int> claimOutboxSend(int messageId) =>
+      (update(messages)..where(
+            (m) =>
+                m.id.equals(messageId) &
+                m.outboxState.isIn([
+                  OutboxState.none.index,
+                  OutboxState.queued.index,
+                  OutboxState.sending.index,
+                  OutboxState.failed.index,
+                ]),
+          ))
+          .write(
+            const MessagesCompanion(outboxState: Value(OutboxState.sending)),
+          );
+
   Future<void> deleteMessages(List<int> ids) async {
     if (ids.isEmpty) return;
-    await _deleteFtsFor(ids);
-    await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+    await transaction(() async {
+      await _deleteFtsFor(ids);
+      await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+    });
   }
 
   Future<void> deleteMessagesByUid(int mailboxId, List<int> uids) async {
@@ -584,6 +625,118 @@ class AppDatabase extends _$AppDatabase {
         .get();
   }
 
+  /// Kuyruk zamanlaması (backoff) ne olursa olsun, henüz kalıcı hataya
+  /// düşmemiş (terminal olmayan) tüm işlemler.
+  ///
+  /// [SyncEngine]'in "bu UID'de bekleyen bir kullanıcı işlemi var, sunucudan
+  /// gelen eski bayrak durumunu üzerine yazma" kilidi için kullanılır.
+  /// [dueOperations]'ın aksine `nextAttemptAt` filtresi UYGULANMAZ: geri
+  /// çekilme (backoff) bekleyen bir işlem de kilit altında kalmalıdır, aksi
+  /// hâlde tam bu pencerede kullanıcının değişikliği sessizce geri alınabilir.
+  Future<List<PendingOperationRow>> activeOperations(
+    int accountId, {
+    int limit = 200,
+  }) {
+    return (select(pendingOperations)
+          ..where(
+            (p) =>
+                p.accountId.equals(accountId) &
+                p.status.isIn([
+                  PendingOpStatus.pending.index,
+                  PendingOpStatus.running.index,
+                ]),
+          )
+          ..orderBy([(p) => OrderingTerm(expression: p.createdAt)])
+          ..limit(limit))
+        .get();
+  }
+
+  /// Bir sahiplenmenin ("running") en fazla ne kadar süre geçerli sayılacağı.
+  ///
+  /// Sahiplenen işlemci bu süre içinde tamamlamaz/başarısız saymazsa (örn.
+  /// çökme), işlem `claimDueOperations` tarafından yeniden sahiplenilebilir
+  /// hâle gelir — aksi hâlde `running` durumunda sonsuza dek asılı kalırdı.
+  static const Duration _claimLease = Duration(minutes: 3);
+
+  static bool _isClaimable(PendingOperationRow op, DateTime now) {
+    switch (op.status) {
+      case PendingOpStatus.pending:
+        return op.nextAttemptAt == null || !op.nextAttemptAt!.isAfter(now);
+      case PendingOpStatus.running:
+        return op.nextAttemptAt != null && !op.nextAttemptAt!.isAfter(now);
+      case PendingOpStatus.failed:
+      case PendingOpStatus.done:
+        return false;
+    }
+  }
+
+  Expression<bool> _nextAttemptMatches(
+    $PendingOperationsTable p,
+    DateTime? value,
+  ) => value == null ? p.nextAttemptAt.isNull() : p.nextAttemptAt.equals(value);
+
+  /// Bekleyen işlemleri sunucuya uygulamak üzere ATOMİK olarak sahiplenir.
+  ///
+  /// [dueOperations] yalnızca SELECT yapar; aynı satır iki farklı işlemci
+  /// (örn. ön plandaki kullanıcı eylemi + WorkManager'ın ayrı isolate'ta
+  /// çalışan arka plan senkronizasyonu — ikisi de aynı sqlite dosyasını
+  /// paylaşır) tarafından eşzamanlı okunup İKİ KEZ işlenebilir; bu özellikle
+  /// `send` işleminde alıcının aynı e-postayı iki kez alması demektir.
+  ///
+  /// Bu metot her adayı `WHERE id=? AND status=? AND next_attempt_at=?`
+  /// koşullu tek bir `UPDATE` ile "kilitler" — koşul, adayı SELECT ederken
+  /// okunan tam (status, nextAttemptAt) çiftiyle eşleşmelidir. SQLite aynı
+  /// satıra yazan iki `UPDATE`'i sıraya koyduğundan, ikinci çağrının WHERE
+  /// koşulu (satır artık ilk çağrı tarafından değiştirildiği için) eşleşmez
+  /// ve 0 satır etkiler — bu, süreçler/isolate'lar arası doğru çalışan bir
+  /// "compare-and-swap" sağlar. Kazanan `status`'u `running`'e çevirir ve
+  /// `nextAttemptAt`'ı bir kira (lease) süresi kadar ileri atar.
+  Future<List<PendingOperationRow>> claimDueOperations(
+    int accountId, {
+    int limit = 50,
+  }) async {
+    final now = DateTime.now().toUtc();
+    final candidates = await activeOperations(accountId, limit: limit);
+    final leaseUntil = now.add(_claimLease);
+
+    final claimed = <PendingOperationRow>[];
+    for (final op in candidates) {
+      if (!_isClaimable(op, now)) continue;
+      final affected =
+          await (update(pendingOperations)..where(
+                (p) =>
+                    p.id.equals(op.id) &
+                    p.status.equalsValue(op.status) &
+                    _nextAttemptMatches(p, op.nextAttemptAt),
+              ))
+              .write(
+                PendingOperationsCompanion(
+                  status: const Value(PendingOpStatus.running),
+                  nextAttemptAt: Value(leaseUntil),
+                ),
+              );
+      if (affected > 0) claimed.add(op);
+    }
+    return claimed;
+  }
+
+  /// Sahiplenilmiş (`running`) işlemleri hiçbir deneme sayısı artırmadan
+  /// `pending`'e geri döndürür.
+  ///
+  /// Örn. bağlantı kurulamadığı için sahiplenilen işlemlerin hiçbiri
+  /// gerçekten denenmediğinde kullanılır — aksi hâlde bu işlemler
+  /// sahiplenme kirası (bkz. `_claimLease`) dolana kadar görünmez kalır ve
+  /// ağ geri geldiğinde gereksiz yere birkaç dakika gecikirdi.
+  Future<void> releaseOperations(List<int> ids) async {
+    if (ids.isEmpty) return;
+    await (update(pendingOperations)..where((p) => p.id.isIn(ids))).write(
+      const PendingOperationsCompanion(
+        status: Value(PendingOpStatus.pending),
+        nextAttemptAt: Value(null),
+      ),
+    );
+  }
+
   Stream<int> watchPendingCount(int accountId) {
     final count = countAll();
     return (selectOnly(pendingOperations)
@@ -710,7 +863,9 @@ class AppDatabase extends _$AppDatabase {
     final ids = await (select(
       messages,
     )..where((m) => m.accountId.equals(accountId))).map((m) => m.id).get();
-    await _deleteFtsFor(ids);
-    await deleteAccount(accountId);
+    await transaction(() async {
+      await _deleteFtsFor(ids);
+      await deleteAccount(accountId);
+    });
   }
 }

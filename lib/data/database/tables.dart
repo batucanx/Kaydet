@@ -1,41 +1,6 @@
 import 'package:drift/drift.dart';
 
-/// Sunucu bağlantı güvenliği.
-enum SocketSecurity { none, startTls, ssl }
-
-/// Hesabın kimlik doğrulama biçimi.
-///
-/// `password` varsayılandır (mevcut hesapların tümü bu — geriye dönük
-/// uyumluluk için indeks 0). `googleOAuth` şifre yerine [SecureStore]'da
-/// saklanan OAuth token'ını kullanır (bkz. `google_oauth_service.dart`).
-enum AuthMethod { password, googleOAuth }
-
-/// IMAP özel klasör türü.
-///
-/// Sunucudaki klasör adı ne olursa olsun (`INBOX.Sent`, `Gönderilmiş Öğeler`,
-/// `Sent Items`...) uygulama bu türle çalışır.
-enum SpecialUse { inbox, sent, drafts, trash, junk, archive, custom }
-
-/// Giden kutusundaki iletinin durumu.
-enum OutboxState { none, queued, sending, failed, sent }
-
-/// Kuyruğa alınmış sunucu işlemi.
-enum PendingOpType {
-  markSeen,
-  markUnseen,
-  flag,
-  unflag,
-  addKeyword,
-  removeKeyword,
-  move,
-  deletePermanently,
-  appendDraft,
-  deleteDraft,
-  send,
-}
-
-/// Kuyruk durumu.
-enum PendingOpStatus { pending, running, failed, done }
+import '../../domain/models/mail_models.dart';
 
 @DataClassName('AccountRow')
 class Accounts extends Table {

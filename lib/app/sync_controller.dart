@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/result.dart';
 import '../data/database/app_database.dart';
-import '../data/database/tables.dart';
+import '../domain/models/mail_models.dart';
 import '../data/repositories/sync_engine.dart';
 import 'providers.dart';
 
@@ -112,7 +112,6 @@ class SyncController extends Notifier<SyncState> {
       final offline = results.every((r) => r == ConnectivityResult.none);
       state = state.copyWith(isOffline: offline);
       if (!offline) {
-        ref.read(mailConnectionProvider).resetBackoff();
         scheduleMicrotask(syncAll);
       }
     });

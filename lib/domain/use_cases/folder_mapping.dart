@@ -1,5 +1,5 @@
 import '../../core/turkish.dart';
-import '../../data/database/tables.dart';
+import '../models/mail_models.dart';
 
 /// Sunucu klasörünü uygulamanın bildiği türe eşler.
 ///

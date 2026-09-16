@@ -5,7 +5,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
-import '../../../data/database/tables.dart';
+import '../../../domain/models/mail_models.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';

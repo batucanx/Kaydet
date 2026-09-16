@@ -8,7 +8,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/app/app.dart';
 import 'package:kaydet/app/providers.dart';
 import 'package:kaydet/data/database/app_database.dart';
-import 'package:kaydet/data/database/tables.dart';
 import 'package:kaydet/data/services/app_settings.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/core/result.dart';

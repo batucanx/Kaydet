@@ -5,7 +5,6 @@ import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
-import '../database/tables.dart';
 import '../services/google_oauth_service.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
@@ -319,6 +318,21 @@ class AccountRepository {
     }
   }
 
+  /// Yeni etiket oluşturur (ad zaten varsa tonunu günceller).
+  Future<void> createLabel({
+    required int accountId,
+    required String name,
+    required int toneIndex,
+  }) => _db.insertLabel(
+    LabelsCompanion.insert(
+      accountId: accountId,
+      name: name,
+      toneIndex: Value(toneIndex),
+    ),
+  );
+
+  Future<void> deleteLabel(int labelId) => _db.deleteLabel(labelId);
+
   /// İmzayı günceller.
   Future<void> updateSignature(int accountId, String signature) =>
       _db.updateAccountFields(
@@ -383,10 +397,4 @@ class AccountRepository {
   /// Şifre yeniden istenince günceller (kimlik doğrulama hatası sonrası).
   Future<void> updatePassword(int accountId, String password) =>
       _secureStore.writePassword(accountId, password);
-
-  /// Kayıtlı şifre var mı? (oturum geçerliliği)
-  Future<bool> hasStoredPassword(int accountId) async {
-    final password = await _secureStore.readPassword(accountId);
-    return password != null && password.isNotEmpty;
-  }
 }

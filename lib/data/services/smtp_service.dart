@@ -5,7 +5,6 @@ import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
-import '../database/tables.dart';
 
 /// Gönderim sonucu.
 ///
@@ -312,33 +311,5 @@ abstract final class MimeBuilder {
     if (value.startsWith('<')) value = value.substring(1);
     if (value.endsWith('>')) value = value.substring(0, value.length - 1);
     return value;
-  }
-
-  /// Yanıt için `References` zinciri oluşturur.
-  ///
-  /// RFC 5322: yeni referans zinciri = eski References + orijinalin
-  /// Message-ID'si. Zincir kopunca alıcının istemcisi konuşmayı bölerek
-  /// gösterir.
-  static String buildReferences({
-    required String? originalReferences,
-    required String? originalMessageId,
-  }) {
-    final parts = <String>[];
-    if (originalReferences != null && originalReferences.trim().isNotEmpty) {
-      parts.addAll(
-        RegExp(r'<[^<>]+>')
-            .allMatches(originalReferences)
-            .map((m) => m.group(0)!),
-      );
-    }
-    if (originalMessageId != null && originalMessageId.trim().isNotEmpty) {
-      final bracketed = _bracket(originalMessageId);
-      if (!parts.contains(bracketed)) parts.add(bracketed);
-    }
-    // Çok uzun zincirler bazı sunucularda başlık sınırını aşar.
-    if (parts.length > 20) {
-      return [parts.first, ...parts.sublist(parts.length - 19)].join(' ');
-    }
-    return parts.join(' ');
   }
 }

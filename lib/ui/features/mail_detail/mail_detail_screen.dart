@@ -15,10 +15,10 @@ import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/text_extraction.dart';
+import '../../core/actions/message_actions.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../compose/compose_screen.dart';
-import '../mail_list/mail_list_screen.dart';
 
 /// İleti okuma ekranı.
 class MailDetailScreen extends ConsumerStatefulWidget {
@@ -59,7 +59,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final delay = ref.read(settingsProvider).markSeenDelayMs;
     _seenTimer = Timer(Duration(milliseconds: delay), () async {
       if (!mounted) return;
-      final row = await ref.read(databaseProvider).messageById(_messageId);
+      final row = await ref.read(messageProvider(_messageId).future);
       if (row != null && !row.isSeen) {
         await ref.read(mailRepositoryProvider).setSeen([_messageId], true);
       }

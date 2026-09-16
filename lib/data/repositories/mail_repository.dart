@@ -12,7 +12,6 @@ import '../../domain/models/mail_models.dart';
 import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../database/app_database.dart';
-import '../database/tables.dart';
 import '../services/smtp_service.dart';
 import 'mail_connection.dart';
 import 'sync_engine.dart';
@@ -61,19 +60,26 @@ class MailRepository {
   // ------------------------------------------------------------- okundu
 
   /// Okundu / okunmadı işaretler.
+  ///
+  /// Yerel güncelleme ve kuyruğa ekleme tek transaction'dadır: aradaki
+  /// kesintide (çökme) işlem kuyruğa hiç girmezse, bir sonraki senkronizasyon
+  /// sunucudaki eski bayrağı yerelin üzerine yazıp kullanıcının eylemini
+  /// sessizce geri alırdı.
   Future<void> setSeen(List<int> messageIds, bool seen) async {
     if (messageIds.isEmpty) return;
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return;
 
-    await _db.updateMessages(
-      messageIds,
-      MessagesCompanion(isSeen: Value(seen)),
-    );
-    await _enqueueByMailbox(
-      rows,
-      seen ? PendingOpType.markSeen : PendingOpType.markUnseen,
-    );
+    await _db.transaction(() async {
+      await _db.updateMessages(
+        messageIds,
+        MessagesCompanion(isSeen: Value(seen)),
+      );
+      await _enqueueByMailbox(
+        rows,
+        seen ? PendingOpType.markSeen : PendingOpType.markUnseen,
+      );
+    });
     kickQueue(rows.first.accountId);
   }
 
@@ -83,14 +89,16 @@ class MailRepository {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return;
 
-    await _db.updateMessages(
-      messageIds,
-      MessagesCompanion(isFlagged: Value(flagged)),
-    );
-    await _enqueueByMailbox(
-      rows,
-      flagged ? PendingOpType.flag : PendingOpType.unflag,
-    );
+    await _db.transaction(() async {
+      await _db.updateMessages(
+        messageIds,
+        MessagesCompanion(isFlagged: Value(flagged)),
+      );
+      await _enqueueByMailbox(
+        rows,
+        flagged ? PendingOpType.flag : PendingOpType.unflag,
+      );
+    });
     kickQueue(rows.first.accountId);
   }
 
@@ -123,12 +131,19 @@ class MailRepository {
     final remote = rows.where((r) => !r.isLocalOnly && r.uid != null).toList();
     if (remote.isEmpty) return;
 
-    await _enqueueByMailbox(
-      remote,
-      PendingOpType.move,
-      extra: {'targetPath': targetBox?.path, 'targetSpecialUse': target.index},
-    );
-    await _db.deleteMessages(remote.map((r) => r.id).toList());
+    // Kuyruğa ekleme ve yerel silme tek transaction'da: aradaki kesintide
+    // taşıma işlemi hiç kuyruğa girmeden mesaj yerelden kaybolmaz.
+    await _db.transaction(() async {
+      await _enqueueByMailbox(
+        remote,
+        PendingOpType.move,
+        extra: {
+          'targetPath': targetBox?.path,
+          'targetSpecialUse': target.index,
+        },
+      );
+      await _db.deleteMessages(remote.map((r) => r.id).toList());
+    });
     kickQueue(accountId);
   }
 
@@ -166,10 +181,12 @@ class MailRepository {
     if (rows.isEmpty) return;
 
     final remote = rows.where((r) => !r.isLocalOnly && r.uid != null).toList();
-    if (remote.isNotEmpty) {
-      await _enqueueByMailbox(remote, PendingOpType.deletePermanently);
-    }
-    await _db.deleteMessages(rows.map((r) => r.id).toList());
+    await _db.transaction(() async {
+      if (remote.isNotEmpty) {
+        await _enqueueByMailbox(remote, PendingOpType.deletePermanently);
+      }
+      await _db.deleteMessages(rows.map((r) => r.id).toList());
+    });
     kickQueue(rows.first.accountId);
   }
 
@@ -178,6 +195,12 @@ class MailRepository {
 
   Future<void> markSpam(List<int> messageIds) =>
       moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
+
+  /// Önbelleğe alınmış ileti gövdelerini temizler (Ayarlar > Önbelleği
+  /// temizle). Zarf kaydı kalır; ileti tekrar açıldığında gövde yeniden
+  /// indirilir.
+  Future<int> pruneCachedBodies({Duration keep = const Duration(days: 30)}) =>
+      _db.pruneOldBodies(keep: keep);
 
   /// Çöp kutusunu boşaltır.
   Future<void> emptyTrash(int accountId) async {
@@ -200,30 +223,35 @@ class MailRepository {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return;
 
-    for (final row in rows) {
-      final labels = _decodeLabels(row.labelsJson);
-      if (add) {
-        if (labels.contains(labelName)) continue;
-        labels.add(labelName);
-      } else {
-        if (!labels.remove(labelName)) continue;
-      }
-      await _db.updateMessage(
-        row.id,
-        MessagesCompanion(labelsJson: Value(jsonEncode(labels))),
-      );
-    }
-
     final account = await _db.accountById(rows.first.accountId);
     // Sunucu özel anahtar kelime desteklemiyorsa etiket yalnızca yereldir.
-    if (account?.supportsKeywords != true) return;
+    final shouldEnqueue = account?.supportsKeywords == true;
 
-    await _enqueueByMailbox(
-      rows.where((r) => r.uid != null).toList(),
-      add ? PendingOpType.addKeyword : PendingOpType.removeKeyword,
-      extra: {'keyword': _keywordFor(labelName)},
-    );
-    kickQueue(rows.first.accountId);
+    await _db.transaction(() async {
+      for (final row in rows) {
+        final labels = _decodeLabels(row.labelsJson);
+        if (add) {
+          if (labels.contains(labelName)) continue;
+          labels.add(labelName);
+        } else {
+          if (!labels.remove(labelName)) continue;
+        }
+        await _db.updateMessage(
+          row.id,
+          MessagesCompanion(labelsJson: Value(jsonEncode(labels))),
+        );
+      }
+
+      if (shouldEnqueue) {
+        await _enqueueByMailbox(
+          rows.where((r) => r.uid != null).toList(),
+          add ? PendingOpType.addKeyword : PendingOpType.removeKeyword,
+          extra: {'keyword': _keywordFor(labelName)},
+        );
+      }
+    });
+
+    if (shouldEnqueue) kickQueue(rows.first.accountId);
   }
 
   static String _keywordFor(String labelName) =>
@@ -452,24 +480,31 @@ class MailRepository {
     // "gönderdim" dedikten sonra iletisini Taslaklar'da değil, beklediği
     // yerde görür. Gerçekten gönderilince aynı satır sunucudaki kopyaya
     // bağlanır, kopya oluşmaz.
+    //
+    // Durum güncellemesi ve kuyruğa ekleme tek transaction'dadır: aradaki
+    // kesintide ileti "queued" görünüp hiçbir PendingOperation oluşmazsa,
+    // kullanıcıya sonsuza dek "gönderiliyor" gösterilen ama asla
+    // gönderilmeyen bir ileti kalırdı.
     final sentBox = await _db.mailboxBySpecialUse(accountId, SpecialUse.sent);
-    await _db.updateMessage(
-      id,
-      MessagesCompanion(
-        outboxState: const Value(OutboxState.queued),
-        isDraft: const Value(false),
-        outboxError: const Value(null),
-        mailboxId: sentBox == null ? const Value.absent() : Value(sentBox.id),
-      ),
-    );
+    await _db.transaction(() async {
+      await _db.updateMessage(
+        id,
+        MessagesCompanion(
+          outboxState: const Value(OutboxState.queued),
+          isDraft: const Value(false),
+          outboxError: const Value(null),
+          mailboxId: sentBox == null ? const Value.absent() : Value(sentBox.id),
+        ),
+      );
 
-    await _db.enqueue(
-      PendingOperationsCompanion.insert(
-        accountId: accountId,
-        type: PendingOpType.send,
-        payloadJson: Value(jsonEncode({'messageId': id})),
-      ),
-    );
+      await _db.enqueue(
+        PendingOperationsCompanion.insert(
+          accountId: accountId,
+          type: PendingOpType.send,
+          payloadJson: Value(jsonEncode({'messageId': id})),
+        ),
+      );
+    });
     return id;
   }
 
@@ -477,17 +512,26 @@ class MailRepository {
 
   /// Bekleyen işlemleri sunucuya uygular.
   ///
-  /// Aynı anda yalnızca bir tur çalışır: iki tur aynı işlemi iki kez
-  /// göndermemelidir (özellikle gönderim işlemleri için kritik).
+  /// `_processing` bayrağı yalnızca AYNI isolate içindeki tekrarlı çağrıları
+  /// engeller — arka plan senkronizasyonu (WorkManager) ayrı bir isolate'ta
+  /// kendi `MailRepository` örneğini kurduğundan bu bayrağı paylaşmaz. Gerçek
+  /// çift-işlem koruması `claimDueOperations`'ın veritabanı seviyesindeki
+  /// atomik `pending → running` geçişidir; bu, isolate/süreç sınırlarını
+  /// aşan tek güvenilir kilit noktasıdır (bkz. `app_database.dart`).
   Future<void> processQueue(int accountId) async {
     if (_processing) return;
     _processing = true;
     try {
-      final operations = await _db.dueOperations(accountId);
+      final operations = await _db.claimDueOperations(accountId);
       if (operations.isEmpty) return;
 
       final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) return;
+      if (connected is Err<void>) {
+        // Hiçbir işlem gerçekten denenmedi — sahiplenmeyi hemen bırak, aksi
+        // hâlde ağ geri geldiğinde kira süresi dolana kadar gereksiz gecikir.
+        await _db.releaseOperations(operations.map((op) => op.id).toList());
+        return;
+      }
 
       for (final op in operations) {
         final result = await _execute(accountId, op);
@@ -781,10 +825,14 @@ class MailRepository {
       return const Err(AuthFailure(detail: 'SMTP ayarı yok'));
     }
 
-    await _db.updateMessage(
-      messageId,
-      const MessagesCompanion(outboxState: Value(OutboxState.sending)),
-    );
+    // Yukarıdaki `outboxState == sent` kontrolü ile buradaki geçiş arasında
+    // başka bir işlemci (örn. arka plan isolate'ı) aynı `send` işlemini
+    // eşzamanlı sahiplenip göndermiş olabilir. `claimOutboxSend` bunu tek
+    // atomik `UPDATE ... WHERE outboxState != sent` ile kapatır: 0 dönerse
+    // ileti az önce gönderilmiştir, burada İKİNCİ KEZ göndermek yerine
+    // sessizce çıkılır.
+    final claimed = await _db.claimOutboxSend(messageId);
+    if (claimed == 0) return okVoid;
 
     final outgoing = await _buildOutgoing(row, isDraft: false);
     if (outgoing is Err<OutgoingMessage>) {

@@ -131,22 +131,39 @@ abstract final class TextExtraction {
       .join('\n');
 
   /// Uzak görsel içeren HTML mi? (gizlilik uyarısı için)
-  static bool hasRemoteImages(String html) => RegExp(
-    r'''<img[^>]+src\s*=\s*["']?https?://''',
-    caseSensitive: false,
-  ).hasMatch(html);
+  ///
+  /// Klasik `<img src="https://...">` dışında `srcset` ve CSS
+  /// `background(-image):url(...)` üzerinden yüklenen, `//` ile başlayan
+  /// protokolsüz adresler dahil tüm uzak kaynaklar taranır — izleme
+  /// pikselleri bu yollarla da gizlenebilir.
+  static bool hasRemoteImages(String html) => _remoteSource.hasMatch(html);
 
-  /// Uzak görselleri ve izleme piksellerini kaldırır.
+  static final RegExp _remoteSource = RegExp(
+    r'''(?:src|srcset)\s*=\s*["']?\s*(?:https?:)?//'''
+    r'''|url\(\s*["']?\s*(?:https?:)?//''',
+    caseSensitive: false,
+  );
+
+  /// Uzak görselleri, `srcset`'leri ve CSS arka plan görsellerini kaldırır.
   ///
   /// Kullanıcı açıkça "görselleri göster" demedikçe uzak kaynaklar
   /// yüklenmez; aksi hâlde gönderen mailin okunduğunu anlar.
-  static String stripRemoteImages(String html) => html.replaceAllMapped(
-    RegExp(
-      r'''<img([^>]*?)src\s*=\s*(["'])https?://[^"']*\2''',
-      caseSensitive: false,
-    ),
-    (m) => '<img${m.group(1)}data-blocked="1"',
-  );
+  static String stripRemoteImages(String html) {
+    final withoutAttrs = html.replaceAllMapped(
+      RegExp(
+        r'''(src|srcset)(\s*=\s*)(["'])(?:https?:)?//[^"']*\3''',
+        caseSensitive: false,
+      ),
+      (m) => 'data-blocked-${m.group(1)!.toLowerCase()}="1"',
+    );
+    return withoutAttrs.replaceAllMapped(
+      RegExp(
+        r'''url\(\s*["']?(?:https?:)?//[^)"' ]*["']?\s*\)''',
+        caseSensitive: false,
+      ),
+      (_) => 'none',
+    );
+  }
 
   /// Masaüstü odaklı e-postalarda sık görülen sabit piksel genişliklerini
   /// (`style="width:600px"`, `min-width:480px` gibi) CSS'ten temizler.
