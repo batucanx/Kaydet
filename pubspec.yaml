@@ -1,0 +1,91 @@
+name: kaydet
+description: "Kaydet — güvenli e-posta istemcisi"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Durum yönetimi
+  flutter_riverpod: ^3.4.3
+
+  # Veritabanı (offline-first tek doğruluk kaynağı)
+  drift: ^2.35.0
+  drift_flutter: ^0.3.1
+  path: ^1.9.1
+  path_provider: ^2.1.6
+
+  # Mail protokolleri — SÜRÜM SABİT (bkz. docs/plan/01 §1.9)
+  enough_mail: 2.1.7
+
+  # Güvenli kimlik saklama
+  flutter_secure_storage: ^11.1.1
+
+  # OAuth2 (Gmail girişi) — bkz. docs/plan/05 Faz 2
+  flutter_appauth: 12.1.0
+  http: ^1.6.0
+
+  # Navigasyon
+  go_router: ^18.0.1
+
+  # UI
+  lucide_icons_flutter: ^3.1.19
+  flutter_slidable: ^4.0.3
+
+  # Cihaz yetenekleri
+  speech_to_text: ^7.4.0
+  file_picker: ^13.0.0
+  open_filex: ^4.7.0
+  connectivity_plus: ^7.3.1
+
+  # Arka plan + bildirim
+  workmanager: ^0.10.10
+  flutter_local_notifications: ^22.3.1
+
+  # Yardımcılar
+  shared_preferences: ^2.5.5
+  intl: ^0.20.2
+  collection: ^1.19.1
+  synchronized: ^3.4.0
+  html: ^0.15.7
+  image_picker: ^1.2.3
+  cached_network_image: ^4.0.0
+  flutter_quill: ^11.5.1
+  flutter_quill_delta_from_html: ^1.5.3
+  webview_flutter: ^4.14.1
+  webview_flutter_android: ^4.14.1
+  url_launcher: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.13
+  drift_dev: ^2.35.0
+  flutter_launcher_icons: ^0.14.4
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/icon/app_logo.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icon/app_logo.png
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Variable.ttf
+          weight: 400
+        - asset: assets/fonts/Inter-Variable.ttf
+          weight: 500
+        - asset: assets/fonts/Inter-Variable.ttf
+          weight: 600
+        - asset: assets/fonts/Inter-Variable.ttf
+          weight: 700

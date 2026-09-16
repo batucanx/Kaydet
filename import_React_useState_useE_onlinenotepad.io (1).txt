@@ -1,0 +1,2255 @@
+import React, { useState, useEffect, useRef } from 'react';
+
+import { 
+
+  Menu, Search, PenSquare, Star, Trash2, 
+
+  Archive, MoreVertical, ArrowLeft, Send, 
+
+  Paperclip, Settings, Plus, User, Check,
+
+  ChevronDown, ChevronUp, Mail, FolderPlus, FileText,
+
+  AlertOctagon, RefreshCw, LogOut, X, ShieldAlert,
+
+  Inbox, ChevronRight, CornerUpLeft, CornerUpRight, Users,
+
+  Printer, Ban, Flag, Pin, Tag, Hash, Bell, Clock, Smartphone, Info, Loader2, Mic,
+
+  CheckCircle2, FolderInput, Palette
+
+} from 'lucide-react';
+
+
+
+// --- TEMA VE STİL ---
+
+const THEME = {
+
+  bg: "bg-white",
+
+  text: "text-black",
+
+  accent: "bg-black text-white", 
+
+  border: "border-gray-200",
+
+  subText: "text-gray-500",
+
+  hover: "hover:bg-gray-100",
+
+  inputBg: "bg-gray-50",
+
+};
+
+
+
+// --- RENK PALETLERİ ---
+
+const MATTE_AVATAR_COLORS = [
+
+  'bg-slate-200 text-slate-700',
+
+  'bg-red-100 text-red-800',
+
+  'bg-orange-100 text-orange-800',
+
+  'bg-amber-100 text-amber-800',
+
+  'bg-green-100 text-green-800',
+
+  'bg-emerald-100 text-emerald-800',
+
+  'bg-teal-100 text-teal-800',
+
+  'bg-cyan-100 text-cyan-800',
+
+  'bg-blue-100 text-blue-800',
+
+  'bg-indigo-100 text-indigo-800',
+
+  'bg-violet-100 text-violet-800',
+
+  'bg-purple-100 text-purple-800',
+
+  'bg-fuchsia-100 text-fuchsia-800',
+
+  'bg-pink-100 text-pink-800',
+
+  'bg-rose-100 text-rose-800',
+
+];
+
+
+
+const LABEL_COLORS = [
+
+  { id: 'blue', name: 'Mavi', class: 'bg-blue-100 text-blue-800' },
+
+  { id: 'green', name: 'Yeşil', class: 'bg-green-100 text-green-800' },
+
+  { id: 'red', name: 'Kırmızı', class: 'bg-red-100 text-red-800' },
+
+  { id: 'yellow', name: 'Sarı', class: 'bg-yellow-100 text-yellow-800' },
+
+  { id: 'purple', name: 'Mor', class: 'bg-purple-100 text-purple-800' },
+
+  { id: 'pink', name: 'Pembe', class: 'bg-pink-100 text-pink-800' },
+
+  { id: 'gray', name: 'Gri', class: 'bg-gray-200 text-gray-800' },
+
+  { id: 'indigo', name: 'İndigo', class: 'bg-indigo-100 text-indigo-800' },
+
+];
+
+
+
+// --- MOCK DATA ---
+
+const INITIAL_EMAILS = [
+
+  { id: 'init-101', folderId: 'inbox', from: "Ahmet Yılmaz", email: "ahmet@musteri.com", subject: "Fiyat Teklifi Revizesi", body: "Merhaba,\n\nKonuştuğumuz revizeleri ekte gönderiyorum. Lütfen inceleyip dönüş yapar mısınız?\n\nSaygılar,\nAhmet.", date: "10:30", read: false, starred: true, isPinned: true, labels: ['İş'] },
+
+  { id: 'init-102', folderId: 'inbox', from: "Banka Bildirim", email: "noreply@banka.com", subject: "Hesap Özeti - Şubat 2025", body: "Sayın Müşterimiz,\n\nŞubat ayı hesap özetiniz hazırdır. Detaylar için uygulamaya giriş yapınız.", date: "Dün", read: true, starred: false, isPinned: false, labels: ['Finans'] },
+
+  { id: 'init-103', folderId: 'sent', to: "Mehmet Demir", email: "mehmet@tedarik.com", subject: "Re: Stok Durumu", body: "Mehmet Bey,\n\nStokları kontrol ettik, sevkiyatı yarın çıkarabiliriz.\n\nİyi çalışmalar.", date: "Pzt", read: true, starred: false, isPinned: false, labels: [] },
+
+  { id: 'init-104', folderId: 'spam', from: "Kampanya", email: "info@kampanya.com", subject: "Büyük İndirim Başladı!", body: "Tüm ürünlerde %50 indirim fırsatını kaçırmayın!", date: "09:15", read: false, starred: false, isPinned: false, labels: [] },
+
+  { id: 'init-105', folderId: 'inbox', from: "Zeynep Kaya", email: "zeynep@tasarim.com", subject: "Logo Çalışmaları", body: "Selamlar,\n\nİstediğiniz siyah beyaz konseptli logo taslakları ektedir.", date: "08:00", read: false, starred: false, isPinned: false, labels: ['Tasarım'] },
+
+  { id: 'init-106', folderId: 'inbox', from: "Amazon AWS", email: "no-reply@aws.amazon.com", subject: "AWS Fatura Bildirimi", body: "Sayın Kullanıcı, fatura döneminiz sona erdi. Detaylar ektedir.", date: "Paz", read: true, starred: false, isPinned: false, labels: [] },
+
+  { id: 'init-107', folderId: 'inbox', from: "Ali Veli", email: "ali@veli.com", subject: "Toplantı Notları", body: "Arkadaşlar bugünkü toplantı notlarını paylaşıyorum.", date: "Cmt", read: true, starred: false, isPinned: false, labels: ['İş'] },
+
+  { id: 'init-108', folderId: 'inbox', from: "Netflix", email: "info@netflix.com", subject: "Yeni Dizi Önerisi", body: "Sizin için seçtiğimiz yeni dizilere göz atın.", date: "Cuma", read: true, starred: false, isPinned: false, labels: ['Kişisel'] },
+
+  { id: 'init-109', folderId: 'inbox', from: "Hepsiburada", email: "siparis@hepsiburada.com", subject: "Siparişiniz Kargoya Verildi", body: "Siparişiniz yola çıktı. Takip numarası: 123456789", date: "Per", read: true, starred: false, isPinned: false, labels: [] },
+
+  { id: 'init-110', folderId: 'inbox', from: "Linkedin", email: "messages@linkedin.com", subject: "Yeni bir mesajınız var", body: "Profilinizi görüntüleyenleri görün.", date: "Çar", read: false, starred: false, isPinned: false, labels: [] },
+
+];
+
+
+
+const DEFAULT_FOLDERS = [
+
+  { id: 'inbox', name: 'Gelen Kutusu', icon: <Inbox size={20}/>, count: 0 },
+
+  { id: 'sent', name: 'Gönderilenler', icon: <Send size={20}/>, count: 0 },
+
+  { id: 'pinned', name: 'Sabitlenenler', icon: <Pin size={20}/>, count: 0 }, 
+
+  { id: 'drafts', name: 'Taslaklar', icon: <FileText size={20}/>, count: 0 },
+
+  { id: 'trash', name: 'Çöp Kutusu', icon: <Trash2 size={20}/>, count: 0 },
+
+  { id: 'spam', name: 'Spam', icon: <AlertOctagon size={20}/>, count: 0 },
+
+];
+
+
+
+const INITIAL_LABELS = [
+
+  { id: 'work', name: 'İş', color: 'bg-blue-100 text-blue-800' },
+
+  { id: 'personal', name: 'Kişisel', color: 'bg-green-100 text-green-800' },
+
+  { id: 'design', name: 'Tasarım', color: 'bg-purple-100 text-purple-800' },
+
+  { id: 'finance', name: 'Finans', color: 'bg-yellow-100 text-yellow-800' },
+
+];
+
+
+
+// --- HELPERS ---
+
+const generateMoreEmails = (startIndex, count) => {
+
+  const newEmails = [];
+
+  const senders = ["Trendyol", "Yemeksepeti", "Google", "Apple", "Spotify", "Zoom", "Slack", "Müşteri A", "Müşteri B"];
+
+  const subjects = ["Siparişiniz alındı", "Güvenlik uyarısı", "Faturanız hazır", "Toplantı hatırlatması", "Yeni giriş yapıldı", "Haftalık rapor"];
+
+  
+
+  for (let i = 0; i < count; i++) {
+
+    const randomSender = senders[Math.floor(Math.random() * senders.length)];
+
+    const randomSubject = subjects[Math.floor(Math.random() * subjects.length)];
+
+    const uniqueId = `more-${Date.now()}-${i}-${Math.random().toString(36).substr(2, 9)}`;
+
+
+
+    newEmails.push({
+
+      id: uniqueId, 
+
+      folderId: 'inbox',
+
+      from: randomSender,
+
+      email: `info@${randomSender.toLowerCase()}.com`,
+
+      subject: `${randomSubject} #${startIndex + i}`,
+
+      body: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+
+      date: `${Math.floor(Math.random() * 28) + 1} Şub`,
+
+      read: Math.random() > 0.3,
+
+      starred: false,
+
+      isPinned: false,
+
+      labels: Math.random() > 0.7 ? ['İş'] : []
+
+    });
+
+  }
+
+  return newEmails;
+
+};
+
+
+
+const getAvatarColor = (name) => {
+
+  if (!name) return MATTE_AVATAR_COLORS[0];
+
+  const charCode = name.charCodeAt(0);
+
+  const index = charCode % MATTE_AVATAR_COLORS.length;
+
+  return MATTE_AVATAR_COLORS[index];
+
+};
+
+
+
+// --- EXTERNAL COMPONENTS (FIX FOR SCROLL RESET) ---
+
+
+
+const LoginScreen = ({ onLogin, isAddingAccount }) => {
+
+  const [formData, setFormData] = useState({
+
+    email: "",
+
+    password: "",
+
+    imapServer: "mail.ornek.com",
+
+    imapPort: "110",
+
+    smtpServer: "mail.ornek.com",
+
+    smtpPort: "587",
+
+    securityType: "NONE"
+
+  });
+
+
+
+  useEffect(() => {
+
+    if (!isAddingAccount) {
+
+        setFormData({
+
+            email: "hasem@barzamakina.com.tr",
+
+            password: "Bilgi1245!",
+
+            imapServer: "mail.barzamakina.com.tr",
+
+            imapPort: "110",
+
+            smtpServer: "mail.barzamakina.com.tr",
+
+            smtpPort: "587",
+
+            securityType: "NONE"
+
+        });
+
+    }
+
+  }, [isAddingAccount]);
+
+
+
+  const [loading, setLoading] = useState(false);
+
+  const [showAdvanced, setShowAdvanced] = useState(true);
+
+
+
+  const handleLogin = () => {
+
+    setLoading(true);
+
+    setTimeout(() => {
+
+      setLoading(false);
+
+      onLogin(formData);
+
+    }, 1000);
+
+  };
+
+
+
+  return (
+
+    <div className="flex flex-col h-full bg-white p-6 justify-center max-w-md mx-auto w-full">
+
+      <div className="mb-8 text-center">
+
+        <h1 className="text-3xl font-black tracking-tighter mb-1">KAYDET</h1>
+
+        <p className="text-gray-500 text-xs tracking-widest uppercase">
+
+            {isAddingAccount ? "Yeni Hesap Ekle" : "Güvenli E-Posta İstemcisi"}
+
+        </p>
+
+      </div>
+
+
+
+      <div className="space-y-3">
+
+        <div>
+
+          <label className="text-[10px] font-bold text-gray-900 ml-1 uppercase">E-Posta Adresi</label>
+
+          <input 
+
+            type="email" 
+
+            value={formData.email}
+
+            onChange={(e) => setFormData({...formData, email: e.target.value})}
+
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-black transition text-sm font-medium"
+
+            placeholder="ornek@sirket.com"
+
+          />
+
+        </div>
+
+        <div>
+
+          <label className="text-[10px] font-bold text-gray-900 ml-1 uppercase">Şifre</label>
+
+          <input 
+
+            type="password" 
+
+            value={formData.password}
+
+            onChange={(e) => setFormData({...formData, password: e.target.value})}
+
+            className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:border-black transition text-sm font-medium"
+
+            placeholder="••••••"
+
+          />
+
+        </div>
+
+        
+
+        <div className="pt-1">
+
+          <button onClick={() => setShowAdvanced(!showAdvanced)} className="text-[10px] font-bold text-gray-400 flex items-center gap-1 hover:text-black">
+
+            {showAdvanced ? <ChevronDown size={12}/> : <ChevronRight size={12}/>} Gelişmiş Sunucu Ayarları
+
+          </button>
+
+        </div>
+
+
+
+        {showAdvanced && (
+
+          <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 space-y-3 animate-fade-in text-xs">
+
+             <div className="grid grid-cols-3 gap-2">
+
+               <div className="col-span-2">
+
+                 <label className="text-[9px] font-bold text-gray-500 uppercase">Gelen Sunucu (IMAP)</label>
+
+                 <input type="text" value={formData.imapServer} onChange={(e) => setFormData({...formData, imapServer: e.target.value})} className="w-full p-2 bg-white border rounded" />
+
+               </div>
+
+               <div>
+
+                 <label className="text-[9px] font-bold text-gray-500 uppercase">Port</label>
+
+                 <input type="text" value={formData.imapPort} onChange={(e) => setFormData({...formData, imapPort: e.target.value})} className="w-full p-2 bg-white border rounded text-center" />
+
+               </div>
+
+             </div>
+
+             <div className="grid grid-cols-3 gap-2">
+
+               <div className="col-span-2">
+
+                 <label className="text-[9px] font-bold text-gray-500 uppercase">Giden Sunucu (SMTP)</label>
+
+                 <input type="text" value={formData.smtpServer} onChange={(e) => setFormData({...formData, smtpServer: e.target.value})} className="w-full p-2 bg-white border rounded" />
+
+               </div>
+
+               <div>
+
+                 <label className="text-[9px] font-bold text-gray-500 uppercase">Port</label>
+
+                 <input type="text" value={formData.smtpPort} onChange={(e) => setFormData({...formData, smtpPort: e.target.value})} className="w-full p-2 bg-white border rounded text-center" />
+
+               </div>
+
+             </div>
+
+             <div>
+
+               <label className="text-[9px] font-bold text-gray-500 uppercase">Güvenlik Türü</label>
+
+               <select 
+
+                 value={formData.securityType} 
+
+                 onChange={(e) => setFormData({...formData, securityType: e.target.value})}
+
+                 className="w-full p-2 bg-white border rounded outline-none"
+
+               >
+
+                 <option value="NONE">Yok (None)</option>
+
+                 <option value="SSL">SSL / TLS</option>
+
+                 <option value="STARTTLS">STARTTLS</option>
+
+               </select>
+
+             </div>
+
+          </div>
+
+        )}
+
+        <button onClick={handleLogin} disabled={loading} className="w-full bg-black text-white py-3 rounded-lg font-bold text-sm hover:bg-gray-900 transition active:scale-95 flex items-center justify-center gap-2 mt-4">
+
+          {loading ? <RefreshCw className="animate-spin" size={16} /> : (isAddingAccount ? "Hesabı Ekle" : "Giriş Yap")}
+
+        </button>
+
+      </div>
+
+    </div>
+
+  );
+
+};
+
+
+
+const Sidebar = ({ 
+
+  isSidebarOpen, setIsSidebarOpen, currentAccount, accounts, 
+
+  currentAccountId, setCurrentAccountId, setCurrentScreen, 
+
+  currentFolder, setCurrentFolder, getFolderCount, availableLabels 
+
+}) => (
+
+  <>
+
+    {isSidebarOpen && <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setIsSidebarOpen(false)} />}
+
+    <div className={`fixed inset-y-0 left-0 w-72 bg-white z-50 transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 shadow-2xl flex flex-col`}>
+
+      <div className="p-6 border-b border-gray-100">
+
+        <h2 className="text-xl font-black tracking-tighter mb-4">KAYDET</h2>
+
+        
+
+        <div className="flex items-center justify-between">
+
+            <div className="flex items-center gap-3 overflow-hidden">
+
+                <div className="w-8 h-8 bg-black text-white rounded-full flex items-center justify-center font-bold text-xs shrink-0">{currentAccount.name ? currentAccount.name.charAt(0).toUpperCase() : "U"}</div>
+
+                <div className="flex flex-col overflow-hidden"><span className="text-sm font-bold truncate">{currentAccount.name}</span><span className="text-xs text-gray-500 truncate">{currentAccount.email}</span></div>
+
+            </div>
+
+        </div>
+
+
+
+        {accounts.length > 0 && (
+
+          <div className="mt-4 pt-3 border-t border-gray-50 space-y-2">
+
+              {accounts.filter(a => a.id !== currentAccountId).map(acc => (
+
+                  <div key={acc.id} onClick={() => { setCurrentAccountId(acc.id); setIsSidebarOpen(false); }} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded cursor-pointer">
+
+                      <div className="w-6 h-6 bg-gray-200 text-gray-600 rounded-full flex items-center justify-center font-bold text-[10px]">{acc.name.charAt(0).toUpperCase()}</div>
+
+                      <span className="text-xs text-gray-600 truncate">{acc.email}</span>
+
+                  </div>
+
+              ))}
+
+              
+
+              <button 
+
+                onClick={() => { setCurrentScreen('add_account'); setIsSidebarOpen(false); }} 
+
+                className="w-full flex items-center gap-2 p-2 text-xs font-bold text-blue-600 hover:bg-blue-50 rounded mt-2"
+
+              >
+
+                <Plus size={14} /> Hesap Ekle
+
+              </button>
+
+          </div>
+
+        )}
+
+      </div>
+
+
+
+      <div className="flex-1 overflow-y-auto py-2">
+
+        <p className="px-6 mb-2 mt-2 text-[10px] font-bold text-gray-400 uppercase">Klasörler</p>
+
+        {DEFAULT_FOLDERS.map(f => {
+
+          const count = getFolderCount(f.id);
+
+          return (
+
+          <button key={f.id} onClick={() => { setCurrentFolder(f.id); setIsSidebarOpen(false); }} className={`w-full flex items-center gap-3 px-6 py-2.5 text-sm font-medium transition ${currentFolder === f.id ? 'bg-black text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+
+            {f.icon}
+
+            <span className="flex-1 text-left">{f.name}</span>
+
+            {count > 0 && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${currentFolder === f.id ? 'bg-white text-black' : 'bg-gray-100 text-black'}`}>{count}</span>}
+
+          </button>
+
+        )})}
+
+        
+
+        <div className="mt-6 px-6">
+
+          <div className="flex items-center justify-between mb-2">
+
+            <p className="text-[10px] font-bold text-gray-400 uppercase">Etiketler</p>
+
+            <button onClick={() => { setCurrentScreen('settings'); setIsSidebarOpen(false); }} className="text-black hover:bg-gray-100 rounded-full p-1"><Plus size={14} /></button>
+
+          </div>
+
+          {availableLabels.map(tag => (
+
+            <div key={tag.id} className="flex items-center gap-2 py-1.5 text-sm text-gray-600">
+
+              <div className={`w-2 h-2 rounded-full ${tag.color.split(' ')[0].replace('bg-', 'bg-')}`}></div> {tag.name}
+
+            </div>
+
+          ))}
+
+        </div>
+
+      </div>
+
+      <div className="p-4 border-t border-gray-100">
+
+          <button onClick={() => { setCurrentScreen('settings'); setIsSidebarOpen(false); }} className="flex items-center gap-3 text-sm font-bold text-gray-600 hover:text-black"><Settings size={18} /> Ayarlar</button>
+
+      </div>
+
+    </div>
+
+  </>
+
+);
+
+
+
+const InboxScreen = ({ 
+
+  isSelectionMode, selectedEmailIds, setSelectedEmailIds, handleSelectAll, 
+
+  isSearchOpen, setIsSearchOpen, searchQuery, setSearchQuery, setIsSidebarOpen, 
+
+  currentFolder, handleScroll, pinnedEmailsCount, loadingMore, filteredEmails, 
+
+  handleOpenMail, toggleSelection, getAvatarColor, availableLabels, currentAccount, 
+
+  setComposeData, setCurrentScreen, handleBulkAction, setCurrentFolder
+
+}) => (
+
+  <div className="flex flex-col h-full bg-white relative">
+
+    <div className={`h-14 border-b border-gray-100 flex items-center justify-between px-4 sticky top-0 z-30 transition-colors ${isSelectionMode ? 'bg-black text-white' : 'bg-white text-black'}`}>
+
+      {isSelectionMode ? (
+
+          <>
+
+              <button onClick={() => setSelectedEmailIds([])} className="p-2 -ml-2 hover:bg-white/20 rounded-full"><X size={22} /></button>
+
+              <span className="font-bold text-sm">{selectedEmailIds.length} seçildi</span>
+
+              <button onClick={handleSelectAll} className="text-xs font-bold hover:bg-white/20 px-2 py-1 rounded">
+
+                  {selectedEmailIds.length === filteredEmails.length ? "Vazgeç" : "Tümünü Seç"}
+
+              </button>
+
+          </>
+
+      ) : (
+
+          <>
+
+              {isSearchOpen ? (
+
+                  <div className="flex items-center gap-2 w-full animate-fade-in">
+
+                      <button onClick={() => { setIsSearchOpen(false); setSearchQuery(''); }} className="p-2 -ml-2 hover:bg-gray-100 rounded-full"><ArrowLeft size={22} /></button>
+
+                      <input 
+
+                          type="text" 
+
+                          autoFocus
+
+                          value={searchQuery}
+
+                          onChange={(e) => setSearchQuery(e.target.value)}
+
+                          placeholder="Mail ara..." 
+
+                          className="flex-1 bg-gray-50 border-none outline-none text-sm p-2 rounded-lg"
+
+                      />
+
+                      {searchQuery && <button onClick={() => setSearchQuery('')} className="p-1"><X size={16} className="text-gray-400"/></button>}
+
+                  </div>
+
+              ) : (
+
+                  <>
+
+                      <div className="flex items-center gap-3">
+
+                      <button onClick={() => setIsSidebarOpen(true)} className="p-2 -ml-2 hover:bg-gray-100 rounded-full"><Menu size={22} /></button>
+
+                      <span className="font-bold text-base">{DEFAULT_FOLDERS.find(f => f.id === currentFolder)?.name}</span>
+
+                      </div>
+
+                      <div className="flex items-center gap-2">
+
+                      <button onClick={() => setIsSearchOpen(true)} className="p-2 hover:bg-gray-100 rounded-full"><Search size={20} /></button>
+
+                      </div>
+
+                  </>
+
+              )}
+
+          </>
+
+      )}
+
+    </div>
+
+
+
+    <div 
+
+      className="flex-1 overflow-y-auto" 
+
+      onScroll={handleScroll} 
+
+    >
+
+      {currentFolder === 'inbox' && pinnedEmailsCount > 0 && !isSelectionMode && !searchQuery && (
+
+        <div 
+
+          onClick={() => setCurrentFolder('pinned')}
+
+          className="mx-3 mt-3 px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-between cursor-pointer hover:bg-gray-100 transition shadow-sm"
+
+        >
+
+          <div className="flex items-center gap-3">
+
+            <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-orange-600">
+
+              <Pin size={14} />
+
+            </div>
+
+            <div>
+
+              <p className="font-bold text-xs text-gray-900">Sabitlenenler</p>
+
+              <p className="text-[10px] text-gray-500">{currentAccount.name}</p>
+
+            </div>
+
+          </div>
+
+          <div className="px-2 py-0.5 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-bold text-gray-600">
+
+            {pinnedEmailsCount}
+
+          </div>
+
+        </div>
+
+      )}
+
+
+
+      <div className="pt-1 pb-20">
+
+        {filteredEmails.length === 0 ? (
+
+          <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+
+             {searchQuery ? <Search size={48} strokeWidth={1} className="mb-2"/> : <Inbox size={48} strokeWidth={1} className="mb-2"/>}
+
+             <p className="text-sm">{searchQuery ? 'Sonuç bulunamadı.' : 'Klasör boş.'}</p>
+
+          </div>
+
+        ) : (
+
+          filteredEmails.map(mail => {
+
+            const isSelected = selectedEmailIds.includes(mail.id);
+
+            return (
+
+            <div 
+
+              key={mail.id} 
+
+              onClick={() => handleOpenMail(mail)} 
+
+              className={`px-3 py-2 border-b border-gray-200 active:bg-gray-50 transition cursor-pointer group ${isSelected ? 'bg-gray-50' : ''}`}
+
+            >
+
+              <div className="flex items-center gap-3">
+
+                 <div 
+
+                    onClick={(e) => { e.stopPropagation(); toggleSelection(mail.id); }}
+
+                    className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-xs shrink-0 transition-colors z-10 self-center
+
+                        ${isSelected ? 'bg-black text-white' : getAvatarColor(mail.from)} 
+
+                        ${!isSelected && 'hover:opacity-80'}`}
+
+                 >
+
+                     {isSelected ? <Check size={16} /> : mail.from.charAt(0)}
+
+                 </div>
+
+
+
+                 <div className="flex-1 min-w-0 overflow-hidden">
+
+                     <div className="flex justify-between items-center mb-0.5">
+
+                         <div className="flex items-center gap-1 overflow-hidden">
+
+                             <span className={`text-sm truncate ${mail.read ? 'font-medium text-gray-600' : 'font-black text-black'}`}>
+
+                                {currentFolder === 'sent' ? `Alıcı: ${mail.to}` : mail.from}
+
+                             </span>
+
+                             {mail.isPinned && <Pin size={10} className="text-black fill-black flex-shrink-0" />}
+
+                         </div>
+
+                         <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+
+                             {mail.labels && mail.labels.map(l => {
+
+                                const labelObj = availableLabels.find(lbl => lbl.name === l) || { class: 'bg-gray-100 text-gray-600' };
+
+                                return (
+
+                                   <span key={l} className={`text-[9px] px-1.5 py-0.5 rounded font-bold border border-gray-200 ${labelObj.class || labelObj.color}`}>{l}</span>
+
+                                );
+
+                             })}
+
+                             <span className={`text-[10px] ${mail.read ? 'text-gray-400' : 'text-black font-bold'}`}>{mail.date}</span>
+
+                         </div>
+
+                     </div>
+
+
+
+                     <div className={`text-xs mb-0.5 truncate ${mail.read ? 'font-normal text-gray-600' : 'font-bold text-black'}`}>{mail.subject}</div>
+
+                     <div className="text-[10px] text-gray-400 line-clamp-1">{mail.body}</div>
+
+                 </div>
+
+              </div>
+
+            </div>
+
+          )})
+
+        )}
+
+        {loadingMore && (
+
+          <div className="flex justify-center py-4">
+
+             <RefreshCw className="animate-spin text-gray-400" size={20} />
+
+          </div>
+
+        )}
+
+      </div>
+
+    </div>
+
+
+
+    {!isSelectionMode ? (
+
+      <button onClick={() => { setComposeData({ id: null, to: '', cc: '', bcc: '', subject: '', body: currentAccount.signature }); setCurrentScreen('compose'); }} className="fixed bottom-6 right-6 w-12 h-12 bg-black text-white rounded-full shadow-2xl flex items-center justify-center hover:scale-105 active:scale-95 transition z-40">
+
+          <PenSquare size={20} />
+
+      </button>
+
+    ) : (
+
+      <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-2 flex justify-around items-center z-50 shadow-[0_-5px_15px_rgba(0,0,0,0.1)]">
+
+          <button onClick={() => handleBulkAction('delete')} className="flex flex-col items-center p-2 text-gray-600 hover:text-red-600">
+
+              <Trash2 size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Sil</span>
+
+          </button>
+
+          <button onClick={() => handleBulkAction('read')} className="flex flex-col items-center p-2 text-gray-600 hover:text-black">
+
+              <Mail size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Okundu</span>
+
+          </button>
+
+          <button onClick={() => handleBulkAction('pin')} className="flex flex-col items-center p-2 text-gray-600 hover:text-black">
+
+              <Pin size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Sabitle</span>
+
+          </button>
+
+          <button onClick={() => handleBulkAction('archive')} className="flex flex-col items-center p-2 text-gray-600 hover:text-black">
+
+              <Archive size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Arşiv</span>
+
+          </button>
+
+          <button onClick={() => alert('Klasör seçimi')} className="flex flex-col items-center p-2 text-gray-600 hover:text-black">
+
+              <FolderPlus size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Taşı</span>
+
+          </button>
+
+          <button onClick={() => alert('Etiket seçimi')} className="flex flex-col items-center p-2 text-gray-600 hover:text-black">
+
+              <Tag size={20} />
+
+              <span className="text-[9px] font-bold mt-1">Etiket</span>
+
+          </button>
+
+      </div>
+
+    )}
+
+  </div>
+
+);
+
+
+
+const DetailScreen = ({ 
+
+  setCurrentScreen, handleNavigateMail, hasPrev, hasNext, 
+
+  selectedEmail, handleTogglePin, handleAddLabel, handleDeleteMail, 
+
+  setComposeData, availableLabels 
+
+}) => {
+
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+
+
+  return (
+
+  <div className="flex flex-col h-full bg-white relative">
+
+    <div className="h-14 border-b border-gray-100 flex items-center justify-between px-3 bg-white sticky top-0 z-20">
+
+      <button onClick={() => setCurrentScreen('inbox')} className="p-2 hover:bg-gray-100 rounded-full"><ArrowLeft size={20} /></button>
+
+      <div className="flex items-center bg-gray-50 rounded-lg p-0.5">
+
+        <button disabled={!hasPrev} onClick={() => handleNavigateMail('prev')} className={`p-1.5 rounded-md ${!hasPrev ? 'text-gray-300' : 'text-black hover:bg-white shadow-sm'}`}><ChevronUp size={18} /></button>
+
+        <div className="w-px h-3 bg-gray-200 mx-0.5"></div>
+
+        <button disabled={!hasNext} onClick={() => handleNavigateMail('next')} className={`p-1.5 rounded-md ${!hasNext ? 'text-gray-300' : 'text-black hover:bg-white shadow-sm'}`}><ChevronDown size={18} /></button>
+
+      </div>
+
+    </div>
+
+
+
+    <div className="flex-1 overflow-y-auto p-4">
+
+       <div className="flex justify-between items-start mb-2 gap-2">
+
+          <h1 className="text-lg font-bold leading-tight flex-1">{selectedEmail.subject}</h1>
+
+          <div className="flex items-start gap-1 flex-shrink-0 mt-0.5">
+
+             {selectedEmail.labels && selectedEmail.labels.map(l => {
+
+                 const labelObj = availableLabels.find(lbl => lbl.name === l) || { class: 'bg-gray-100 text-gray-600' };
+
+                 return (
+
+                 <span key={l} className={`text-[10px] px-1.5 py-0.5 rounded font-bold border border-gray-200 ${labelObj.class || labelObj.color}`}>{l}</span>
+
+             )})}
+
+             {selectedEmail.isPinned && <Pin size={16} className="fill-black text-black ml-1" />}
+
+          </div>
+
+       </div>
+
+       
+
+       <div className="flex items-center gap-2 mb-4 pb-3 border-b border-gray-50">
+
+          <div className="w-8 h-8 bg-gray-100 rounded-full flex items-center justify-center font-bold text-gray-700 text-xs">
+
+             {selectedEmail.from.charAt(0)}
+
+          </div>
+
+          <div className="flex-1 min-w-0">
+
+             <div className="font-bold text-xs truncate">{selectedEmail.from}</div>
+
+             <div className="text-[10px] text-gray-400 truncate">{selectedEmail.email}</div>
+
+          </div>
+
+          <div className="text-[10px] text-gray-400 whitespace-nowrap">{selectedEmail.date}</div>
+
+       </div>
+
+
+
+       <div className="text-sm leading-6 text-gray-800 whitespace-pre-wrap font-medium">
+
+          {selectedEmail.body}
+
+       </div>
+
+    </div>
+
+
+
+    <div className="h-14 border-t border-gray-100 bg-white px-2 flex justify-between items-center">
+
+       <button onClick={() => { setComposeData({id: null, to: selectedEmail.email, subject: "Re: " + selectedEmail.subject}); setCurrentScreen('compose'); }} className="flex-1 flex flex-col items-center justify-center py-1 text-gray-600 hover:bg-gray-50 rounded-lg active:scale-95 transition">
+
+          <CornerUpLeft size={18} /><span className="text-[9px] mt-0.5 font-bold">Yanıtla</span>
+
+       </button>
+
+       <button onClick={() => { setComposeData({id: null, subject: "Fwd: " + selectedEmail.subject, body: `\n\n--- İletilen ---\n${selectedEmail.body}`}); setCurrentScreen('compose'); }} className="flex-1 flex flex-col items-center justify-center py-1 text-gray-600 hover:bg-gray-50 rounded-lg active:scale-95 transition">
+
+          <CornerUpRight size={18} /><span className="text-[9px] mt-0.5 font-bold">İlet</span>
+
+       </button>
+
+       <div className="w-px h-6 bg-gray-200 mx-1"></div>
+
+       <button onClick={() => alert('Arşivlendi')} className="flex-1 flex flex-col items-center justify-center py-1 text-gray-600 hover:bg-gray-50 rounded-lg active:scale-95 transition">
+
+          <Archive size={18} /><span className="text-[9px] mt-0.5 font-medium">Arşiv</span>
+
+       </button>
+
+       <button onClick={() => handleDeleteMail(selectedEmail.id)} className="flex-1 flex flex-col items-center justify-center py-1 text-gray-600 hover:bg-gray-50 rounded-lg active:scale-95 transition">
+
+          <Trash2 size={18} /><span className="text-[9px] mt-0.5 font-medium">Sil</span>
+
+       </button>
+
+       <div className="relative flex-1">
+
+          <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="w-full flex flex-col items-center justify-center py-1 text-gray-600 hover:bg-gray-50 rounded-lg active:scale-95 transition">
+
+              <MoreVertical size={18} /><span className="text-[9px] mt-0.5 font-medium">Diğer</span>
+
+          </button>
+
+          {isMenuOpen && (
+
+           <>
+
+           <div className="fixed inset-0 z-10" onClick={() => setIsMenuOpen(false)}></div>
+
+           <div className="absolute right-0 bottom-14 w-48 bg-white border border-gray-100 rounded-xl shadow-xl z-20 overflow-hidden animate-fade-in origin-bottom-right mb-1">
+
+              <button className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 flex items-center gap-2 text-gray-700 font-medium" onClick={() => { setIsMenuOpen(false); handleTogglePin(selectedEmail.id); }}>
+
+                 <Pin size={14} className={selectedEmail.isPinned ? "fill-black" : ""} /> {selectedEmail.isPinned ? "Sabitlemeyi Kaldır" : "Sabitle"}
+
+              </button>
+
+              <button className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 flex items-center gap-2 text-gray-700 font-medium" onClick={() => { setIsMenuOpen(false); handleAddLabel(selectedEmail.id, "İş"); }}>
+
+                 <Tag size={14} /> Etiketle: "İş"
+
+              </button>
+
+              <div className="border-t border-gray-100 my-1"></div>
+
+              <button className="w-full text-left px-3 py-2.5 text-xs hover:bg-gray-50 flex items-center gap-2 text-red-600 font-medium" onClick={() => { setIsMenuOpen(false); handleDeleteMail(selectedEmail.id); }}>
+
+                 <AlertOctagon size={14} /> Spam Bildir
+
+              </button>
+
+           </div>
+
+           </>
+
+         )}
+
+       </div>
+
+    </div>
+
+  </div>
+
+  );
+
+};
+
+
+
+const ComposeScreen = ({ composeData, currentAccount, setCurrentScreen, handleSendMail, handleSaveDraft }) => {
+
+  const [to, setTo] = useState(composeData.to);
+
+  const [cc, setCc] = useState(composeData.cc);
+
+  const [bcc, setBcc] = useState(composeData.bcc);
+
+  const [subject, setSubject] = useState(composeData.subject);
+
+  const [body, setBody] = useState(composeData.body);
+
+  const [showCcBcc, setShowCcBcc] = useState(false);
+
+  const [isListening, setIsListening] = useState(false);
+
+  const [showExitDialog, setShowExitDialog] = useState(false);
+
+
+
+  const handleBackPress = () => {
+
+      const hasContent = to || subject || (body && body !== currentAccount.signature);
+
+      if (hasContent) {
+
+          setShowExitDialog(true);
+
+      } else {
+
+          setCurrentScreen('inbox');
+
+      }
+
+  };
+
+
+
+  const toggleMic = () => {
+
+      setIsListening(!isListening);
+
+      if (!isListening) {
+
+          setTimeout(() => {
+
+              setBody(prev => prev + " (Bu metin sesli komut ile yazıldı...) ");
+
+              setIsListening(false);
+
+          }, 2000);
+
+      }
+
+  };
+
+
+
+  return (
+
+    <div className="flex flex-col h-full bg-white relative">
+
+      {showExitDialog && (
+
+          <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+
+              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in">
+
+                  <div className="p-4 border-b border-gray-100">
+
+                      <h3 className="text-lg font-bold text-gray-900">Taslak Kaydedilsin mi?</h3>
+
+                      <p className="text-sm text-gray-500 mt-1">İletiniz gönderilmedi. Taslaklara kaydetmek ister misiniz?</p>
+
+                  </div>
+
+                  <div className="flex flex-col">
+
+                      <button 
+
+                          onClick={() => handleSaveDraft({ id: composeData.id, to, cc, bcc, subject, body })}
+
+                          className="p-3 text-sm font-bold text-blue-600 hover:bg-blue-50 border-b border-gray-100"
+
+                      >
+
+                          Taslağı Kaydet
+
+                      </button>
+
+                      <button 
+
+                          onClick={() => setCurrentScreen('inbox')}
+
+                          className="p-3 text-sm font-bold text-red-600 hover:bg-red-50 border-b border-gray-100"
+
+                      >
+
+                          Kalıcı Olarak Sil
+
+                      </button>
+
+                      <button 
+
+                          onClick={() => setShowExitDialog(false)}
+
+                          className="p-3 text-sm font-bold text-gray-600 hover:bg-gray-50"
+
+                      >
+
+                          İptal
+
+                      </button>
+
+                  </div>
+
+              </div>
+
+          </div>
+
+      )}
+
+
+
+      <div className="h-14 border-b border-gray-100 flex items-center justify-between px-4 bg-white sticky top-0">
+
+        <button onClick={handleBackPress} className="p-2 -ml-2 text-gray-400 hover:text-black"><X size={22} /></button>
+
+        <span className="font-bold text-sm">Yeni İleti</span>
+
+        <button onClick={() => handleSendMail({ id: composeData.id, to, cc, bcc, subject, body })} className="text-black p-2 hover:bg-gray-100 rounded-full"><Send size={22} /></button>
+
+      </div>
+
+
+
+      <div className="flex-1 overflow-y-auto">
+
+         <div className="flex items-center px-4 py-2 border-b border-gray-50">
+
+            <span className="text-gray-400 text-xs w-10 font-medium">Kime:</span>
+
+            <input type="text" value={to} onChange={(e) => setTo(e.target.value)} className="flex-1 outline-none text-sm font-medium placeholder-gray-300" placeholder="Alıcı E-posta" autoFocus={!composeData.to} />
+
+            <button onClick={() => setShowCcBcc(!showCcBcc)} className={`p-1 rounded-md transition ${showCcBcc ? 'bg-gray-100 text-black' : 'text-gray-400'}`}><ChevronDown size={16} /></button>
+
+         </div>
+
+         {showCcBcc && (
+
+           <div className="animate-fade-in bg-gray-50/50">
+
+             <div className="flex items-center px-4 py-2 border-b border-gray-50"><span className="text-gray-400 text-xs w-10 font-medium">Bilgi:</span><input type="text" value={cc} onChange={(e) => setCc(e.target.value)} className="flex-1 outline-none text-sm font-medium placeholder-gray-300 bg-transparent" placeholder="CC"/></div>
+
+             <div className="flex items-center px-4 py-2 border-b border-gray-50"><span className="text-gray-400 text-xs w-10 font-medium">Gizli:</span><input type="text" value={bcc} onChange={(e) => setBcc(e.target.value)} className="flex-1 outline-none text-sm font-medium placeholder-gray-300 bg-transparent" placeholder="BCC"/></div>
+
+           </div>
+
+         )}
+
+         <div className="flex items-center px-4 py-2 border-b border-gray-50"><span className="text-gray-400 text-xs w-10 font-medium">Konu:</span><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} className="flex-1 outline-none text-sm font-bold placeholder-gray-300" placeholder="Konu Başlığı" /></div>
+
+         <textarea value={body} onChange={(e) => setBody(e.target.value)} className="w-full h-full p-4 outline-none text-sm leading-relaxed resize-none" placeholder="İletinizi buraya yazın..." />
+
+      </div>
+
+      
+
+      <div className="p-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center text-gray-500">
+
+          <div className="flex gap-4">
+
+              <div className="flex items-center gap-1 cursor-pointer hover:text-black">
+
+                  <Paperclip size={18} />
+
+                  <span className="text-xs font-bold my-auto">Dosya</span>
+
+              </div>
+
+              <div 
+
+                  onClick={toggleMic}
+
+                  className={`flex items-center gap-1 cursor-pointer transition ${isListening ? 'text-red-600 animate-pulse' : 'hover:text-black'}`}
+
+              >
+
+                  <Mic size={18} fill={isListening ? "currentColor" : "none"} />
+
+                  <span className="text-xs font-bold my-auto">{isListening ? 'Dinleniyor...' : 'Sesli Yaz'}</span>
+
+              </div>
+
+          </div>
+
+          {isListening && <span className="text-[10px] text-red-500 font-medium animate-pulse">Kaydediliyor...</span>}
+
+      </div>
+
+    </div>
+
+  );
+
+};
+
+
+
+const SettingsScreen = ({ setCurrentScreen, availableLabels, setAvailableLabels, currentAccount, settings, setSettings, handleLogout }) => {
+
+  const [showLabelModal, setShowLabelModal] = useState(false);
+
+  const [newLabelName, setNewLabelName] = useState('');
+
+  const [newLabelColor, setNewLabelColor] = useState(LABEL_COLORS[0]);
+
+
+
+  const createNewLabel = (name, colorClass) => {
+
+    const newLabel = {
+
+      id: Date.now(),
+
+      name: name,
+
+      color: colorClass
+
+    };
+
+    setAvailableLabels([...availableLabels, newLabel]);
+
+  };
+
+
+
+  const handleCreateLabel = () => {
+
+      if(!newLabelName.trim()) return;
+
+      createNewLabel(newLabelName, newLabelColor.class);
+
+      setNewLabelName('');
+
+      setShowLabelModal(false);
+
+  };
+
+
+
+  return (
+
+  <div className="flex flex-col h-full bg-gray-50 relative">
+
+    <div className="h-14 border-b border-gray-200 flex items-center gap-3 px-4 bg-white sticky top-0">
+
+       <button onClick={() => setCurrentScreen('inbox')}><ArrowLeft size={22} /></button><span className="font-bold text-sm">Ayarlar</span>
+
+    </div>
+
+
+
+    {/* Label Modal */}
+
+    {showLabelModal && (
+
+      <div className="absolute inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-fade-in">
+
+              <div className="p-4 border-b border-gray-100 flex justify-between items-center">
+
+                  <h3 className="text-sm font-bold text-gray-900">Yeni Etiket Ekle</h3>
+
+                  <button onClick={() => setShowLabelModal(false)}><X size={18} /></button>
+
+              </div>
+
+              <div className="p-4 space-y-4">
+
+                  <div>
+
+                      <label className="text-[10px] font-bold text-gray-500 uppercase">Etiket Adı</label>
+
+                      <input 
+
+                          type="text" 
+
+                          className="w-full mt-1 p-2 bg-gray-50 border border-gray-200 rounded text-sm"
+
+                          placeholder="Örn: Proje X"
+
+                          value={newLabelName}
+
+                          onChange={(e) => setNewLabelName(e.target.value)}
+
+                      />
+
+                  </div>
+
+                  <div>
+
+                      <label className="text-[10px] font-bold text-gray-500 uppercase mb-2 block">Renk Seç</label>
+
+                      <div className="grid grid-cols-4 gap-2">
+
+                          {LABEL_COLORS.map(color => (
+
+                              <div 
+
+                                  key={color.id}
+
+                                  onClick={() => setNewLabelColor(color)}
+
+                                  className={`h-8 rounded cursor-pointer border-2 flex items-center justify-center ${color.class} ${newLabelColor.id === color.id ? 'border-black' : 'border-transparent'}`}
+
+                              >
+
+                                  {newLabelColor.id === color.id && <Check size={14} />}
+
+                              </div>
+
+                          ))}
+
+                      </div>
+
+                  </div>
+
+                  <button onClick={handleCreateLabel} className="w-full bg-black text-white py-3 rounded-lg font-bold text-sm">Oluştur</button>
+
+              </div>
+
+          </div>
+
+      </div>
+
+    )}
+
+
+
+    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+
+       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+
+              <h3 className="font-bold text-xs uppercase text-gray-500">İçerik</h3>
+
+          </div>
+
+          <div className="p-4">
+
+              <div className="flex justify-between items-center mb-3">
+
+                  <span className="text-sm font-medium">Etiketler</span>
+
+                  <button onClick={() => setShowLabelModal(true)} className="text-black hover:bg-gray-100 p-1 rounded"><Plus size={16}/></button>
+
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+
+                  {availableLabels.map(l => (
+
+                      <span key={l.id} className={`px-2 py-1 rounded text-xs font-bold flex items-center gap-1 ${l.color || l.class}`}>{l.name} <X size={10} className="cursor-pointer"/></span>
+
+                  ))}
+
+              </div>
+
+          </div>
+
+           <div className="border-t border-gray-100"></div>
+
+           <div className="p-4">
+
+              <span className="text-sm font-medium block mb-2">Otomatik İmza</span>
+
+              <textarea className="w-full h-20 p-2 bg-gray-50 border border-gray-200 rounded text-xs" defaultValue={currentAccount.signature}></textarea>
+
+           </div>
+
+       </div>
+
+
+
+       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+
+              <h3 className="font-bold text-xs uppercase text-gray-500">Bildirimler ve Senkronizasyon</h3>
+
+          </div>
+
+          
+
+          <div className="p-4 flex items-center justify-between border-b border-gray-50">
+
+              <div className="flex items-center gap-3">
+
+                  <Bell size={18} className="text-gray-600" />
+
+                  <span className="text-sm font-medium">Bildirimlere İzin Ver</span>
+
+              </div>
+
+              <div 
+
+                  className={`w-10 h-6 rounded-full p-1 cursor-pointer transition ${settings.notifications ? 'bg-black' : 'bg-gray-300'}`}
+
+                  onClick={() => setSettings({...settings, notifications: !settings.notifications})}
+
+              >
+
+                  <div className={`w-4 h-4 bg-white rounded-full shadow-sm transition transform ${settings.notifications ? 'translate-x-4' : ''}`}></div>
+
+              </div>
+
+          </div>
+
+
+
+          <div className="p-4 flex items-center justify-between">
+
+              <div className="flex items-center gap-3">
+
+                  <Clock size={18} className="text-gray-600" />
+
+                  <div className="flex flex-col">
+
+                      <span className="text-sm font-medium">Senkronizasyon Sıklığı</span>
+
+                      <span className="text-[10px] text-gray-400">Yeni mailler ne sıklıkla kontrol edilsin?</span>
+
+                  </div>
+
+              </div>
+
+              <select 
+
+                  value={settings.syncFrequency}
+
+                  onChange={(e) => setSettings({...settings, syncFrequency: e.target.value})}
+
+                  className="text-xs border border-gray-200 rounded p-1 outline-none bg-gray-50"
+
+              >
+
+                  <option value="push">Anlık (Push)</option>
+
+                  <option value="15min">15 Dakika</option>
+
+                  <option value="30min">30 Dakika</option>
+
+                  <option value="1hour">1 Saat</option>
+
+                  <option value="manual">Manuel</option>
+
+              </select>
+
+          </div>
+
+       </div>
+
+
+
+       <button onClick={handleLogout} className="w-full py-3 bg-white border border-red-100 text-red-600 font-bold text-sm rounded-xl flex items-center justify-center gap-2 hover:bg-red-50 transition">
+
+          <LogOut size={16} /> Hesaptan Çıkış Yap
+
+       </button>
+
+    </div>
+
+  </div>
+
+  );
+
+}
+
+
+
+// 2. MAIN APP
+
+export default function MailApp() {
+
+  const [currentScreen, setCurrentScreen] = useState('loading');
+
+  const [accounts, setAccounts] = useState([]);
+
+  const [currentAccountId, setCurrentAccountId] = useState(null);
+
+  const [currentFolder, setCurrentFolder] = useState('inbox');
+
+  const [emails, setEmails] = useState(INITIAL_EMAILS);
+
+  const [selectedEmail, setSelectedEmail] = useState(null);
+
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const [composeData, setComposeData] = useState({ id: null, to: '', cc: '', bcc: '', subject: '', body: '' });
+
+  
+
+  // ARAMA STATE
+
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  const [searchQuery, setSearchQuery] = useState('');
+
+
+
+  // Etiketler
+
+  const [availableLabels, setAvailableLabels] = useState(INITIAL_LABELS);
+
+
+
+  // Infinite Scroll & Selection States
+
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const [selectedEmailIds, setSelectedEmailIds] = useState([]);
+
+
+
+  const [settings, setSettings] = useState({
+
+    notifications: true,
+
+    syncFrequency: 'push',
+
+  });
+
+
+
+  const currentAccount = accounts.find(a => a.id === currentAccountId) || {};
+
+
+
+  useEffect(() => {
+
+    const savedAccounts = localStorage.getItem('kaydet_accounts');
+
+    if (savedAccounts) {
+
+      const parsedAccounts = JSON.parse(savedAccounts);
+
+      if (parsedAccounts.length > 0) {
+
+        setAccounts(parsedAccounts);
+
+        setCurrentAccountId(parsedAccounts[0].id);
+
+        setCurrentScreen('inbox');
+
+      } else {
+
+        setCurrentScreen('login');
+
+      }
+
+    } else {
+
+      setCurrentScreen('login');
+
+    }
+
+  }, []);
+
+
+
+  useEffect(() => {
+
+    if (accounts.length > 0) {
+
+        localStorage.setItem('kaydet_accounts', JSON.stringify(accounts));
+
+    }
+
+  }, [accounts]);
+
+  
+
+  // FİLTRELEME & ARAMA MANTIĞI
+
+  const filteredEmails = emails.filter(e => {
+
+    // 1. Klasör Filtresi
+
+    let matchesFolder = false;
+
+    if (currentFolder === 'pinned') matchesFolder = e.isPinned;
+
+    else matchesFolder = e.folderId === currentFolder;
+
+
+
+    // 2. Arama Filtresi
+
+    let matchesSearch = true;
+
+    if (searchQuery.trim() !== '') {
+
+        const q = searchQuery.toLowerCase();
+
+        matchesSearch = e.subject.toLowerCase().includes(q) || 
+
+                        e.from.toLowerCase().includes(q) || 
+
+                        e.body.toLowerCase().includes(q);
+
+    }
+
+
+
+    return matchesFolder && matchesSearch;
+
+  });
+
+
+
+  const pinnedEmailsCount = emails.filter(e => e.isPinned).length;
+
+  const isSelectionMode = selectedEmailIds.length > 0;
+
+
+
+  const getFolderCount = (folderId) => {
+
+    if (folderId === 'pinned') return pinnedEmailsCount;
+
+    if (folderId === 'drafts') return emails.filter(e => e.folderId === 'drafts').length;
+
+    return emails.filter(e => e.folderId === folderId && !e.read).length;
+
+  };
+
+
+
+  const handleLoginSuccess = (credentials) => {
+
+    const newAccount = {
+
+      id: Date.now(),
+
+      email: credentials.email,
+
+      name: credentials.email.split('@')[0],
+
+      signature: `\n\n--\n${credentials.email.split('@')[0]}\nSent from KAYDET Mail`,
+
+      settings: { ...credentials }
+
+    };
+
+    const updatedAccounts = [...accounts, newAccount];
+
+    setAccounts(updatedAccounts);
+
+    setCurrentAccountId(newAccount.id);
+
+    setCurrentScreen('inbox');
+
+  };
+
+
+
+  const handleLogout = () => {
+
+    const remainingAccounts = accounts.filter(a => a.id !== currentAccountId);
+
+    setAccounts(remainingAccounts);
+
+    if (remainingAccounts.length > 0) {
+
+        setCurrentAccountId(remainingAccounts[0].id);
+
+    } else {
+
+        localStorage.removeItem('kaydet_accounts');
+
+        setCurrentAccountId(null);
+
+        setCurrentScreen('login');
+
+    }
+
+  };
+
+
+
+  const handleSendMail = (mailData) => {
+
+    let updatedEmails = emails;
+
+    if (mailData.id) {
+
+        updatedEmails = emails.filter(e => e.id !== mailData.id);
+
+    }
+
+    const newMailId = `sent-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+    setEmails([{ 
+
+        id: newMailId, 
+
+        folderId: 'sent', 
+
+        from: "Ben", 
+
+        ...mailData, 
+
+        date: "Şimdi", 
+
+        read: true, 
+
+        isPinned: false, 
+
+        labels: [] 
+
+    }, ...updatedEmails]);
+
+    setCurrentScreen('inbox');
+
+  };
+
+
+
+  const handleSaveDraft = (mailData) => {
+
+    let updatedEmails = emails;
+
+    const draftId = mailData.id || `draft-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+
+
+    if (mailData.id) {
+
+        updatedEmails = emails.map(e => e.id === mailData.id ? {
+
+             ...e,
+
+             ...mailData,
+
+             date: "Taslak",
+
+             folderId: 'drafts',
+
+             read: true
+
+        } : e);
+
+    } else {
+
+        updatedEmails = [{ 
+
+            id: draftId, 
+
+            folderId: 'drafts', 
+
+            from: "Taslak", 
+
+            email: "Ben",
+
+            ...mailData, 
+
+            date: "Taslak", 
+
+            read: true, 
+
+            isPinned: false, 
+
+            labels: [] 
+
+        }, ...emails];
+
+    }
+
+    setEmails(updatedEmails);
+
+    setCurrentScreen('inbox');
+
+  };
+
+
+
+  const handleDeleteMail = (id) => {
+
+    setEmails(emails.map(e => e.id === id ? { ...e, folderId: 'trash', isPinned: false } : e));
+
+    if (currentScreen === 'detail') setCurrentScreen('inbox');
+
+  };
+
+
+
+  const handleTogglePin = (id) => {
+
+    setEmails(emails.map(e => e.id === id ? { ...e, isPinned: !e.isPinned } : e));
+
+  };
+
+
+
+  const handleAddLabel = (id, labelName) => {
+
+    const labelObj = availableLabels.find(l => l.name === labelName);
+
+    if(!labelObj) return; 
+
+    setEmails(emails.map(e => {
+
+      if (e.id === id) {
+
+        if (e.labels && e.labels.includes(labelName)) return e; 
+
+        return { ...e, labels: [...(e.labels || []), labelName] };
+
+      }
+
+      return e;
+
+    }));
+
+  };
+
+
+
+  const toggleSelection = (id) => {
+
+    if (selectedEmailIds.includes(id)) {
+
+        setSelectedEmailIds(selectedEmailIds.filter(sid => sid !== id));
+
+    } else {
+
+        setSelectedEmailIds([...selectedEmailIds, id]);
+
+    }
+
+  };
+
+
+
+  const handleSelectAll = () => {
+
+      if (selectedEmailIds.length === filteredEmails.length) {
+
+          setSelectedEmailIds([]);
+
+      } else {
+
+          setSelectedEmailIds(filteredEmails.map(e => e.id));
+
+      }
+
+  };
+
+
+
+  const handleBulkAction = (action) => {
+
+      if (action === 'delete') {
+
+          setEmails(emails.map(e => selectedEmailIds.includes(e.id) ? { ...e, folderId: 'trash' } : e));
+
+      } else if (action === 'read') {
+
+          setEmails(emails.map(e => selectedEmailIds.includes(e.id) ? { ...e, read: true } : e));
+
+      } else if (action === 'unread') {
+
+          setEmails(emails.map(e => selectedEmailIds.includes(e.id) ? { ...e, read: false } : e));
+
+      } else if (action === 'pin') {
+
+          setEmails(emails.map(e => selectedEmailIds.includes(e.id) ? { ...e, isPinned: !e.isPinned } : e));
+
+      } else if (action === 'archive') {
+
+          alert(`${selectedEmailIds.length} mail arşivlendi.`);
+
+      }
+
+      setSelectedEmailIds([]); 
+
+  };
+
+
+
+  const handleNavigateMail = (direction) => {
+
+    const currentList = filteredEmails;
+
+    const currentIndex = currentList.findIndex(e => e.id === selectedEmail.id);
+
+    
+
+    let newIndex = -1;
+
+    if (direction === 'prev') newIndex = currentIndex - 1;
+
+    if (direction === 'next') newIndex = currentIndex + 1;
+
+
+
+    if (newIndex >= 0 && newIndex < currentList.length) {
+
+      setSelectedEmail(currentList[newIndex]);
+
+    }
+
+  };
+
+
+
+  const handleOpenMail = (mail) => {
+
+      if (isSelectionMode) {
+
+          toggleSelection(mail.id);
+
+          return;
+
+      }
+
+      if (mail.folderId === 'drafts') {
+
+          setComposeData({
+
+              id: mail.id,
+
+              to: mail.to || '',
+
+              cc: mail.cc || '',
+
+              bcc: mail.bcc || '',
+
+              subject: mail.subject || '',
+
+              body: mail.body || ''
+
+          });
+
+          setCurrentScreen('compose');
+
+      } else {
+
+          setSelectedEmail(mail);
+
+          setCurrentScreen('detail');
+
+      }
+
+  };
+
+
+
+  const handleScroll = (e) => {
+
+    const bottom = e.target.scrollHeight - e.target.scrollTop <= e.target.clientHeight + 50; 
+
+    if (bottom && !loadingMore && currentFolder === 'inbox' && !searchQuery) { 
+
+      loadMoreEmails();
+
+    }
+
+  };
+
+
+
+  const loadMoreEmails = () => {
+
+    setLoadingMore(true);
+
+    setTimeout(() => {
+
+      const newEmails = generateMoreEmails(emails.length + 100, 20); 
+
+      setEmails(prevEmails => [...prevEmails, ...newEmails]);
+
+      setLoadingMore(false);
+
+    }, 1000);
+
+  };
+
+
+
+  if (currentScreen === 'loading') {
+
+      return <div className="flex justify-center items-center h-screen bg-white"><RefreshCw className="animate-spin text-black" /></div>;
+
+  }
+
+
+
+  return (
+
+    <div className="flex justify-center bg-gray-100 min-h-screen font-sans text-black">
+
+       <div className="w-full max-w-md bg-white shadow-2xl h-screen relative overflow-hidden flex flex-col border-x border-gray-200">
+
+          {(currentScreen === 'login' || currentScreen === 'add_account') && 
+
+            <LoginScreen 
+
+              onLogin={handleLoginSuccess} 
+
+              isAddingAccount={currentScreen === 'add_account'}
+
+            />
+
+          }
+
+          {currentScreen !== 'login' && currentScreen !== 'add_account' && (
+
+             <>
+
+                <Sidebar 
+
+                  isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen}
+
+                  currentAccount={currentAccount} accounts={accounts}
+
+                  currentAccountId={currentAccountId} setCurrentAccountId={setCurrentAccountId}
+
+                  setCurrentScreen={setCurrentScreen} currentFolder={currentFolder}
+
+                  setCurrentFolder={setCurrentFolder} getFolderCount={getFolderCount}
+
+                  availableLabels={availableLabels}
+
+                />
+
+                
+
+                {currentScreen === 'inbox' && 
+
+                  <InboxScreen 
+
+                    isSelectionMode={isSelectionMode} selectedEmailIds={selectedEmailIds} 
+
+                    setSelectedEmailIds={setSelectedEmailIds} handleSelectAll={handleSelectAll}
+
+                    isSearchOpen={isSearchOpen} setIsSearchOpen={setIsSearchOpen}
+
+                    searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+
+                    setIsSidebarOpen={setIsSidebarOpen} currentFolder={currentFolder}
+
+                    handleScroll={handleScroll} pinnedEmailsCount={pinnedEmailsCount}
+
+                    loadingMore={loadingMore} filteredEmails={filteredEmails}
+
+                    handleOpenMail={handleOpenMail} toggleSelection={toggleSelection}
+
+                    getAvatarColor={getAvatarColor} availableLabels={availableLabels}
+
+                    currentAccount={currentAccount} setComposeData={setComposeData}
+
+                    setCurrentScreen={setCurrentScreen} handleBulkAction={handleBulkAction}
+
+                    setCurrentFolder={setCurrentFolder}
+
+                  />
+
+                }
+
+                
+
+                {currentScreen === 'detail' && 
+
+                  <DetailScreen 
+
+                     setCurrentScreen={setCurrentScreen} handleNavigateMail={handleNavigateMail}
+
+                     hasPrev={filteredEmails.findIndex(e => e.id === selectedEmail?.id) > 0} 
+
+                     hasNext={filteredEmails.findIndex(e => e.id === selectedEmail?.id) < filteredEmails.length - 1}
+
+                     selectedEmail={selectedEmail} handleTogglePin={handleTogglePin}
+
+                     handleAddLabel={handleAddLabel} handleDeleteMail={handleDeleteMail}
+
+                     setComposeData={setComposeData} availableLabels={availableLabels}
+
+                  />
+
+                }
+
+                
+
+                {currentScreen === 'compose' && 
+
+                  <ComposeScreen 
+
+                    composeData={composeData} currentAccount={currentAccount}
+
+                    setCurrentScreen={setCurrentScreen} handleSendMail={handleSendMail}
+
+                    handleSaveDraft={handleSaveDraft}
+
+                  />
+
+                }
+
+                
+
+                {currentScreen === 'settings' && 
+
+                  <SettingsScreen 
+
+                    setCurrentScreen={setCurrentScreen} availableLabels={availableLabels}
+
+                    setAvailableLabels={setAvailableLabels} currentAccount={currentAccount}
+
+                    settings={settings} setSettings={setSettings} handleLogout={handleLogout}
+
+                  />
+
+                }
+
+             </>
+
+          )}
+
+       </div>
+
+       <style>{`.animate-fade-in { animation: fadeIn 0.3s ease-out; } @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
+
+    </div>
+
+  );
+
+}
