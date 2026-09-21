@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/avatar.dart';
 import '../../../core/turkish.dart';
+import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
 /// Gönderen avatarı.
@@ -186,7 +187,7 @@ class LabelChip extends StatelessWidget {
             name,
             style: TextStyle(
               color: tone.foreground,
-              fontSize: 11,
+              fontSize: 11 * AppText.scale,
               fontWeight: FontWeight.w600,
               height: 14 / 11,
             ),
@@ -500,5 +501,125 @@ class DialogActions extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Standart iki eylemli onay diyaloğu — `DialogActions`ı `AlertDialog` içine
+/// sarıp sonucu döndürür. Ayarlar hiyerarşisindeki birden fazla alt sayfa
+/// (hesap silme, önbellek temizleme, çöp kutusunu boşaltma) aynı diyaloğu
+/// kullandığı için paylaşılan bir yardımcıya taşındı.
+Future<bool?> confirmDialog(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirmLabel,
+  bool destructive = false,
+}) => showDialog<bool>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: Text(title),
+    content: Text(message),
+    actionsAlignment: MainAxisAlignment.center,
+    actions: [
+      DialogActions(
+        cancelLabel: 'Vazgeç',
+        onCancel: () => Navigator.of(context).pop(false),
+        confirmLabel: confirmLabel,
+        onConfirm: () => Navigator.of(context).pop(true),
+        destructive: destructive,
+      ),
+    ],
+  ),
+);
+
+/// Herhangi bir iskelet şeklinin üzerinde soldan sağa kayan, sürekli
+/// tekrarlanan bir parlaklık bandı oynatır.
+///
+/// Şeklin kendisini bilmez — `child` düz renkli kutu/daire gibi opak
+/// şekillerden oluşan HERHANGİ bir iskelet olabilir (mail gövdesindeki
+/// paragraf çizgileri, liste satırındaki avatar+iki satır düzeni gibi);
+/// `ShaderMask` + `BlendMode.srcIn` yalnızca o şekillerin ALFA'sını maske
+/// olarak kullanıp rengini gradyanla değiştirir. Hem `MailDetailScreen`
+/// hem `MailListScreen`'in iskeletleri aynı mekanizmayı paylaşır.
+class ShimmerSurface extends StatefulWidget {
+  const ShimmerSurface({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  State<ShimmerSurface> createState() => _ShimmerSurfaceState();
+}
+
+class _ShimmerSurfaceState extends State<ShimmerSurface>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final base = t.surface;
+    final highlight = t.surfaceElevated;
+
+    return AnimatedBuilder(
+      animation: _controller,
+      // `child` sabit tutulur: her animasyon karesinde yeniden kurulan AYNI
+      // iskelet widget'ları, yalnızca üstlerindeki gradyan kayar.
+      child: widget.child,
+      builder: (context, child) => ShaderMask(
+        blendMode: BlendMode.srcIn,
+        shaderCallback: (bounds) {
+          final v = _controller.value;
+          return LinearGradient(
+            colors: [base, base, highlight, base, base],
+            stops: const [0.0, 0.35, 0.5, 0.65, 1.0],
+            begin: Alignment(-3 + 4 * v, 0),
+            end: Alignment(-1 + 4 * v, 0),
+          ).createShader(bounds);
+        },
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Tek bir iskelet satırı — yuvarlatılmış köşeli, düz renkli bir bar.
+///
+/// `widthFactor` verilirse (metin satırları gibi değişen genişlikte
+/// görünmesi istenen yerlerde) çevresindeki alana oranla; `width` verilirse
+/// sabit piksel genişliğinde çizilir.
+class ShimmerBar extends StatelessWidget {
+  const ShimmerBar({
+    super.key,
+    this.width,
+    this.widthFactor,
+    this.height = 14,
+  });
+
+  final double? width;
+  final double? widthFactor;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final bar = Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(Radii.sm),
+      ),
+    );
+    if (widthFactor == null) return bar;
+    return FractionallySizedBox(widthFactor: widthFactor, child: bar);
   }
 }

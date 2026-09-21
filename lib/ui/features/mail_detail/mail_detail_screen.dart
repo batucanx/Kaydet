@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,7 +19,9 @@ import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
-import '../compose/compose_screen.dart';
+import '../compose/compose_launcher.dart';
+import '../compose/compose_screen.dart' show ComposeMode;
+import 'mail_html_document.dart';
 
 /// İleti okuma ekranı.
 class MailDetailScreen extends ConsumerStatefulWidget {
@@ -33,15 +36,15 @@ class MailDetailScreen extends ConsumerStatefulWidget {
 class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   late int _messageId = widget.messageId;
   Timer? _seenTimer;
-  bool _showRemoteImages = false;
-  bool _loadingBody = false;
-  AppFailure? _bodyError;
 
   @override
   void initState() {
     super.initState();
-    _showRemoteImages = ref.read(settingsProvider).showRemoteImages;
-    _onMessageOpened();
+    // Gövde indirme burada ELLE tetiklenmez — `build()`'ın izlediği
+    // `bodyFetchProvider(_messageId)` ilk kez izlendiği anda (bu widget
+    // kurulduğunda) Riverpod tarafından otomatik çalıştırılır (bkz.
+    // `app/providers.dart`). Yalnızca okundu işaretinin zamanlayıcısı kalır.
+    _scheduleMarkSeen();
   }
 
   @override
@@ -50,9 +53,8 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     super.dispose();
   }
 
-  void _onMessageOpened() {
+  void _scheduleMarkSeen() {
     _seenTimer?.cancel();
-    _loadBody();
 
     // Okundu işareti gecikmeli konur: yanlış iletiye dokunup hemen geri
     // çıkan kullanıcı o iletiyi okunmuş bulmamalı.
@@ -66,21 +68,6 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     });
   }
 
-  Future<void> _loadBody() async {
-    setState(() {
-      _loadingBody = true;
-      _bodyError = null;
-    });
-    final result = await ref
-        .read(mailRepositoryProvider)
-        .ensureBody(_messageId);
-    if (!mounted) return;
-    setState(() {
-      _loadingBody = false;
-      _bodyError = result.failureOrNull;
-    });
-  }
-
   /// Aynı listedeki önceki/sonraki iletiye geçer.
   void _navigate(int delta) {
     final rows = ref.read(messageListProvider).value ?? const <MessageRow>[];
@@ -89,7 +76,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final next = index + delta;
     if (next < 0 || next >= rows.length) return;
     setState(() => _messageId = rows[next].id);
-    _onMessageOpened();
+    _scheduleMarkSeen();
   }
 
   @override
@@ -97,6 +84,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final t = context.tokens;
     final message = ref.watch(messageProvider(_messageId)).value;
     final body = ref.watch(messageBodyProvider(_messageId)).value;
+    final bodyFetch = ref.watch(bodyFetchProvider(_messageId));
     final attachments =
         ref.watch(attachmentsProvider(_messageId)).value ?? const [];
     final rows = ref.watch(messageListProvider).value ?? const <MessageRow>[];
@@ -161,11 +149,8 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
           Expanded(
             child: _BodyView(
               body: body,
-              isLoading: _loadingBody,
-              error: _bodyError,
-              showRemoteImages: _showRemoteImages,
-              onShowImages: () => setState(() => _showRemoteImages = true),
-              onRetry: _loadBody,
+              fetchStatus: bodyFetch,
+              onRetry: () => ref.invalidate(bodyFetchProvider(_messageId)),
             ),
           ),
         ],
@@ -449,65 +434,41 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
   }
 }
 
-class _BodyView extends StatefulWidget {
+class _BodyView extends StatelessWidget {
   const _BodyView({
     required this.body,
-    required this.isLoading,
-    required this.error,
-    required this.showRemoteImages,
-    required this.onShowImages,
+    required this.fetchStatus,
     required this.onRetry,
   });
 
+  /// Yerelde (offline-first) elde bulunan en güncel gövde — `null` ise
+  /// henüz hiç inmemiş demektir.
   final MessageBodyRow? body;
-  final bool isLoading;
-  final AppFailure? error;
-  final bool showRemoteImages;
-  final VoidCallback onShowImages;
+
+  /// `bodyFetchProvider`'ın durumu — [body] `null` olduğunda hangi boş
+  /// durumun gösterileceğine (shimmer/hata) bu karar verir. Değeri
+  /// kullanılmaz; sadece `hasError`/`hasValue` sinyalleri okunur (bkz.
+  /// `app/providers.dart`daki `bodyFetchProvider` belgesi — yarış durumunu
+  /// önlemek için provider'ın kendisi zaten `body` akışıyla senkron tutulur).
+  final AsyncValue<MessageBodyRow?> fetchStatus;
+
   final VoidCallback onRetry;
-
-  @override
-  State<_BodyView> createState() => _BodyViewState();
-}
-
-class _BodyViewState extends State<_BodyView> {
-  // "Uzak görsel var mı" taraması da bir regex geçişi; her yeniden çizimde
-  // aynı (genelde çok büyük) HTML üzerinde tekrarlanmaması için önbelleğe
-  // alınır — bkz. `_HtmlWebViewState._load` üzerindeki not.
-  String? _scannedHtml;
-  bool _hasRemote = false;
-
-  void _rescanIfNeeded(String? html) {
-    if (html == null || html == _scannedHtml) return;
-    _scannedHtml = html;
-    _hasRemote = TextExtraction.hasRemoteImages(html);
-  }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
 
-    if (widget.body == null && widget.isLoading) {
-      return _paddedScroll(
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: Space.huge),
-          child: Center(
-            child: CircularProgressIndicator(strokeWidth: 2, color: t.accent),
-          ),
-        ),
-      );
-    }
-
-    if (widget.body == null && widget.error != null) {
+    if (body == null && fetchStatus.hasError) {
+      final error = fetchStatus.error;
       return _paddedScroll(
         Padding(
           padding: const EdgeInsets.symmetric(vertical: Space.xxl),
           child: EmptyState(
             icon: LucideIcons.cloudOff,
             title: 'İçerik indirilemedi',
-            description: widget.error!.userMessage,
+            description: error is AppFailure ? error.userMessage : '$error',
             action: OutlinedButton(
-              onPressed: widget.onRetry,
+              onPressed: onRetry,
               child: const Text('Yeniden dene'),
             ),
           ),
@@ -515,35 +476,26 @@ class _BodyViewState extends State<_BodyView> {
       );
     }
 
-    final html = widget.body?.html;
-    final plain = widget.body?.plainText;
+    if (body == null && !fetchStatus.hasValue) {
+      // Ekranı bloklayan tekil bir döner gösterge YERİNE: başlık/gönderen/
+      // ekler zaten `message` satırından (yerelde, anında) geldiği için
+      // yalnızca gövdenin oturacağı alanda hafif bir shimmer gösterilir —
+      // Outlook'un okuma bölmesindeki gibi. `bodyFetchProvider` indirme
+      // bitse BİLE `messageBodyProvider`nin akışı yeni satırı gerçekten
+      // yayana kadar `loading` kalır (bkz. provider belgesi), bu yüzden
+      // `hasValue` ikisi de tamamlanana kadar `false` kalır — indirme
+      // bitişi ile veri ekranda görünür oluşu arasında "içerik yok"
+      // mesajının bir kare yanıp sönmesi yapısal olarak mümkün değildir.
+      return const _BodyShimmer();
+    }
+
+    final html = body?.html;
+    final plain = body?.plainText;
 
     if (html != null && html.trim().isNotEmpty) {
-      _rescanIfNeeded(html);
-
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (_hasRemote && !widget.showRemoteImages)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.lg,
-                Space.md,
-                Space.lg,
-                0,
-              ),
-              child: _RemoteImageNotice(onShow: widget.onShowImages),
-            ),
-          // Kalan tüm alanı doldurur: kendi kaydırma/yakınlaştırmasını
-          // yönetir, dıştaki bir kaydırma alanına ihtiyacı yoktur.
-          Expanded(
-            child: _HtmlWebView(
-              html: html,
-              showRemoteImages: widget.showRemoteImages,
-            ),
-          ),
-        ],
-      );
+      // Kalan tüm alanı doldurur: kendi kaydırma/yakınlaştırmasını
+      // yönetir, dıştaki bir kaydırma alanına ihtiyacı yoktur.
+      return _HtmlWebView(html: html);
     }
 
     if (plain != null && plain.trim().isNotEmpty) {
@@ -571,16 +523,52 @@ class _BodyViewState extends State<_BodyView> {
   );
 }
 
+/// Gövde metninin geleceği alanda hayalet ekran (shimmer) efekti.
+///
+/// Değişen genişlikte birkaç "satır" üzerinde soldan sağa kayan bir
+/// parlaklık bandı (bkz. `ShimmerSurface`) — gerçek metin satırlarının
+/// taslağı gibi durur, tekil bir döner gösterge gibi dikkat çekip ekranı
+/// domine etmez.
+class _BodyShimmer extends StatelessWidget {
+  const _BodyShimmer();
+
+  // Gerçek bir paragrafın satır sonlarını taklit eden değişen genişlikler.
+  static const _lineWidthFactors = [1.0, 0.94, 0.6, 1.0, 0.86, 0.42];
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
+      child: ShimmerSurface(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final factor in _lineWidthFactors)
+              Padding(
+                padding: const EdgeInsets.only(bottom: Space.sm),
+                child: ShimmerBar(widthFactor: factor),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Gerçek tarayıcı motoruyla (Android'de sistem WebView) gövde render'ı.
 ///
 /// Karmaşık tablo/`div` düzenlerini (fatura/bülten şablonları gibi) hafif,
 /// bağımsız bir HTML ayrıştırıcının çözebileceğinden çok daha güvenilir
 /// işler; gövde render'ının tek yolu bu.
+///
+/// Görünümü Outlook mobil gibi profesyonel kılan her şey `MailHtmlDocument`te
+/// toplanır (viewport, akışkanlaştırma, yazı boyutu tabanı, koyu tema renk
+/// dönüşümü). Uygulamanın temasını (`KaydetTokens`) izler: tema değişince
+/// belge yeni renklerle yeniden kurulur.
 class _HtmlWebView extends StatefulWidget {
-  const _HtmlWebView({required this.html, required this.showRemoteImages});
+  const _HtmlWebView({required this.html});
 
   final String html;
-  final bool showRemoteImages;
 
   @override
   State<_HtmlWebView> createState() => _HtmlWebViewState();
@@ -590,12 +578,24 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   late final WebViewController _controller;
   bool _pageLoading = true;
 
+  // `_load()` art arda (ör. ilk `didChangeDependencies` hemen ardından
+  // `didUpdateWidget`) tetiklenirse, önce başlayan ama geç biten bir isolate
+  // çağrısı sonucu yeni içeriğin üzerine yazmasın diye her çağrının kendi
+  // sırası tutulur.
+  int _loadToken = 0;
+
+  // Belgenin en son hangi temayla kurulduğu. Tema `initState`te okunamayan bir
+  // InheritedWidget'tır; bu yüzden ilk yükleme `didChangeDependencies`te yapılır.
+  KaydetTokens? _tokens;
+  Timer? _themeReload;
+
   @override
   void initState() {
     super.initState();
+    // JS açık: çalışan tek betik `MailHtmlDocument`in nonce'lu render
+    // betiğidir; e-postanın kendi betikleri belgedeki CSP ile engellenir.
     _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.disabled)
-      ..setBackgroundColor(Colors.white)
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..enableZoom(true)
       ..setNavigationDelegate(
         NavigationDelegate(
@@ -612,44 +612,104 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     // durumda `<meta name="viewport">` tamamen yok sayılıp gövde sabit
     // masaüstü genişliğinde (~980px) render edilir — açılışta yakınlaştırılmış
     // görünüp kullanıcının elle uzaklaştırması gerekir. Açınca viewport meta
-    // etiketi (bkz. `_wrapDocument`) gerçekten uygulanır ve ileti telefon
+    // etiketi (bkz. `MailHtmlDocument`) gerçekten uygulanır ve ileti telefon
     // genişliğine sığdırılmış açılır. iOS'ta WKWebView viewport'u zaten
     // doğru uygular; bu yüzden yalnızca Android'de gerekir.
     final platform = _controller.platform;
     if (platform is AndroidWebViewController) {
       unawaited(platform.setUseWideViewPort(true));
     }
-    _load();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final tokens = context.tokens;
+    final previous = _tokens;
+    _tokens = tokens;
+    // WebView'ın kendi zemini sayfa yüklenmeden önce ve kaydırma taşmasında
+    // görünür; beyaz kalırsa koyu temada göz yakan bir flaş olur.
+    unawaited(_controller.setBackgroundColor(tokens.bg));
+
+    if (previous == null) {
+      unawaited(_load());
+    } else if (previous.isDark != tokens.isDark ||
+        previous.bg != tokens.bg ||
+        previous.textPrimary != tokens.textPrimary) {
+      // Tema geçişi animasyonludur: ara her karede `didChangeDependencies`
+      // tetiklenir. Belgeyi her karede yeniden kurmak yerine geçiş durulunca
+      // bir kez kurulur.
+      _themeReload?.cancel();
+      _themeReload = Timer(const Duration(milliseconds: 250), () {
+        if (mounted) unawaited(_load());
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _themeReload?.cancel();
+    super.dispose();
   }
 
   @override
   void didUpdateWidget(covariant _HtmlWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.html != widget.html ||
-        oldWidget.showRemoteImages != widget.showRemoteImages) {
-      _load();
+    if (oldWidget.html != widget.html) {
+      unawaited(_load());
     }
   }
 
-  /// Ağır regex temizliğini (uzak görsel + geniş sabit genişlik) yalnızca
-  /// içerik gerçekten değiştiğinde, burada bir kez çalıştırır.
+  /// Ağır regex temizliğini (viewport, `prefers-color-scheme`)
+  /// yalnızca içerik ya da tema gerçekten değiştiğinde, burada bir kez
+  /// çalıştırır.
   ///
   /// Önceden bu işlem üst widget'ın `build()`'ında yapılıyordu — Riverpod
   /// kaynaklı her yeniden çizimde AYNI (bazı bültenlerde yüzlerce KB'lık)
   /// HTML üzerinde tekrar tekrar regex taraması demekti. LinkedIn gibi çok
   /// büyük/karmaşık e-postalarda bu, arayüzün donmuş gibi görünmesine yol
   /// açan asıl sebepti.
-  void _load() {
-    final safe = widget.showRemoteImages
-        ? widget.html
-        : TextExtraction.stripRemoteImages(widget.html);
-    // Kaynağın kendi viewport etiketi kaldırılır ki `_wrapDocument`'ın
-    // enjekte ettiği etiket çakışmasız, belgedeki TEK viewport etiketi
-    // olsun (bkz. `stripViewportMeta` dokümantasyonu — aksi hâlde bülten
-    // e-postalarında sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
-    final noConflictingViewport = TextExtraction.stripViewportMeta(safe);
-    final fitted = TextExtraction.stripWideFixedWidths(noConflictingViewport);
-    unawaited(_controller.loadHtmlString(_wrapDocument(fitted)));
+  ///
+  /// Regex zinciri artık `Isolate.run` ile ayrı bir isolate'ta çalışır —
+  /// `TextExtraction.htmlToPlain`in senkron gövde önizlemesi için zaten
+  /// kullandığı desenin aynısı (bkz. `SyncEngine`). Büyük bültenlerde bu
+  /// tarama tek başına birkaç yüz milisaniye sürebilir; UI isolate'ında
+  /// çalışsaydı doğrudan kare düşmesine yol açardı.
+  Future<void> _load() async {
+    final token = ++_loadToken;
+    final html = widget.html;
+    final tokens = _tokens!;
+    final dark = tokens.isDark;
+
+    final (body, emailSupportsDark) = await Isolate.run(() {
+      // Kaynağın kendi viewport etiketi kaldırılır ki `MailHtmlDocument`in
+      // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
+      // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
+      // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
+      final noConflictingViewport = TextExtraction.stripViewportMeta(html);
+      return (
+        TextExtraction.resolveColorSchemeQueries(
+          noConflictingViewport,
+          dark: dark,
+        ),
+        TextExtraction.supportsDarkScheme(noConflictingViewport),
+      );
+    });
+    final script = await MailHtmlDocument.renderScript;
+
+    // Ekran bu arada kapanmış ya da yeni bir `_load()` başlamış olabilir —
+    // ikisinde de bu (artık eski) sonucu uygulamak yanlış içerik gösterir.
+    if (!mounted || token != _loadToken) return;
+    unawaited(
+      _controller.loadHtmlString(
+        MailHtmlDocument.build(
+          body: body,
+          tokens: tokens,
+          emailSupportsDark: emailSupportsDark,
+          script: script,
+        ),
+      ),
+    );
   }
 
   /// Bağlantı tıklamaları WebView içinde takip edilmez, sistem tarayıcısında
@@ -665,34 +725,6 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     return NavigationDecision.navigate;
   }
 
-  /// Kasıtlı olarak `initial-scale` YAZILMAZ.
-  ///
-  /// Fatura/makbuz gibi sabit genişlikli (ör. 600px) tablo düzenlerinde
-  /// `initial-scale=1.0` yazmak, tarayıcıya "1:1 ölçekte başla" der ve
-  /// Android WebView'ın (`setLoadWithOverviewMode` + `setUseWideViewPort`
-  /// ile açılan) otomatik "içeriği ekrana sığdır" davranışını devre dışı
-  /// bırakır — içerik telefon genişliğinden geniş kaldığı için kullanıcı
-  /// her açılışta elle uzaklaştırmak zorunda kalıyordu. Yalnızca
-  /// `width=device-width` bırakılınca WebView geniş içeriği otomatik
-  /// küçültüp tamamını ekrana sığdırıyor; kullanıcı isterse iki parmakla
-  /// yakınlaştırabilir (`enableZoom`).
-  static String _wrapDocument(String body) =>
-      '''
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width">
-<style>
-  body { margin: 0; padding: 16px; font-family: -apple-system, Roboto, sans-serif;
-         color: #0F1619; word-wrap: break-word; }
-  img { max-width: 100%; height: auto; }
-</style>
-</head>
-<body>$body</body>
-</html>
-''';
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -702,7 +734,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
         if (_pageLoading)
           Positioned.fill(
             child: Container(
-              color: Colors.white,
+              color: t.bg,
               alignment: Alignment.topCenter,
               padding: const EdgeInsets.only(top: Space.huge),
               child: CircularProgressIndicator(strokeWidth: 2, color: t.accent),
@@ -713,65 +745,28 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   }
 }
 
-/// Uzak görsel uyarısı.
-///
-/// Uzak görseller varsayılan olarak yüklenmez: yüklenirse gönderen iletinin
-/// okunduğunu, ne zaman okunduğunu ve IP adresini öğrenebilir.
-class _RemoteImageNotice extends StatelessWidget {
-  const _RemoteImageNotice({required this.onShow});
-
-  final VoidCallback onShow;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return Container(
-      padding: const EdgeInsets.all(Space.md),
-      decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(Radii.sm),
-        border: Border.all(color: t.divider),
-      ),
-      child: Row(
-        children: [
-          Icon(LucideIcons.shieldAlert, size: IconSize.md, color: t.warning),
-          const SizedBox(width: Space.sm),
-          Expanded(
-            child: Text(
-              'Gizliliğiniz için uzak görseller engellendi.',
-              style: Theme.of(
-                context,
-              ).textTheme.labelMedium?.copyWith(color: t.textSecondary),
-            ),
-          ),
-          TextButton(onPressed: onShow, child: const Text('Göster')),
-        ],
-      ),
-    );
-  }
-}
-
 class _ActionBar extends ConsumerWidget {
   const _ActionBar({required this.message});
 
   final MessageRow message;
+
+  /// Çubuğun alt güvenli alanın üstünde kapladığı yükseklik. "Taslağa
+  /// kaydedildi" bildirimi bunun üstüne yerleşir (bkz. `KaydetNotice`).
+  static const double height = 64;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final repository = ref.read(mailRepositoryProvider);
 
-    Future<void> openCompose(ComposeMode mode) async {
-      final savedDraftId = await Navigator.of(context).push<int>(
-        MaterialPageRoute<int>(
-          builder: (_) => ComposeScreen(replyToId: message.id, mode: mode),
-          fullscreenDialog: true,
-        ),
-      );
-      if (savedDraftId != null && context.mounted) {
-        showDraftSavedSnackBar(context, ref, savedDraftId);
-      }
-    }
+    Future<void> startCompose(ComposeMode mode) => openCompose(
+      context,
+      ref,
+      replyToId: message.id,
+      mode: mode,
+      fullscreenDialog: true,
+      noticeBottomInset: height,
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -781,23 +776,23 @@ class _ActionBar extends ConsumerWidget {
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 64,
+          height: height,
           child: Row(
             children: [
               _DetailAction(
                 icon: LucideIcons.cornerUpLeft,
                 label: 'Yanıtla',
-                onTap: () => openCompose(ComposeMode.reply),
+                onTap: () => startCompose(ComposeMode.reply),
               ),
               _DetailAction(
                 icon: LucideIcons.reply,
                 label: 'Tümünü',
-                onTap: () => openCompose(ComposeMode.replyAll),
+                onTap: () => startCompose(ComposeMode.replyAll),
               ),
               _DetailAction(
                 icon: LucideIcons.cornerUpRight,
                 label: 'İlet',
-                onTap: () => openCompose(ComposeMode.forward),
+                onTap: () => startCompose(ComposeMode.forward),
               ),
               _DetailAction(
                 icon: LucideIcons.archive,
@@ -866,6 +861,10 @@ class _DetailAction extends StatelessWidget {
   }
 }
 
+/// Okuma ekranının "..." menüsü — "Etiketle"/"Klasöre taşı" artık ayrı bir
+/// alttan panel açmıyor, aynı popup içinde kendi alt menüsüne (bkz.
+/// `SubmenuButton`) cascade oluyor (bkz. bellek: popup'lar modallara
+/// tercih edilir).
 class _MoreMenu extends ConsumerWidget {
   const _MoreMenu({required this.message});
 
@@ -874,93 +873,67 @@ class _MoreMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repository = ref.read(mailRepositoryProvider);
-    return PopupMenuButton<String>(
-      icon: const Icon(LucideIcons.ellipsisVertical, size: IconSize.md),
-      tooltip: 'Diğer',
-      onSelected: (value) async {
-        switch (value) {
-          case 'pin':
-            await repository.setFlagged([message.id], !message.isFlagged);
-          case 'unread':
+
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        MenuItemButton(
+          leadingIcon: Icon(
+            message.isFlagged ? LucideIcons.pinOff : LucideIcons.pin,
+            size: IconSize.sm,
+          ),
+          onPressed: () =>
+              repository.setFlagged([message.id], !message.isFlagged),
+          child: Text(message.isFlagged ? 'Sabitlemeyi kaldır' : 'Sabitle'),
+        ),
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.mailX, size: IconSize.sm),
+          onPressed: () async {
             await repository.setSeen([message.id], false);
             if (context.mounted) Navigator.of(context).pop();
-          case 'spam':
-            await repository.markSpam([message.id]);
-            if (context.mounted) Navigator.of(context).pop();
-          case 'move':
-            final target = await showFolderPicker(context, ref);
-            if (target == null) return;
-            await repository.moveToMailbox(
-              messageIds: [message.id],
-              target: target,
-            );
-            if (context.mounted) Navigator.of(context).pop();
-          case 'label':
-            final label = await showLabelPicker(context, ref);
-            if (label == null) return;
+          },
+          child: const Text('Okunmadı olarak işaretle'),
+        ),
+        SubmenuButton(
+          animated: true,
+          leadingIcon: const Icon(LucideIcons.tag, size: IconSize.sm),
+          menuChildren: labelMenuItems(context, ref, (label) async {
             await repository.setLabel(
               messageIds: [message.id],
               labelName: label,
               add: true,
             );
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: 'pin',
-          child: Row(
-            children: [
-              Icon(
-                message.isFlagged ? LucideIcons.pinOff : LucideIcons.pin,
-                size: IconSize.sm,
-              ),
-              const SizedBox(width: Space.md),
-              Text(message.isFlagged ? 'Sabitlemeyi kaldır' : 'Sabitle'),
-            ],
-          ),
+          }),
+          child: const Text('Etiketle'),
         ),
-        const PopupMenuItem(
-          value: 'unread',
-          child: Row(
-            children: [
-              Icon(LucideIcons.mailX, size: IconSize.sm),
-              SizedBox(width: Space.md),
-              Text('Okunmadı olarak işaretle'),
-            ],
-          ),
+        SubmenuButton(
+          animated: true,
+          leadingIcon: const Icon(LucideIcons.folderInput, size: IconSize.sm),
+          menuChildren: folderMenuItems(ref, (target) async {
+            await repository.moveToMailbox(
+              messageIds: [message.id],
+              target: target,
+            );
+            if (context.mounted) Navigator.of(context).pop();
+          }),
+          child: const Text('Klasöre taşı'),
         ),
-        const PopupMenuItem(
-          value: 'label',
-          child: Row(
-            children: [
-              Icon(LucideIcons.tag, size: IconSize.sm),
-              SizedBox(width: Space.md),
-              Text('Etiketle'),
-            ],
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'move',
-          child: Row(
-            children: [
-              Icon(LucideIcons.folderInput, size: IconSize.sm),
-              SizedBox(width: Space.md),
-              Text('Klasöre taşı'),
-            ],
-          ),
-        ),
-        const PopupMenuDivider(),
-        const PopupMenuItem(
-          value: 'spam',
-          child: Row(
-            children: [
-              Icon(LucideIcons.octagonAlert, size: IconSize.sm),
-              SizedBox(width: Space.md),
-              Text('İstenmeyen olarak bildir'),
-            ],
-          ),
+        const Divider(height: 1),
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.octagonAlert, size: IconSize.sm),
+          onPressed: () async {
+            await repository.markSpam([message.id]);
+            if (context.mounted) Navigator.of(context).pop();
+          },
+          child: const Text('İstenmeyen olarak bildir'),
         ),
       ],
+      builder: (context, controller, child) => IconButton(
+        icon: const Icon(LucideIcons.ellipsisVertical, size: IconSize.md),
+        tooltip: 'Diğer',
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
+      ),
     );
   }
 }

@@ -187,7 +187,9 @@ Liste en alta yaklaştığında (son 10 öğe görününce):
 ## 2.10 Anlık Bildirim (IDLE) — Bölüm 5'e köprü
 
 - **Uygulama önplandayken:** IMAP `IDLE` açıktır, yeni mail saniyeler içinde düşer. 29 dakikada bir IDLE yenilenir (RFC gereği).
-- **Arka plandayken:** Android IDLE bağlantısını uzun süre yaşatmaz. `workmanager` ile periyodik kontrol (kullanıcının seçtiği sıklık: 15 dk / 30 dk / 1 saat / manuel) yapılır. "Anlık (Push)" seçeneği Android'de gerçekte 15 dakikalık minimum WorkManager aralığına karşılık gelir — **Ayarlar ekranında bu dürüstçe yazılacak**, React'teki gibi gerçekleşmeyecek bir "Push" vaadi verilmeyecek.
+- **Arka plandayken — "Anlık" mod (varsayılan):** Android IDLE bağlantısını sıradan bir arka plan sürecinde yaşatmaz; sürekli dinlemenin tek güvenilir yolu kalıcı bildirimli bir **ön plan servisidir** (`flutter_foreground_task`, tür `specialUse`). Servis içinde her hesap için ayrı bir `AccountWatcher` kendi IMAP bağlantısını açık tutar (`lib/data/repositories/account_watcher.dart`, `lib/app/push_task_handler.dart`); yeni mail geldiği anda eşitleyip bildirimi basar. Bedeli: durum çubuğunda sessiz bir "Kaydet" bildirimi ve pil — Ayarlar ekranında açıkça yazılır. Servis yalnızca bildirimler açık + sıklık "Anlık" + en az bir hesap + sistem izni varken çalışır (`lib/app/push_controller.dart`).
+- **Yedek ve diğer sıklıklar:** `workmanager` periyodik görevi (15 dk / 30 dk / 1 saat / manuel) sürer. Anlık modda servis öldürülürse ya da bir bağlantı sessizce koparsa kaçan iletileri bu görev toplar; diğer sıklıklarda bildirimin tek kaynağıdır ve Android'in 15 dakikalık alt sınırı geçerlidir.
+- **Bildirim içeriği** (`NotificationService`, `NewMailNotifier`): başlıkta gönderen, kapalı hâlde konu, açılınca konu + önizleme; üst satırda hesabın e-postası ve iletinin geliş saati. Eylemler: Arşivle, Sil (arka plan isolate'inde), Yanıtla (uygulamayı yanıt ekranında açar). İlk indirmede (yeni hesap) bildirim üretilmez.
 - Detaylar Bölüm 5'te.
 
 ## 2.11 Bölüm 0.5 — Spike (kodlamadan önceki zorunlu adım)

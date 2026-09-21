@@ -19,15 +19,22 @@ class MailConnection {
     required SecureStore secureStore,
     required ImapService imapService,
     required GoogleOAuthService googleOAuth,
+    bool keepAlive = true,
   })  : _db = database,
         _secureStore = secureStore,
         _imap = imapService,
-        _googleOAuth = googleOAuth;
+        _googleOAuth = googleOAuth,
+        _keepAliveEnabled = keepAlive;
 
   final AppDatabase _db;
   final SecureStore _secureStore;
   final ImapService _imap;
   final GoogleOAuthService _googleOAuth;
+
+  /// `false` ise 4 dakikalık canlılık zamanlayıcısı kurulmaz. Sürekli IDLE
+  /// dinleyen bağlantılar (bkz. `AccountWatcher`) kendi döngüleriyle canlılığı
+  /// denetler ve dışarıdan bir NOOP'a ihtiyaç duymaz.
+  final bool _keepAliveEnabled;
 
   Timer? _keepAlive;
   int? _accountId;
@@ -97,11 +104,25 @@ class MailConnection {
 
   void _startKeepAlive() {
     _stopKeepAlive();
+    if (!_keepAliveEnabled) return;
     // Sunucular genelde 30 dakikada boş oturumu düşürür; 4 dakika güvenli.
-    _keepAlive = Timer.periodic(const Duration(minutes: 4), (_) async {
-      if (!_imap.isConnected) return;
-      await _imap.noop();
-    });
+    _keepAlive = Timer.periodic(
+      const Duration(minutes: 4),
+      (_) => keepAliveTick(),
+    );
+  }
+
+  /// Canlılık denetiminin tek turu (4 dakikada bir çalışır).
+  ///
+  /// IDLE sürerken NOOP GÖNDERİLMEZ: her komut sürmekte olan IDLE'ı bitirir
+  /// (bkz. `EnoughMailImapService._guard`) ve NOOP'tan sonra IDLE'ı yeniden
+  /// başlatan yoktu — bu yüzden anlık güncellemeler bağlantı kurulduktan en
+  /// fazla 4 dakika sonra sessizce duruyordu. IDLE zaten bir canlılık
+  /// mekanizmasıdır: `SyncController` onu 25 dakikada bir (RFC 2177 sınırı 29)
+  /// yeniler ve NOOP'un yaptığı işi görür.
+  Future<void> keepAliveTick() async {
+    if (!_imap.isConnected || _imap.isIdling) return;
+    await _imap.noop();
   }
 
   void _stopKeepAlive() {

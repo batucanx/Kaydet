@@ -12,6 +12,7 @@ import 'package:kaydet/data/services/app_settings.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/core/result.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
+import 'package:kaydet/ui/features/mail_list/mail_row.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers/fake_services.dart';
@@ -58,6 +59,15 @@ void main() {
     await imap.dispose();
     await db.close();
   });
+
+  /// Liste satırındaki konu. Satır, konuyu ve (gövde indirildikten sonra)
+  /// önizlemeyi tek `Text.rich` içinde gösterir; tam eşleşme yerine içerme
+  /// aranır ve filtre çipleri gibi başka yerlerdeki aynı metinle karışmasın
+  /// diye yalnızca `MailRow` içinde aranır.
+  Finder _rowText(String subject) => find.descendant(
+    of: find.byType(MailRow),
+    matching: find.textContaining(subject),
+  );
 
   Future<void> pumpApp(WidgetTester tester) async {
     await tester.pumpWidget(
@@ -113,12 +123,21 @@ void main() {
     await settle(tester);
   }
 
+  /// Ayarlar > Hesaplar alt sayfasını açar. Hesap listesi, "Görünen ad" ve
+  /// "Hesaptan çıkış yap" artık Ayarlar ana sayfasında değil, drill-down ile
+  /// açılan bu alt sayfada (bkz. `AccountsSettingsScreen`).
+  Future<void> openAccountsSettings(WidgetTester tester) async {
+    await openSettings(tester);
+    await tester.tap(find.text('Hesaplar'));
+    await settle(tester);
+  }
+
   group('giriş ekranı', () {
     appTest('hesap yokken giriş ekranı açılır', (tester) async {
       await pumpApp(tester);
       await tester.pump();
 
-      expect(find.text('KAYDET'), findsWidgets);
+      expect(find.text('Kaydet'), findsWidgets);
       expect(find.text('Giriş yap'), findsOneWidget);
       expect(find.text('E-posta adresi'), findsOneWidget);
     });
@@ -390,7 +409,8 @@ void main() {
       await settle(tester);
 
       await tester.tap(find.byTooltip('Ara'));
-      await tester.pump();
+      // Arama ekranı sayfa geçişiyle açılır; alan geçiş bitince oluşur.
+      await settle(tester);
       await tester.enterText(find.byType(TextField).first, 'logo');
       await settle(tester);
 
@@ -410,7 +430,7 @@ void main() {
       await settle(tester);
 
       await tester.tap(find.byTooltip('Ara'));
-      await tester.pump();
+      await settle(tester);
       await tester.enterText(find.byType(TextField).first, 'gorusme');
       await settle(tester);
 
@@ -426,7 +446,7 @@ void main() {
       await settle(tester);
 
       await tester.tap(find.byTooltip('Ara'));
-      await tester.pump();
+      await settle(tester);
       await tester.enterText(find.byType(TextField).first, 'bulunamayacak');
       await settle(tester);
 
@@ -448,7 +468,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await tester.tap(find.text('Fiyat teklifi'));
+      await tester.tap(_rowText('Fiyat teklifi'));
       await settle(tester);
 
       expect(find.text('Teklifimiz ektedir, iyi çalışmalar.'), findsOneWidget);
@@ -464,7 +484,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await tester.tap(find.text('Okunmamış'));
+      await tester.tap(_rowText('Okunmamış'));
       // Sayfa geçişi birkaç kare sürer (320 ms). Okundu gecikmesini
       // (1500 ms) doldurmadan detay ekranına varılmalı.
       for (var i = 0; i < 5; i++) {
@@ -505,7 +525,7 @@ void main() {
       expect(find.text('Yeni ileti'), findsWidgets);
       expect(find.text('Kime'), findsOneWidget);
       expect(find.text('Konu'), findsOneWidget);
-      expect(find.text('Sesli yaz'), findsOneWidget);
+      expect(find.byTooltip('Sesli yaz'), findsOneWidget);
     });
 
     appTest('alıcısız gönderim uyarı verir', (tester) async {
@@ -548,7 +568,8 @@ void main() {
 
       await tester.enterText(find.byType(TextField).at(0), 'alici@ornek.com');
       await tester.enterText(find.byType(TextField).at(1), 'Deneme konusu');
-      await tester.enterText(find.byType(TextField).at(2), 'Merhaba dünya');
+      // Gövde artık `TextField` değil Quill düzenleyicisidir; SMTP'ye ulaşma
+      // akışı gövde metnine bağlı olmadığı için burada doldurulmaz.
       await tester.pump();
 
       await tester.tap(find.byTooltip('Gönder'));
@@ -565,26 +586,71 @@ void main() {
       );
     });
 
-    appTest('geri çıkarken taslak diyaloğu açılır', (tester) async {
-      await seedAccount();
-      await pumpApp(tester);
-      await settle(tester);
-
+    /// "Yeni ileti" ile yazma ekranını açar, alıcı yazıp X ile kapatır.
+    Future<void> composeAndClose(WidgetTester tester) async {
       await tester.tap(find.byTooltip('Yeni ileti'));
       await settle(tester);
 
       await tester.enterText(find.byType(TextField).at(0), 'a@b.com');
+      await tester.enterText(find.byType(TextField).at(1), 'Yarım kalan');
       await tester.pump();
       await tester.tap(find.byTooltip('Kapat'));
-      await tester.pump();
+      await settle(tester);
+    }
 
-      expect(find.text('Taslak kaydedilsin mi?'), findsOneWidget);
-      expect(find.text('Taslağı kaydet'), findsOneWidget);
-      expect(find.text('Sil'), findsOneWidget);
-      expect(find.text('İptal'), findsOneWidget);
+    appTest('geri çıkarken taslak sormadan kaydedilir ve bildirim gösterilir',
+        (tester) async {
+      await seedAccount();
+      await pumpApp(tester);
+      await settle(tester);
+
+      await composeAndClose(tester);
+
+      expect(find.text('Taslak kaydedilsin mi?'), findsNothing);
+      expect(find.text('İleti Taslaklara kaydedildi.'), findsOneWidget);
+      expect(find.widgetWithText(TextButton, 'Sil'), findsOneWidget);
     });
 
-    appTest('boş iletide diyalog çıkmaz, doğrudan kapanır',
+    appTest('taslak bildirimi 3 saniye sonra kendiliğinden kapanır',
+        (tester) async {
+      await seedAccount();
+      await pumpApp(tester);
+      await settle(tester);
+
+      await composeAndClose(tester);
+      expect(find.text('İleti Taslaklara kaydedildi.'), findsOneWidget);
+
+      // Süre dolunca çıkış animasyonuyla kapanır (bkz. `KaydetNotice`).
+      await tester.pump(const Duration(seconds: 3));
+      await settle(tester);
+
+      expect(find.text('İleti Taslaklara kaydedildi.'), findsNothing);
+    });
+
+    appTest('bildirimdeki Sil eylemi onay ister ve taslağı siler',
+        (tester) async {
+      final accountId = await seedAccount();
+      await pumpApp(tester);
+      await settle(tester);
+
+      await composeAndClose(tester);
+
+      await tester.tap(find.widgetWithText(TextButton, 'Sil'));
+      await settle(tester);
+      expect(
+        find.text('Taslağı silmek istediğinize emin misiniz?'),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.text('Evet'));
+      await settle(tester);
+
+      final drafts =
+          await db.mailboxBySpecialUse(accountId, SpecialUse.drafts);
+      expect(await db.countMessages(drafts!.id), 0);
+    });
+
+    appTest('boş iletide bildirim çıkmaz, doğrudan kapanır',
         (tester) async {
       await seedAccount();
       await pumpApp(tester);
@@ -595,7 +661,7 @@ void main() {
       await tester.tap(find.byTooltip('Kapat'));
       await settle(tester);
 
-      expect(find.text('Taslak kaydedilsin mi?'), findsNothing);
+      expect(find.text('İleti Taslaklara kaydedildi.'), findsNothing);
       expect(find.text('Kime'), findsNothing);
     });
 
@@ -605,15 +671,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await tester.tap(find.byTooltip('Yeni ileti'));
-      await settle(tester);
-      await tester.enterText(find.byType(TextField).at(0), 'a@b.com');
-      await tester.enterText(find.byType(TextField).at(1), 'Yarım kalan');
-      await tester.pump();
-      await tester.tap(find.byTooltip('Kapat'));
-      await tester.pump();
-      await tester.tap(find.text('Taslağı kaydet'));
-      await settle(tester);
+      await composeAndClose(tester);
 
       final drafts =
           await db.mailboxBySpecialUse(accountId, SpecialUse.drafts);
@@ -677,7 +735,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await openSettings(tester);
+      await openAccountsSettings(tester);
 
       expect(find.text('info@pazarlik.com.tr'), findsOneWidget);
       expect(
@@ -686,20 +744,36 @@ void main() {
       );
     });
 
-    appTest('arka plan sıklığı dürüst şekilde açıklanır', (tester) async {
+    appTest('anlık modda arka plan bedeli dürüstçe açıklanır', (tester) async {
       await seedAccount();
       await pumpApp(tester);
       await settle(tester);
 
       await openSettings(tester);
+      await tester.tap(find.text('Bildirimler'));
+      await settle(tester);
 
-      await tester.scrollUntilVisible(
-        find.textContaining('Android en sık 15 dakikada bir'),
-        250,
-        scrollable: find.byType(Scrollable).first,
-      );
       expect(
-        find.textContaining('Android en sık 15 dakikada bir'),
+        find.textContaining('Android durum çubuğunda sessiz bir'),
+        findsOneWidget,
+      );
+    });
+
+    appTest('diğer sıklıklarda Android 15 dakika sınırı açıklanır',
+        (tester) async {
+      await settingsStore.write(
+        const AppSettings(syncFrequency: SyncFrequency.min15),
+      );
+      await seedAccount();
+      await pumpApp(tester);
+      await settle(tester);
+
+      await openSettings(tester);
+      await tester.tap(find.text('Bildirimler'));
+      await settle(tester);
+
+      expect(
+        find.textContaining('Android arka planda en sık 15 dakikada'),
         findsOneWidget,
       );
     });
@@ -709,7 +783,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await openSettings(tester);
+      await openAccountsSettings(tester);
 
       await tester.scrollUntilVisible(
         find.text('Hesaptan çıkış yap'),
@@ -734,10 +808,11 @@ void main() {
       await settle(tester);
 
       // Yan menüdeki Ayarlar, `AppShell`in gövdesini değiştirir (artık ayrı
-      // bir yığın sayfası açmıyor, bkz. `activeTabProvider`). Çıkıştan
-      // sonra kök ekrana dönülmezse kullanıcı giriş ekranını hiç göremez
-      // ve çıkış yapamadığını sanır.
-      await openSettings(tester);
+      // bir yığın sayfası açmıyor, bkz. `activeTabProvider`); "Hesaplar" ise
+      // oradan `context.pushScreen` ile açılan bir alt sayfadır (bkz.
+      // `AccountsSettingsScreen`). Çıkıştan sonra kök ekrana dönülmezse
+      // kullanıcı giriş ekranını hiç göremez ve çıkış yapamadığını sanır.
+      await openAccountsSettings(tester);
 
       await tester.scrollUntilVisible(
         find.text('Hesaptan çıkış yap'),
@@ -761,7 +836,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await openSettings(tester);
+      await openAccountsSettings(tester);
 
       await tester.tap(find.byTooltip('Hesap ekle'));
       await settle(tester);
@@ -773,7 +848,7 @@ void main() {
       await tester.tap(find.text('Giriş yap'));
       await settle(tester);
 
-      // "Hesap ekle" akışı kendini kapatır, Ayarlar'a döneriz — ilk hesap
+      // "Hesap ekle" akışı kendini kapatır, Hesaplar'a döneriz — ilk hesap
       // listede kalır ama artık etkin değildir.
       expect(find.text('ikinci@baskasirket.com'), findsOneWidget);
       expect(find.text('info@pazarlik.com.tr'), findsOneWidget);
@@ -800,7 +875,7 @@ void main() {
 
       await pumpApp(tester);
       await settle(tester);
-      await openSettings(tester);
+      await openAccountsSettings(tester);
 
       await tester.scrollUntilVisible(
         find.text('ucuncu@ornek.com'),
@@ -816,19 +891,19 @@ void main() {
 
       // Etkin olmayan bir hesap kaldırıldığında ekran değişmez. AppBar,
       // yukarıdaki kaydırmadan etkilenmeyen sabit alan olduğu için "hâlâ
-      // Ayarlar'dayız" kontrolü için ListView içindeki bir metinden daha
+      // Hesaplar'dayız" kontrolü için ListView içindeki bir metinden daha
       // güvenilir: Sliver sanallaştırması ekran dışına kaydırılan içeriği
       // element ağacından kaldırır, `find.text('HESAPLAR')` bu yüzden
       // kaydırma sonrası yanlışlıkla "bulunamadı" dönebilir.
-      expect(find.widgetWithText(AppBar, 'Ayarlar'), findsOneWidget);
+      expect(find.widgetWithText(AppBar, 'Hesaplar'), findsOneWidget);
       expect(find.text('ucuncu@ornek.com'), findsNothing);
       expect(await db.allAccounts(), hasLength(1));
       expect((await db.activeAccount())?.email, 'info@pazarlik.com.tr');
     });
 
     appTest(
-        'yan menüde tüm hesaplar birlikte görünür; başka hesabın '
-        'klasörüne dokunmak ayrı bir geçiş adımı olmadan o hesaba geçer',
+        'yan menüde tüm hesaplar rayda görünür; başka hesabın avatarına '
+        'dokunmak o hesaba geçirir ve klasörlerini gösterir',
         (tester) async {
       await seedAccount();
       final secondId = await db.insertAccount(
@@ -859,13 +934,14 @@ void main() {
       await tester.tap(find.byTooltip('Klasörler'));
       await settle(tester);
 
-      // İki hesap da aynı anda listelenir — henüz hiçbir şeye dokunmadan.
-      expect(find.text('ikinci@ornek.com'), findsOneWidget);
-      expect(find.text('İkinci Gelen Kutusu'), findsOneWidget);
+      // İki hesap da rayda avatar olarak görünür (tooltip = e-posta); panel
+      // ise yalnızca etkin hesabın klasörlerini gösterir.
+      expect(find.byTooltip('info@pazarlik.com.tr'), findsOneWidget);
+      expect(find.byTooltip('ikinci@ornek.com'), findsOneWidget);
+      expect(find.text('İkinci Gelen Kutusu'), findsNothing);
 
-      // Başka hesabın klasörüne dokunmak, ayrı bir "hesap değiştir" adımı
-      // olmadan doğrudan o hesabı etkinleştirir.
-      await tester.tap(find.text('İkinci Gelen Kutusu'));
+      // Başka hesabın avatarına dokunmak o hesabı etkinleştirir.
+      await tester.tap(find.byTooltip('ikinci@ornek.com'));
       await settle(tester);
 
       expect((await db.activeAccount())?.email, 'ikinci@ornek.com');

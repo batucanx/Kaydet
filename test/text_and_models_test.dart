@@ -70,50 +70,57 @@ void main() {
     });
   });
 
-  group('uzak görsel engelleme', () {
-    test('uzak görsel tespit edilir', () {
+  group('koyu tema uyumu', () {
+    test('kendi koyu temasını getiren e-posta tespit edilir', () {
       expect(
-        TextExtraction.hasRemoteImages('<img src="https://izleme/px.gif">'),
+        TextExtraction.supportsDarkScheme(
+          '@media (prefers-color-scheme: dark) { a { color: #fff } }',
+        ),
         isTrue,
       );
       expect(
-        TextExtraction.hasRemoteImages('<img src="cid:gomulu">'),
+        TextExtraction.supportsDarkScheme(
+          '@media (PREFERS-COLOR-SCHEME:DARK){}',
+        ),
+        isTrue,
+      );
+      expect(
+        TextExtraction.supportsDarkScheme('<p style="color:#000">Merhaba</p>'),
         isFalse,
       );
     });
 
-    test('engellenen görselin kaynağı kaldırılır', () {
-      final stripped = TextExtraction.stripRemoteImages(
-        '<img class="a" src="https://izleme/px.gif">',
+    test('koyu temada koyu sorgu doğru, açık sorgu yanlış olur', () {
+      const css =
+          '@media (prefers-color-scheme: dark) { .a { color: #fff } } '
+          '@media (prefers-color-scheme: light) { .a { color: #000 } }';
+      final resolved = TextExtraction.resolveColorSchemeQueries(
+        css,
+        dark: true,
       );
-      expect(stripped, isNot(contains('https://izleme')));
-      expect(stripped, contains('data-blocked'));
+      expect(resolved, contains('@media (min-width: 0px) { .a { color: #fff'));
+      expect(resolved, contains('@media (max-width: 0px) { .a { color: #000'));
     });
 
-    test('protokolsüz (//) adresler de tespit edilir', () {
+    test('açık temada tersi olur; sorgunun geri kalanı korunur', () {
+      const css =
+          '@media screen and (prefers-color-scheme:dark) and (min-width: 480px) { }';
       expect(
-        TextExtraction.hasRemoteImages('<img src="//izleme.com/px.gif">'),
-        isTrue,
+        TextExtraction.resolveColorSchemeQueries(css, dark: false),
+        '@media screen and (max-width: 0px) and (min-width: 480px) { }',
       );
     });
 
-    test('srcset üzerinden yüklenen adresler tespit edilir ve kaldırılır', () {
+    test('HTML ön işleme adımları responsive breakpoint\'lere dokunmaz', () {
+      // Bir zamanlar sabit genişlik temizleyicisi `max-width: 600px` içindeki
+      // `width`i de yiyip her breakpoint'i geçersiz kılıyor, responsive
+      // e-postaların mobil CSS'ini sessizce kapatıyordu.
       const html =
-          '<img srcset="https://izleme/a.png 1x, https://izleme/b.png 2x">';
-      expect(TextExtraction.hasRemoteImages(html), isTrue);
-      final stripped = TextExtraction.stripRemoteImages(html);
-      expect(stripped, isNot(contains('https://izleme')));
-      expect(stripped, contains('data-blocked'));
-    });
-
-    test('CSS background-image üzerinden yüklenen adresler tespit edilir '
-        've kaldırılır', () {
-      const html =
-          '<div style="background-image:url(https://izleme/bg.png)">';
-      expect(TextExtraction.hasRemoteImages(html), isTrue);
-      final stripped = TextExtraction.stripRemoteImages(html);
-      expect(stripped, isNot(contains('https://izleme')));
-      expect(stripped, contains('background-image:none'));
+          '<style>@media only screen and (max-width: 600px) { .c { width: 100% } }'
+          '.w { max-width: 600px; margin: 0 auto }</style>';
+      expect(TextExtraction.stripViewportMeta(html), html);
+      expect(TextExtraction.resolveColorSchemeQueries(html, dark: true), html);
+      expect(TextExtraction.resolveColorSchemeQueries(html, dark: false), html);
     });
   });
 

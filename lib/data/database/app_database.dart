@@ -5,9 +5,26 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
+import '../../domain/models/search_filters.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
+
+/// Aynı veritabanı dosyası eşzamanlı olarak birden çok isolate'ten açılır:
+/// arayüz, ön plan servisi (`push_task_handler.dart`), periyodik görev ve
+/// bildirim eylemleri. Varsayılan ayarlarda SQLite kilit çakıştığında
+/// beklemeden `database is locked` hatası verir ve yazma sessizce kaybolur.
+///
+/// `busy_timeout` çakışan yazmayı bekletir; `WAL` okuyucuların yazıcıyı
+/// engellememesini sağlar (arayüz listesi, servis yazarken okumaya devam eder).
+///
+/// Kasıtlı olarak `dynamic`: `CommonDatabase` tipi `sqlite3` paketindendir,
+/// o ise doğrudan bağımlılık değil. Üst düzey işlev olmak zorunda çünkü
+/// Drift bunu ayrı bir isolate'e gönderir.
+void _configureConnection(dynamic db) {
+  db.execute('PRAGMA busy_timeout = 5000;');
+  db.execute('PRAGMA journal_mode = WAL;');
+}
 
 /// Liste satırı için birleşik sonuç.
 class MessageListItem {
@@ -15,6 +32,18 @@ class MessageListItem {
 
   final MessageRow message;
   final List<String> labelNames;
+}
+
+/// Arama sonucundaki bir ek — hangi iletiye ait olduğuyla birlikte (bkz.
+/// `AppDatabase.searchAttachments`).
+class AttachmentSearchResult {
+  const AttachmentSearchResult({
+    required this.attachment,
+    required this.message,
+  });
+
+  final AttachmentRow attachment;
+  final MessageRow message;
 }
 
 @DriftDatabase(
@@ -25,17 +54,25 @@ class MessageListItem {
     MessageBodies,
     Attachments,
     Labels,
+    Signatures,
+    Contacts,
     PendingOperations,
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(driftDatabase(name: 'kaydet'));
+  AppDatabase()
+    : super(
+        driftDatabase(
+          name: 'kaydet',
+          native: const DriftNativeOptions(setup: _configureConnection),
+        ),
+      );
 
   /// Testler için bellek içi örnek.
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -51,6 +88,41 @@ class AppDatabase extends _$AppDatabase {
       // değişmez.
       if (from < 2) {
         await m.addColumn(accounts, accounts.authMethod);
+      }
+      // v2 → v3: İletme durumu (`$Forwarded`) için sütun eklendi.
+      if (from < 3) {
+        await m.addColumn(messages, messages.isForwarded);
+      }
+      // v3 → v4: Tek imza sütunu yerine çoklu imza tablosu geldi. Eski
+      // `accounts.signature` değeri kaybolmasın diye ilk (varsayılan)
+      // imzaya taşınır; eski sütun geriye dönük uyumluluk için kalır.
+      if (from < 4) {
+        await m.createTable(signatures);
+        final existingAccounts = await select(accounts).get();
+        for (final account in existingAccounts) {
+          final oldSignature = account.signature?.trim() ?? '';
+          if (oldSignature.isEmpty) continue;
+          await into(signatures).insert(
+            SignaturesCompanion.insert(
+              accountId: account.id,
+              name: 'İmza 1',
+              body: Value(oldSignature),
+              isDefault: const Value(true),
+            ),
+          );
+        }
+      }
+      // v4 → v5: Yerel kişi defteri — gönderilen/alınan iletilerden otomatik
+      // öğrenilir (bkz. `MailRepository.queueSend`, `SyncEngine`).
+      if (from < 5) {
+        await m.createTable(contacts);
+      }
+      // v5 → v6: Outlook tarzı yerel önbellek tavanı (bkz. `RetentionPolicy`,
+      // `MailRepository.trimMailbox`). Var olan klasörler varsayılan
+      // (500) ile başlar — sütunun kendi `withDefault`'u zaten bunu
+      // sağlar, elle bir değer yazmaya gerek yoktur.
+      if (from < 6) {
+        await m.addColumn(mailboxes, mailboxes.retentionLimit);
       }
     },
     beforeOpen: (details) async {
@@ -97,6 +169,11 @@ class AppDatabase extends _$AppDatabase {
     await customStatement(
       'CREATE INDEX IF NOT EXISTS idx_pending_status '
       'ON pending_operations (account_id, status, next_attempt_at)',
+    );
+    // Hesap başına en fazla bir varsayılan imza olabilir.
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_signatures_default '
+      'ON signatures (account_id) WHERE is_default = 1',
     );
   }
 
@@ -192,6 +269,17 @@ class AppDatabase extends _$AppDatabase {
   Future<MailboxRow?> mailboxById(int id) =>
       (select(mailboxes)..where((m) => m.id.equals(id))).getSingleOrNull();
 
+  Future<List<MailboxRow>> mailboxesByIds(List<int> ids) =>
+      (select(mailboxes)..where((m) => m.id.isIn(ids))).get();
+
+  /// Seçilebilir klasörler — [accountId] `null` ise tüm hesaplarınki (arama
+  /// filtresinin klasör listesi için).
+  Future<List<MailboxRow>> selectableMailboxes({int? accountId}) {
+    final q = select(mailboxes)..where((m) => m.isSelectable.equals(true));
+    if (accountId != null) q.where((m) => m.accountId.equals(accountId));
+    return q.get();
+  }
+
   Future<MailboxRow?> mailboxByPath(int accountId, String path) =>
       (select(mailboxes)
             ..where((m) => m.accountId.equals(accountId) & m.path.equals(path)))
@@ -241,6 +329,21 @@ class AppDatabase extends _$AppDatabase {
       lastSyncAt: lastSyncAt == null ? const Value.absent() : Value(lastSyncAt),
     ),
   );
+
+  /// Klasörün yerel önbellek tavanını büyütür (bkz. `RetentionPolicy`) —
+  /// kullanıcı yerelde biten listede "daha fazla göster" dedikçe
+  /// `SyncController.loadMore` bunu çağırır; aksi hâlde `trimMailbox`
+  /// birazdan sunucudan indirilecek bu eski iletileri hemen geri silerdi.
+  Future<void> raiseRetentionLimit(
+    int mailboxId, {
+    int by = RetentionPolicy.step,
+  }) async {
+    final mailbox = await mailboxById(mailboxId);
+    if (mailbox == null) return;
+    await (update(mailboxes)..where((m) => m.id.equals(mailboxId))).write(
+      MailboxesCompanion(retentionLimit: Value(mailbox.retentionLimit + by)),
+    );
+  }
 
   /// UIDVALIDITY değiştiğinde klasörün tüm yerel içeriğini siler.
   ///
@@ -382,6 +485,24 @@ class AppDatabase extends _$AppDatabase {
     return row.read(count) ?? 0;
   }
 
+  /// [countUnread]'ın canlı akan hâli — Drift bu sorgunun okuduğu tabloyu
+  /// (`messages`) izler ve yalnızca ilgili bir değişiklik olduğunda yeniden
+  /// yayınlar. Klasör rozetlerinin, ilgisiz bir sağlayıcıya (bkz. eski
+  /// `unreadCountProvider`, `messageListProvider`'ı izliyordu) yapay bir
+  /// bağımlılıkla değil doğrudan kendi verisiyle güncellenmesini sağlar.
+  Stream<int> watchUnreadCount(int mailboxId) {
+    final count = countAll();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.mailboxId.equals(mailboxId) &
+                messages.isSeen.equals(false) &
+                messages.isDeleted.equals(false),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .watchSingle();
+  }
+
   Future<int> countFlagged(int accountId) async {
     final count = countAll();
     final row =
@@ -394,6 +515,22 @@ class AppDatabase extends _$AppDatabase {
               ))
             .getSingle();
     return row.read(count) ?? 0;
+  }
+
+  /// [countFlagged]'ın canlı akan hâli (bkz. [watchUnreadCount] — aynı
+  /// gerekçe: Drift'in kendi tablo izleyicisi, yapay bir sağlayıcı
+  /// bağımlılığından daha doğru ve daha ucuz).
+  Stream<int> watchFlaggedCount(int accountId) {
+    final count = countAll();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.accountId.equals(accountId) &
+                messages.isFlagged.equals(true) &
+                messages.isDeleted.equals(false),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .watchSingle();
   }
 
   /// Sunucudan gelen iletileri yazar; var olanı günceller.
@@ -472,6 +609,36 @@ class AppDatabase extends _$AppDatabase {
       await (delete(messages)..where((m) => m.id.isIn(ids))).go();
     });
   }
+
+  /// [keepNewest] en yeni iletiden SONRAKİ (yani en eski) trimming
+  /// adayları — bkz. `MailRepository.trimMailbox`. Sabitlenmiş, taslak
+  /// veya gönderilmeyi bekleyen (outbox) iletiler asla aday olmaz; bu
+  /// yüzden gerçek "elde tutulan" sayı bazen [keepNewest]den fazla olur —
+  /// kasıtlı, kullanıcının bilerek koruduğu bir ileti sessizce silinmez.
+  Future<List<int>> trimCandidateIds(
+    int mailboxId, {
+    required int keepNewest,
+  }) =>
+      (select(messages)
+            ..where(
+              (m) =>
+                  m.mailboxId.equals(mailboxId) &
+                  m.isFlagged.equals(false) &
+                  m.isDraft.equals(false) &
+                  m.outboxState.isIn([
+                    OutboxState.none.index,
+                    OutboxState.sent.index,
+                  ]),
+            )
+            ..orderBy([
+              (m) =>
+                  OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+            ])
+            // SQLite'ta negatif LIMIT "sınırsız" demektir — bu yüzden
+            // burada sadece OFFSET'in kendisi işe yarıyor.
+            ..limit(-1, offset: keepNewest))
+          .map((m) => m.id)
+          .get();
 
   Future<void> deleteMessagesByUid(int mailboxId, List<int> uids) async {
     if (uids.isEmpty) return;
@@ -585,6 +752,29 @@ class AppDatabase extends _$AppDatabase {
   Future<void> removeAttachment(int id) =>
       (delete(attachments)..where((a) => a.id.equals(id))).go();
 
+  /// Verilen iletilere ait, cihaza İNMİŞ ek dosyalarının satırları — bkz.
+  /// `MailRepository.trimMailbox`'ın kademe 1'i (sadece ek dosyaları sil).
+  Future<List<AttachmentRow>> attachmentsForMessages(
+    List<int> messageIds,
+  ) async {
+    if (messageIds.isEmpty) return const [];
+    return (select(attachments)..where(
+          (a) => a.messageId.isIn(messageIds) & a.localPath.isNotNull(),
+        ))
+        .get();
+  }
+
+  /// Dosyaları zaten silinmiş eklerin DB kaydını "indirilmemiş" durumuna
+  /// döndürür — mesaj/ek metadatası kalır, yalnızca yerel yol temizlenir.
+  Future<void> clearAttachmentPaths(List<int> attachmentIds) async {
+    if (attachmentIds.isEmpty) return;
+    await (update(
+      attachments,
+    )..where((a) => a.id.isIn(attachmentIds))).write(
+      const AttachmentsCompanion(localPath: Value(null)),
+    );
+  }
+
   // --------------------------------------------------------------- etiketler
 
   Stream<List<LabelRow>> watchLabels(int accountId) =>
@@ -601,6 +791,118 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteLabel(int id) =>
       (delete(labels)..where((l) => l.id.equals(id))).go();
+
+  // --------------------------------------------------------------- imzalar
+
+  Stream<List<SignatureRow>> watchSignatures(int accountId) =>
+      (select(signatures)
+            ..where((s) => s.accountId.equals(accountId))
+            ..orderBy([(s) => OrderingTerm(expression: s.id)]))
+          .watch();
+
+  Future<List<SignatureRow>> signaturesOf(int accountId) =>
+      (select(signatures)..where((s) => s.accountId.equals(accountId))).get();
+
+  Future<int> insertSignature(SignaturesCompanion row) =>
+      into(signatures).insert(row);
+
+  Future<void> updateSignatureRow(int id, SignaturesCompanion patch) =>
+      (update(signatures)..where((s) => s.id.equals(id))).write(patch);
+
+  Future<void> deleteSignature(int id) =>
+      (delete(signatures)..where((s) => s.id.equals(id))).go();
+
+  /// [signatureId]'yi varsayılan yapar; hesabın diğer imzalarındaki
+  /// varsayılan işareti kaldırır (kısmi tekil indeksle aynı anda ikisi
+  /// birden `true` olamaz, bkz. `idx_signatures_default`).
+  Future<void> setDefaultSignature(int accountId, int signatureId) =>
+      transaction(() async {
+        await (update(signatures)..where((s) => s.accountId.equals(accountId)))
+            .write(const SignaturesCompanion(isDefault: Value(false)));
+        await (update(signatures)..where((s) => s.id.equals(signatureId)))
+            .write(const SignaturesCompanion(isDefault: Value(true)));
+      });
+
+  // --------------------------------------------------------------- kişiler
+
+  /// En son kullanılan en üstte — otomatik tamamlamada boş girişte de
+  /// (henüz hiçbir harf yazılmadan) bu sıra "son kullanılanlar" listesi
+  /// olarak işlev görür (bkz. `_RecipientField`).
+  Stream<List<ContactRow>> watchContacts(int accountId) =>
+      (select(contacts)
+            ..where((c) => c.accountId.equals(accountId))
+            ..orderBy([
+              (c) => OrderingTerm(
+                expression: c.lastUsedAt,
+                mode: OrderingMode.desc,
+              ),
+            ]))
+          .watch();
+
+  /// Arama ekranının "Hızlı Kişiler" şeridi için en son kullanılan kişiler.
+  ///
+  /// [accountId] `null` ise cihazdaki TÜM hesapların kişileri birlikte akar
+  /// (bkz. arama ekranının "Tüm Hesaplar" kapsamı) — `searchContacts` ve
+  /// `searchAttachments`'taki nullable [accountId] deseniyle aynı.
+  Stream<List<ContactRow>> watchRecentContacts({
+    int? accountId,
+    int limit = 12,
+  }) {
+    final q = select(contacts)
+      ..orderBy([
+        (c) =>
+            OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
+      ])
+      ..limit(limit);
+    if (accountId != null) {
+      q.where((c) => c.accountId.equals(accountId));
+    }
+    return q.watch();
+  }
+
+  /// Kişiyi ekler; zaten varsa kullanım sayacını/son kullanım zamanını
+  /// artırır. İsim boş gelirse (ör. sunucu zarfında görünen ad yoksa) var
+  /// olan isim ezilmez — bir kişiyi bir kez adıyla, bir kez adsız görmek
+  /// adını kaybettirmemeli.
+  Future<void> upsertContact({
+    required int accountId,
+    required String email,
+    String? name,
+  }) => transaction(() async {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty) return;
+    final trimmedName = name?.trim() ?? '';
+
+    final existing =
+        await (select(contacts)..where(
+              (c) =>
+                  c.accountId.equals(accountId) &
+                  c.email.equals(normalizedEmail),
+            ))
+            .getSingleOrNull();
+
+    if (existing == null) {
+      await into(contacts).insert(
+        ContactsCompanion.insert(
+          accountId: accountId,
+          email: normalizedEmail,
+          name: Value(trimmedName),
+        ),
+      );
+      return;
+    }
+
+    await (update(contacts)..where((c) => c.id.equals(existing.id))).write(
+      ContactsCompanion(
+        name: trimmedName.isEmpty ? const Value.absent() : Value(trimmedName),
+        timesUsed: Value(existing.timesUsed + 1),
+        lastUsedAt: Value(DateTime.now().toUtc()),
+      ),
+    );
+  });
+
+  Future<void> deleteContact(int id) =>
+      (delete(contacts)..where((c) => c.id.equals(id))).go();
 
   // ------------------------------------------------------------------ kuyruk
 
@@ -771,27 +1073,176 @@ class AppDatabase extends _$AppDatabase {
 
   // ------------------------------------------------------------------ arama
 
-  /// FTS5 üzerinden arama; sonuç ileti kimlikleri, alaka sırasına göre.
+  /// FTS5 üzerinden arama; sonuç ileti kimlikleri, tarihe göre yeniden eskiye
+  /// (Outlook'ta olduğu gibi — alaka sırasına göre değil).
+  ///
+  /// Sıralama [limit]'ten ÖNCE uygulanır: çok sayıda eşleşen bir aramada
+  /// (ör. herkesin adresinde geçen "gmail") dönen [limit] ileti en yeniler
+  /// olur, alakalı ama rastgele eskiler değil.
+  ///
+  /// [accountId] `null` ise tüm hesaplarda arar (arama ekranının "Tüm
+  /// Hesaplar" kapsamı) — hepsi zaten aynı yerel veritabanında. [filters]
+  /// sonuçları daraltır (bkz. [SearchFilters]).
   Future<List<int>> searchMessageIds({
-    required int accountId,
+    int? accountId,
     required String query,
+    SearchFilters filters = const SearchFilters(),
     int limit = 200,
   }) async {
     final match = buildFtsQuery(query);
     if (match == null) return const [];
+    final accountClause = accountId == null ? '' : 'AND m.account_id = ? ';
+    final filter = _messageFilterSql(filters);
     final rows = await customSelect(
       'SELECT f.message_id AS mid FROM messages_fts f '
       'JOIN messages m ON m.id = f.message_id '
-      'WHERE messages_fts MATCH ? AND m.account_id = ? '
-      'ORDER BY rank LIMIT ?',
+      'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+      'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
+      'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?',
       variables: [
         Variable<String>(match),
-        Variable<int>(accountId),
+        if (accountId != null) Variable<int>(accountId),
+        ...filter.variables,
         Variable<int>(limit),
       ],
-      readsFrom: {messages},
+      readsFrom: {messages, mailboxes},
     ).get();
     return rows.map((r) => r.read<int>('mid')).toList();
+  }
+
+  /// [filters]'ı `m` (messages) ve `mb` (mailboxes) takma adlı bir sorgu için
+  /// `AND ...` koşullarına çevirir.
+  ///
+  /// [searchAttachments] aynı kuralları drift'in tipli ifadeleriyle
+  /// uygular — kuralları değiştirirken ikisini birlikte güncelleyin.
+  ({String sql, List<Variable<Object>> variables}) _messageFilterSql(
+    SearchFilters filters,
+  ) {
+    // `\Deleted` bayraklı iletiler hiçbir listede görünmez (bkz.
+    // `watchMessages`); aramada da gizli kalır. "Silinmiş öğeler" Çöp
+    // Kutusu'ndaki iletilerdir, bu bayrak değil.
+    final clauses = <String>['AND m.is_deleted = 0'];
+    final variables = <Variable<Object>>[];
+
+    if (filters.withAttachmentsOnly) clauses.add('AND m.has_attachments = 1');
+
+    final folder = filters.folder;
+    if (folder == null) {
+      if (!filters.includeDeleted) {
+        clauses.add('AND mb.special_use <> ?');
+        variables.add(Variable<int>(SpecialUse.trash.index));
+      }
+    } else {
+      clauses.add('AND mb.special_use = ?');
+      variables.add(Variable<int>(folder.use.index));
+      final name = folder.customName;
+      if (name != null) {
+        clauses.add('AND mb.name = ?');
+        variables.add(Variable<String>(name));
+      }
+    }
+    return (sql: clauses.join(' '), variables: variables);
+  }
+
+  /// Ad veya e-postada geçen kişileri arar (Türkçe-duyarlı, bkz.
+  /// `trLower`). [accountId] `null` ise tüm hesaplarda arar.
+  Future<List<ContactRow>> searchContacts({
+    int? accountId,
+    required String query,
+    int limit = 50,
+  }) async {
+    final needle = trLower(query.trim());
+    if (needle.isEmpty) return const [];
+    final q = select(contacts)
+      ..orderBy([
+        (c) =>
+            OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
+      ]);
+    if (accountId != null) {
+      q.where((c) => c.accountId.equals(accountId));
+    }
+    final rows = await q.get();
+    return rows
+        .where(
+          (c) =>
+              trLower(c.name).contains(needle) ||
+              trLower(c.email).contains(needle),
+        )
+        .take(limit)
+        .toList();
+  }
+
+  /// Dosya adında geçen ekleri arar; sonuçla birlikte ekin ait olduğu ileti
+  /// de döner (Dosyalar sonuç kartı gönderen/konu/tarih göstermek için buna
+  /// ihtiyaç duyar). Yalnızca alınan iletilerin ekleri aranır — yazma
+  /// ekranından iliştirilip henüz gönderilmemiş dosyalar (`isOutgoing`)
+  /// hariç tutulur. [accountId] `null` ise tüm hesaplarda arar.
+  ///
+  /// [filters]'ın klasör ve silinmiş öğe kuralları, ekin ait olduğu iletiye
+  /// uygulanır (bkz. [_messageFilterSql] — aynı kurallar). "Ekleri Var"
+  /// burada anlamsızdır: sonuçların hepsi zaten bir ektir.
+  Future<List<AttachmentSearchResult>> searchAttachments({
+    int? accountId,
+    required String query,
+    SearchFilters filters = const SearchFilters(),
+    int limit = 50,
+  }) async {
+    final needle = trLower(query.trim());
+    if (needle.isEmpty) return const [];
+    // Türkçe-duyarlı eşleme (`trLower`) SQL `LIKE` ile yapılamaz; bu yüzden
+    // önce yalnızca (id, dosya adı) çiftleri okunup Dart'ta süzülür, tam
+    // ileti/ek satırları ise yalnızca eşleşenler için ikinci sorguda yüklenir.
+    final q = selectOnly(attachments).join([
+      innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
+      innerJoin(mailboxes, mailboxes.id.equalsExp(messages.mailboxId)),
+    ])
+      ..addColumns([attachments.id, attachments.fileName])
+      ..where(
+        attachments.isOutgoing.equals(false) &
+            messages.isDeleted.equals(false),
+      )
+      ..orderBy([
+        OrderingTerm(expression: messages.dateUtc, mode: OrderingMode.desc),
+      ]);
+    if (accountId != null) {
+      q.where(messages.accountId.equals(accountId));
+    }
+    final folder = filters.folder;
+    if (folder == null) {
+      if (!filters.includeDeleted) {
+        q.where(mailboxes.specialUse.equalsValue(SpecialUse.trash).not());
+      }
+    } else {
+      q.where(mailboxes.specialUse.equalsValue(folder.use));
+      final name = folder.customName;
+      if (name != null) q.where(mailboxes.name.equals(name));
+    }
+
+    final rows = await q.get();
+    final matchedIds = <int>[];
+    for (final row in rows) {
+      final fileName = row.read(attachments.fileName) ?? '';
+      if (!trLower(fileName).contains(needle)) continue;
+      matchedIds.add(row.read(attachments.id)!);
+      if (matchedIds.length >= limit) break;
+    }
+    if (matchedIds.isEmpty) return const [];
+
+    final full = await (select(attachments).join([
+      innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
+    ])..where(attachments.id.isIn(matchedIds))).get();
+    final byId = {
+      for (final row in full)
+        row.readTable(attachments).id: AttachmentSearchResult(
+          attachment: row.readTable(attachments),
+          message: row.readTable(messages),
+        ),
+    };
+    // Sıra (yeniden eskiye) ilk sorgudakiyle aynı kalır.
+    return [
+      for (final id in matchedIds)
+        if (byId[id] != null) byId[id]!,
+    ];
   }
 
   /// Kullanıcı girdisini güvenli bir FTS5 sorgusuna çevirir.

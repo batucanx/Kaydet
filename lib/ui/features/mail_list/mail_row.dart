@@ -58,7 +58,13 @@ class MailRow extends StatelessWidget {
     return message.fromEmail;
   }
 
+  /// Boş/`[]` girdide `jsonDecode`'a hiç girmez — Gelen Kutusu'nda her
+  /// satırın her build'inde koşulsuz çalışan tek decode olan `_labelNames`
+  /// için bu, çoğu iletide (etiketsiz) ayrıştırmayı tamamen atlar.
+  static bool _isEmptyJsonList(String json) => json.isEmpty || json == '[]';
+
   static List<String> _decode(String json) {
+    if (_isEmptyJsonList(json)) return const [];
     try {
       final decoded = jsonDecode(json);
       if (decoded is! List) return const [];
@@ -77,6 +83,7 @@ class MailRow extends StatelessWidget {
   }
 
   static List<String> _decodeEmails(String json) {
+    if (_isEmptyJsonList(json)) return const [];
     try {
       final decoded = jsonDecode(json);
       if (decoded is! List) return const [];
@@ -91,8 +98,10 @@ class MailRow extends StatelessWidget {
   }
 
   List<String> get _labelNames {
+    final json = message.labelsJson;
+    if (_isEmptyJsonList(json)) return const [];
     try {
-      final decoded = jsonDecode(message.labelsJson);
+      final decoded = jsonDecode(json);
       if (decoded is! List) return const [];
       return decoded.whereType<String>().toList();
     } on FormatException {
@@ -117,7 +126,14 @@ class MailRow extends StatelessWidget {
           duration: context.motion(Motion.fast),
           constraints: const BoxConstraints(minHeight: Dimens.listRowMinHeight),
           decoration: BoxDecoration(
-            color: isSelected ? t.accentSubtle : Colors.transparent,
+            // Sabitlenmiş bir ileti seçili değilse bile hafif bir vurgu
+            // alır — "SABİTLENENLER" başlığı olmadan da neden en üstte
+            // olduğu anlaşılsın diye (bkz. `_PinnedSection`).
+            color: isSelected
+                ? t.accentSubtle
+                : message.isFlagged
+                ? t.accent.withValues(alpha: 0.06)
+                : Colors.transparent,
             border: Border(
               bottom: BorderSide(color: t.divider),
               left: BorderSide(
@@ -233,6 +249,8 @@ class MailRow extends StatelessWidget {
     return Text.rich(
       TextSpan(
         children: [
+          if (message.isAnswered) _statusIconSpan(LucideIcons.reply, t),
+          if (message.isForwarded) _statusIconSpan(LucideIcons.forward, t),
           TextSpan(text: subjectText, style: subjectStyle),
           if (message.preview.isNotEmpty)
             TextSpan(
@@ -245,6 +263,17 @@ class MailRow extends StatelessWidget {
       overflow: TextOverflow.ellipsis,
     );
   }
+
+  /// Yanıtla/İlet göstergesi — Gmail/Outlook'taki gibi konudan hemen önce,
+  /// küçük bir ok simgesiyle. `WidgetSpan`: `Text.rich`'in tek satır kısaltma
+  /// (`TextOverflow.ellipsis`) davranışını bozmadan simgeyi metne gömer.
+  WidgetSpan _statusIconSpan(IconData icon, KaydetTokens t) => WidgetSpan(
+    alignment: PlaceholderAlignment.middle,
+    child: Padding(
+      padding: const EdgeInsets.only(right: 4),
+      child: Icon(icon, size: 13, color: t.textTertiary),
+    ),
+  );
 
   Widget _outboxBadge(BuildContext context, OutboxState outbox) {
     final t = context.tokens;

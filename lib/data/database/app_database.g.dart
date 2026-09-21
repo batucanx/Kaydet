@@ -450,6 +450,9 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
   final String smtpHost;
   final int smtpPort;
   final SocketSecurity smtpSecurity;
+
+  /// Kullanılmıyor — [Signatures] tablosu yerini aldı (bkz. v3→v4 göçü).
+  /// Sütun eski satırlarla geriye dönük uyumluluk için duruyor, silinmiyor.
   final String? signature;
   final int colorSeed;
   final bool isActive;
@@ -1184,6 +1187,18 @@ class $MailboxesTable extends Mailboxes
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _retentionLimitMeta = const VerificationMeta(
+    'retentionLimit',
+  );
+  @override
+  late final GeneratedColumn<int> retentionLimit = GeneratedColumn<int>(
+    'retention_limit',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(RetentionPolicy.defaultLimit),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1203,6 +1218,7 @@ class $MailboxesTable extends Mailboxes
     lastSyncAt,
     sortOrder,
     hasMoreOnServer,
+    retentionLimit,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1339,6 +1355,15 @@ class $MailboxesTable extends Mailboxes
         ),
       );
     }
+    if (data.containsKey('retention_limit')) {
+      context.handle(
+        _retentionLimitMeta,
+        retentionLimit.isAcceptableOrUnknown(
+          data['retention_limit']!,
+          _retentionLimitMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1422,6 +1447,10 @@ class $MailboxesTable extends Mailboxes
         DriftSqlType.bool,
         data['${effectivePrefix}has_more_on_server'],
       )!,
+      retentionLimit: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retention_limit'],
+      )!,
     );
   }
 
@@ -1456,6 +1485,13 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
 
   /// Sunucuda daha eski ileti kaldı mı? (sayfalama sonu göstergesi)
   final bool hasMoreOnServer;
+
+  /// Bu klasör için yerelde tutulacak toplam ileti sayısının üst sınırı
+  /// (Outlook tarzı önbellek tavanı, bkz. `RetentionPolicy`). Kullanıcı
+  /// "daha fazla göster" ile sunucudan daha eskiyi istedikçe büyür (bkz.
+  /// `SyncController.loadMore`); aşan iletiler `MailRepository.trimMailbox`
+  /// tarafından kademeli olarak temizlenir.
+  final int retentionLimit;
   const MailboxRow({
     required this.id,
     required this.accountId,
@@ -1474,6 +1510,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     this.lastSyncAt,
     required this.sortOrder,
     required this.hasMoreOnServer,
+    required this.retentionLimit,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1507,6 +1544,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     }
     map['sort_order'] = Variable<int>(sortOrder);
     map['has_more_on_server'] = Variable<bool>(hasMoreOnServer);
+    map['retention_limit'] = Variable<int>(retentionLimit);
     return map;
   }
 
@@ -1537,6 +1575,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           : Value(lastSyncAt),
       sortOrder: Value(sortOrder),
       hasMoreOnServer: Value(hasMoreOnServer),
+      retentionLimit: Value(retentionLimit),
     );
   }
 
@@ -1565,6 +1604,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       lastSyncAt: serializer.fromJson<DateTime?>(json['lastSyncAt']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       hasMoreOnServer: serializer.fromJson<bool>(json['hasMoreOnServer']),
+      retentionLimit: serializer.fromJson<int>(json['retentionLimit']),
     );
   }
   @override
@@ -1590,6 +1630,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       'lastSyncAt': serializer.toJson<DateTime?>(lastSyncAt),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'hasMoreOnServer': serializer.toJson<bool>(hasMoreOnServer),
+      'retentionLimit': serializer.toJson<int>(retentionLimit),
     };
   }
 
@@ -1611,6 +1652,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     Value<DateTime?> lastSyncAt = const Value.absent(),
     int? sortOrder,
     bool? hasMoreOnServer,
+    int? retentionLimit,
   }) => MailboxRow(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
@@ -1631,6 +1673,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     lastSyncAt: lastSyncAt.present ? lastSyncAt.value : this.lastSyncAt,
     sortOrder: sortOrder ?? this.sortOrder,
     hasMoreOnServer: hasMoreOnServer ?? this.hasMoreOnServer,
+    retentionLimit: retentionLimit ?? this.retentionLimit,
   );
   MailboxRow copyWithCompanion(MailboxesCompanion data) {
     return MailboxRow(
@@ -1671,6 +1714,9 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       hasMoreOnServer: data.hasMoreOnServer.present
           ? data.hasMoreOnServer.value
           : this.hasMoreOnServer,
+      retentionLimit: data.retentionLimit.present
+          ? data.retentionLimit.value
+          : this.retentionLimit,
     );
   }
 
@@ -1693,7 +1739,8 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           ..write('isSelectable: $isSelectable, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('hasMoreOnServer: $hasMoreOnServer')
+          ..write('hasMoreOnServer: $hasMoreOnServer, ')
+          ..write('retentionLimit: $retentionLimit')
           ..write(')'))
         .toString();
   }
@@ -1717,6 +1764,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     lastSyncAt,
     sortOrder,
     hasMoreOnServer,
+    retentionLimit,
   );
   @override
   bool operator ==(Object other) =>
@@ -1738,7 +1786,8 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           other.isSelectable == this.isSelectable &&
           other.lastSyncAt == this.lastSyncAt &&
           other.sortOrder == this.sortOrder &&
-          other.hasMoreOnServer == this.hasMoreOnServer);
+          other.hasMoreOnServer == this.hasMoreOnServer &&
+          other.retentionLimit == this.retentionLimit);
 }
 
 class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
@@ -1759,6 +1808,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
   final Value<DateTime?> lastSyncAt;
   final Value<int> sortOrder;
   final Value<bool> hasMoreOnServer;
+  final Value<int> retentionLimit;
   const MailboxesCompanion({
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
@@ -1777,6 +1827,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     this.lastSyncAt = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.hasMoreOnServer = const Value.absent(),
+    this.retentionLimit = const Value.absent(),
   });
   MailboxesCompanion.insert({
     this.id = const Value.absent(),
@@ -1796,6 +1847,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     this.lastSyncAt = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.hasMoreOnServer = const Value.absent(),
+    this.retentionLimit = const Value.absent(),
   }) : accountId = Value(accountId),
        path = Value(path),
        name = Value(name);
@@ -1817,6 +1869,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     Expression<DateTime>? lastSyncAt,
     Expression<int>? sortOrder,
     Expression<bool>? hasMoreOnServer,
+    Expression<int>? retentionLimit,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1836,6 +1889,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
       if (lastSyncAt != null) 'last_sync_at': lastSyncAt,
       if (sortOrder != null) 'sort_order': sortOrder,
       if (hasMoreOnServer != null) 'has_more_on_server': hasMoreOnServer,
+      if (retentionLimit != null) 'retention_limit': retentionLimit,
     });
   }
 
@@ -1857,6 +1911,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     Value<DateTime?>? lastSyncAt,
     Value<int>? sortOrder,
     Value<bool>? hasMoreOnServer,
+    Value<int>? retentionLimit,
   }) {
     return MailboxesCompanion(
       id: id ?? this.id,
@@ -1876,6 +1931,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
       sortOrder: sortOrder ?? this.sortOrder,
       hasMoreOnServer: hasMoreOnServer ?? this.hasMoreOnServer,
+      retentionLimit: retentionLimit ?? this.retentionLimit,
     );
   }
 
@@ -1935,6 +1991,9 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     if (hasMoreOnServer.present) {
       map['has_more_on_server'] = Variable<bool>(hasMoreOnServer.value);
     }
+    if (retentionLimit.present) {
+      map['retention_limit'] = Variable<int>(retentionLimit.value);
+    }
     return map;
   }
 
@@ -1957,7 +2016,8 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
           ..write('isSelectable: $isSelectable, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('hasMoreOnServer: $hasMoreOnServer')
+          ..write('hasMoreOnServer: $hasMoreOnServer, ')
+          ..write('retentionLimit: $retentionLimit')
           ..write(')'))
         .toString();
   }
@@ -2243,6 +2303,21 @@ class $MessagesTable extends Messages
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _isForwardedMeta = const VerificationMeta(
+    'isForwarded',
+  );
+  @override
+  late final GeneratedColumn<bool> isForwarded = GeneratedColumn<bool>(
+    'is_forwarded',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_forwarded" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _hasAttachmentsMeta = const VerificationMeta(
     'hasAttachments',
   );
@@ -2365,6 +2440,7 @@ class $MessagesTable extends Messages
     isAnswered,
     isDraft,
     isDeleted,
+    isForwarded,
     hasAttachments,
     sizeBytes,
     bodyFetchedAt,
@@ -2533,6 +2609,15 @@ class $MessagesTable extends Messages
         isDeleted.isAcceptableOrUnknown(data['is_deleted']!, _isDeletedMeta),
       );
     }
+    if (data.containsKey('is_forwarded')) {
+      context.handle(
+        _isForwardedMeta,
+        isForwarded.isAcceptableOrUnknown(
+          data['is_forwarded']!,
+          _isForwardedMeta,
+        ),
+      );
+    }
     if (data.containsKey('has_attachments')) {
       context.handle(
         _hasAttachmentsMeta,
@@ -2687,6 +2772,10 @@ class $MessagesTable extends Messages
         DriftSqlType.bool,
         data['${effectivePrefix}is_deleted'],
       )!,
+      isForwarded: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_forwarded'],
+      )!,
       hasAttachments: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}has_attachments'],
@@ -2760,6 +2849,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   final bool isAnswered;
   final bool isDraft;
   final bool isDeleted;
+
+  /// IMAP `$Forwarded` anahtar kelimesi — standart bir bayrak değildir ama
+  /// yaygın istemcilerin (Thunderbird, K-9, Gmail) kullandığı fiili ortak
+  /// anahtar kelimedir (RFC 5788). `\Answered`'ın aksine sunucu desteği
+  /// garanti değildir; bkz. `MailRepository._markSourceMessage`.
+  final bool isForwarded;
   final bool hasAttachments;
   final int sizeBytes;
   final DateTime? bodyFetchedAt;
@@ -2795,6 +2890,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     required this.isAnswered,
     required this.isDraft,
     required this.isDeleted,
+    required this.isForwarded,
     required this.hasAttachments,
     required this.sizeBytes,
     this.bodyFetchedAt,
@@ -2837,6 +2933,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     map['is_answered'] = Variable<bool>(isAnswered);
     map['is_draft'] = Variable<bool>(isDraft);
     map['is_deleted'] = Variable<bool>(isDeleted);
+    map['is_forwarded'] = Variable<bool>(isForwarded);
     map['has_attachments'] = Variable<bool>(hasAttachments);
     map['size_bytes'] = Variable<int>(sizeBytes);
     if (!nullToAbsent || bodyFetchedAt != null) {
@@ -2888,6 +2985,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       isAnswered: Value(isAnswered),
       isDraft: Value(isDraft),
       isDeleted: Value(isDeleted),
+      isForwarded: Value(isForwarded),
       hasAttachments: Value(hasAttachments),
       sizeBytes: Value(sizeBytes),
       bodyFetchedAt: bodyFetchedAt == null && nullToAbsent
@@ -2933,6 +3031,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       isAnswered: serializer.fromJson<bool>(json['isAnswered']),
       isDraft: serializer.fromJson<bool>(json['isDraft']),
       isDeleted: serializer.fromJson<bool>(json['isDeleted']),
+      isForwarded: serializer.fromJson<bool>(json['isForwarded']),
       hasAttachments: serializer.fromJson<bool>(json['hasAttachments']),
       sizeBytes: serializer.fromJson<int>(json['sizeBytes']),
       bodyFetchedAt: serializer.fromJson<DateTime?>(json['bodyFetchedAt']),
@@ -2971,6 +3070,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'isAnswered': serializer.toJson<bool>(isAnswered),
       'isDraft': serializer.toJson<bool>(isDraft),
       'isDeleted': serializer.toJson<bool>(isDeleted),
+      'isForwarded': serializer.toJson<bool>(isForwarded),
       'hasAttachments': serializer.toJson<bool>(hasAttachments),
       'sizeBytes': serializer.toJson<int>(sizeBytes),
       'bodyFetchedAt': serializer.toJson<DateTime?>(bodyFetchedAt),
@@ -3007,6 +3107,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     bool? isAnswered,
     bool? isDraft,
     bool? isDeleted,
+    bool? isForwarded,
     bool? hasAttachments,
     int? sizeBytes,
     Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -3042,6 +3143,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isAnswered: isAnswered ?? this.isAnswered,
     isDraft: isDraft ?? this.isDraft,
     isDeleted: isDeleted ?? this.isDeleted,
+    isForwarded: isForwarded ?? this.isForwarded,
     hasAttachments: hasAttachments ?? this.hasAttachments,
     sizeBytes: sizeBytes ?? this.sizeBytes,
     bodyFetchedAt: bodyFetchedAt.present
@@ -3089,6 +3191,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           : this.isAnswered,
       isDraft: data.isDraft.present ? data.isDraft.value : this.isDraft,
       isDeleted: data.isDeleted.present ? data.isDeleted.value : this.isDeleted,
+      isForwarded: data.isForwarded.present
+          ? data.isForwarded.value
+          : this.isForwarded,
       hasAttachments: data.hasAttachments.present
           ? data.hasAttachments.value
           : this.hasAttachments,
@@ -3139,6 +3244,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('isAnswered: $isAnswered, ')
           ..write('isDraft: $isDraft, ')
           ..write('isDeleted: $isDeleted, ')
+          ..write('isForwarded: $isForwarded, ')
           ..write('hasAttachments: $hasAttachments, ')
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
@@ -3175,6 +3281,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isAnswered,
     isDraft,
     isDeleted,
+    isForwarded,
     hasAttachments,
     sizeBytes,
     bodyFetchedAt,
@@ -3210,6 +3317,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.isAnswered == this.isAnswered &&
           other.isDraft == this.isDraft &&
           other.isDeleted == this.isDeleted &&
+          other.isForwarded == this.isForwarded &&
           other.hasAttachments == this.hasAttachments &&
           other.sizeBytes == this.sizeBytes &&
           other.bodyFetchedAt == this.bodyFetchedAt &&
@@ -3243,6 +3351,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<bool> isAnswered;
   final Value<bool> isDraft;
   final Value<bool> isDeleted;
+  final Value<bool> isForwarded;
   final Value<bool> hasAttachments;
   final Value<int> sizeBytes;
   final Value<DateTime?> bodyFetchedAt;
@@ -3274,6 +3383,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isAnswered = const Value.absent(),
     this.isDraft = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.isForwarded = const Value.absent(),
     this.hasAttachments = const Value.absent(),
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
@@ -3306,6 +3416,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isAnswered = const Value.absent(),
     this.isDraft = const Value.absent(),
     this.isDeleted = const Value.absent(),
+    this.isForwarded = const Value.absent(),
     this.hasAttachments = const Value.absent(),
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
@@ -3340,6 +3451,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<bool>? isAnswered,
     Expression<bool>? isDraft,
     Expression<bool>? isDeleted,
+    Expression<bool>? isForwarded,
     Expression<bool>? hasAttachments,
     Expression<int>? sizeBytes,
     Expression<DateTime>? bodyFetchedAt,
@@ -3372,6 +3484,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (isAnswered != null) 'is_answered': isAnswered,
       if (isDraft != null) 'is_draft': isDraft,
       if (isDeleted != null) 'is_deleted': isDeleted,
+      if (isForwarded != null) 'is_forwarded': isForwarded,
       if (hasAttachments != null) 'has_attachments': hasAttachments,
       if (sizeBytes != null) 'size_bytes': sizeBytes,
       if (bodyFetchedAt != null) 'body_fetched_at': bodyFetchedAt,
@@ -3406,6 +3519,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<bool>? isAnswered,
     Value<bool>? isDraft,
     Value<bool>? isDeleted,
+    Value<bool>? isForwarded,
     Value<bool>? hasAttachments,
     Value<int>? sizeBytes,
     Value<DateTime?>? bodyFetchedAt,
@@ -3438,6 +3552,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       isAnswered: isAnswered ?? this.isAnswered,
       isDraft: isDraft ?? this.isDraft,
       isDeleted: isDeleted ?? this.isDeleted,
+      isForwarded: isForwarded ?? this.isForwarded,
       hasAttachments: hasAttachments ?? this.hasAttachments,
       sizeBytes: sizeBytes ?? this.sizeBytes,
       bodyFetchedAt: bodyFetchedAt ?? this.bodyFetchedAt,
@@ -3518,6 +3633,9 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (isDeleted.present) {
       map['is_deleted'] = Variable<bool>(isDeleted.value);
     }
+    if (isForwarded.present) {
+      map['is_forwarded'] = Variable<bool>(isForwarded.value);
+    }
     if (hasAttachments.present) {
       map['has_attachments'] = Variable<bool>(hasAttachments.value);
     }
@@ -3572,6 +3690,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('isAnswered: $isAnswered, ')
           ..write('isDraft: $isDraft, ')
           ..write('isDeleted: $isDeleted, ')
+          ..write('isForwarded: $isForwarded, ')
           ..write('hasAttachments: $hasAttachments, ')
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
@@ -4851,6 +4970,762 @@ class LabelsCompanion extends UpdateCompanion<LabelRow> {
   }
 }
 
+class $SignaturesTable extends Signatures
+    with TableInfo<$SignaturesTable, SignatureRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $SignaturesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<int> accountId = GeneratedColumn<int>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+    'body',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _isDefaultMeta = const VerificationMeta(
+    'isDefault',
+  );
+  @override
+  late final GeneratedColumn<bool> isDefault = GeneratedColumn<bool>(
+    'is_default',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_default" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, accountId, name, body, isDefault];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'signatures';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<SignatureRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+        _bodyMeta,
+        body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    }
+    if (data.containsKey('is_default')) {
+      context.handle(
+        _isDefaultMeta,
+        isDefault.isAcceptableOrUnknown(data['is_default']!, _isDefaultMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  SignatureRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return SignatureRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}account_id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      body: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}body'],
+      )!,
+      isDefault: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_default'],
+      )!,
+    );
+  }
+
+  @override
+  $SignaturesTable createAlias(String alias) {
+    return $SignaturesTable(attachedDatabase, alias);
+  }
+}
+
+class SignatureRow extends DataClass implements Insertable<SignatureRow> {
+  final int id;
+  final int accountId;
+  final String name;
+  final String body;
+
+  /// Hesap başına en fazla bir tane olabilir — bkz. kısmi tekil indeks
+  /// `idx_signatures_default` (`AppDatabase._createIndexes`).
+  final bool isDefault;
+  const SignatureRow({
+    required this.id,
+    required this.accountId,
+    required this.name,
+    required this.body,
+    required this.isDefault,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['account_id'] = Variable<int>(accountId);
+    map['name'] = Variable<String>(name);
+    map['body'] = Variable<String>(body);
+    map['is_default'] = Variable<bool>(isDefault);
+    return map;
+  }
+
+  SignaturesCompanion toCompanion(bool nullToAbsent) {
+    return SignaturesCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      name: Value(name),
+      body: Value(body),
+      isDefault: Value(isDefault),
+    );
+  }
+
+  factory SignatureRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return SignatureRow(
+      id: serializer.fromJson<int>(json['id']),
+      accountId: serializer.fromJson<int>(json['accountId']),
+      name: serializer.fromJson<String>(json['name']),
+      body: serializer.fromJson<String>(json['body']),
+      isDefault: serializer.fromJson<bool>(json['isDefault']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'accountId': serializer.toJson<int>(accountId),
+      'name': serializer.toJson<String>(name),
+      'body': serializer.toJson<String>(body),
+      'isDefault': serializer.toJson<bool>(isDefault),
+    };
+  }
+
+  SignatureRow copyWith({
+    int? id,
+    int? accountId,
+    String? name,
+    String? body,
+    bool? isDefault,
+  }) => SignatureRow(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    name: name ?? this.name,
+    body: body ?? this.body,
+    isDefault: isDefault ?? this.isDefault,
+  );
+  SignatureRow copyWithCompanion(SignaturesCompanion data) {
+    return SignatureRow(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      name: data.name.present ? data.name.value : this.name,
+      body: data.body.present ? data.body.value : this.body,
+      isDefault: data.isDefault.present ? data.isDefault.value : this.isDefault,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SignatureRow(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('name: $name, ')
+          ..write('body: $body, ')
+          ..write('isDefault: $isDefault')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, accountId, name, body, isDefault);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is SignatureRow &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.name == this.name &&
+          other.body == this.body &&
+          other.isDefault == this.isDefault);
+}
+
+class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
+  final Value<int> id;
+  final Value<int> accountId;
+  final Value<String> name;
+  final Value<String> body;
+  final Value<bool> isDefault;
+  const SignaturesCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.body = const Value.absent(),
+    this.isDefault = const Value.absent(),
+  });
+  SignaturesCompanion.insert({
+    this.id = const Value.absent(),
+    required int accountId,
+    required String name,
+    this.body = const Value.absent(),
+    this.isDefault = const Value.absent(),
+  }) : accountId = Value(accountId),
+       name = Value(name);
+  static Insertable<SignatureRow> custom({
+    Expression<int>? id,
+    Expression<int>? accountId,
+    Expression<String>? name,
+    Expression<String>? body,
+    Expression<bool>? isDefault,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (name != null) 'name': name,
+      if (body != null) 'body': body,
+      if (isDefault != null) 'is_default': isDefault,
+    });
+  }
+
+  SignaturesCompanion copyWith({
+    Value<int>? id,
+    Value<int>? accountId,
+    Value<String>? name,
+    Value<String>? body,
+    Value<bool>? isDefault,
+  }) {
+    return SignaturesCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      name: name ?? this.name,
+      body: body ?? this.body,
+      isDefault: isDefault ?? this.isDefault,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<int>(accountId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (isDefault.present) {
+      map['is_default'] = Variable<bool>(isDefault.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('SignaturesCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('name: $name, ')
+          ..write('body: $body, ')
+          ..write('isDefault: $isDefault')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ContactsTable extends Contacts
+    with TableInfo<$ContactsTable, ContactRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ContactsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<int> accountId = GeneratedColumn<int>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _emailMeta = const VerificationMeta('email');
+  @override
+  late final GeneratedColumn<String> email = GeneratedColumn<String>(
+    'email',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _timesUsedMeta = const VerificationMeta(
+    'timesUsed',
+  );
+  @override
+  late final GeneratedColumn<int> timesUsed = GeneratedColumn<int>(
+    'times_used',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _lastUsedAtMeta = const VerificationMeta(
+    'lastUsedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> lastUsedAt = GeneratedColumn<DateTime>(
+    'last_used_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    email,
+    name,
+    timesUsed,
+    lastUsedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'contacts';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ContactRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('email')) {
+      context.handle(
+        _emailMeta,
+        email.isAcceptableOrUnknown(data['email']!, _emailMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_emailMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    }
+    if (data.containsKey('times_used')) {
+      context.handle(
+        _timesUsedMeta,
+        timesUsed.isAcceptableOrUnknown(data['times_used']!, _timesUsedMeta),
+      );
+    }
+    if (data.containsKey('last_used_at')) {
+      context.handle(
+        _lastUsedAtMeta,
+        lastUsedAt.isAcceptableOrUnknown(
+          data['last_used_at']!,
+          _lastUsedAtMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {accountId, email},
+  ];
+  @override
+  ContactRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ContactRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}account_id'],
+      )!,
+      email: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}email'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      timesUsed: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}times_used'],
+      )!,
+      lastUsedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}last_used_at'],
+      )!,
+    );
+  }
+
+  @override
+  $ContactsTable createAlias(String alias) {
+    return $ContactsTable(attachedDatabase, alias);
+  }
+}
+
+class ContactRow extends DataClass implements Insertable<ContactRow> {
+  final int id;
+  final int accountId;
+
+  /// Her zaman küçük harfle saklanır (bkz. `AppDatabase.upsertContact`) —
+  /// e-posta karşılaştırması uygulama genelinde büyük/küçük harfe duyarsız
+  /// (bkz. `EmailAddress.==`).
+  final String email;
+  final String name;
+
+  /// Otomatik tamamlamada sıralama için: en çok ve en son kullanılan kişi
+  /// en üstte çıkar.
+  final int timesUsed;
+  final DateTime lastUsedAt;
+  const ContactRow({
+    required this.id,
+    required this.accountId,
+    required this.email,
+    required this.name,
+    required this.timesUsed,
+    required this.lastUsedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['account_id'] = Variable<int>(accountId);
+    map['email'] = Variable<String>(email);
+    map['name'] = Variable<String>(name);
+    map['times_used'] = Variable<int>(timesUsed);
+    map['last_used_at'] = Variable<DateTime>(lastUsedAt);
+    return map;
+  }
+
+  ContactsCompanion toCompanion(bool nullToAbsent) {
+    return ContactsCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      email: Value(email),
+      name: Value(name),
+      timesUsed: Value(timesUsed),
+      lastUsedAt: Value(lastUsedAt),
+    );
+  }
+
+  factory ContactRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ContactRow(
+      id: serializer.fromJson<int>(json['id']),
+      accountId: serializer.fromJson<int>(json['accountId']),
+      email: serializer.fromJson<String>(json['email']),
+      name: serializer.fromJson<String>(json['name']),
+      timesUsed: serializer.fromJson<int>(json['timesUsed']),
+      lastUsedAt: serializer.fromJson<DateTime>(json['lastUsedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'accountId': serializer.toJson<int>(accountId),
+      'email': serializer.toJson<String>(email),
+      'name': serializer.toJson<String>(name),
+      'timesUsed': serializer.toJson<int>(timesUsed),
+      'lastUsedAt': serializer.toJson<DateTime>(lastUsedAt),
+    };
+  }
+
+  ContactRow copyWith({
+    int? id,
+    int? accountId,
+    String? email,
+    String? name,
+    int? timesUsed,
+    DateTime? lastUsedAt,
+  }) => ContactRow(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    email: email ?? this.email,
+    name: name ?? this.name,
+    timesUsed: timesUsed ?? this.timesUsed,
+    lastUsedAt: lastUsedAt ?? this.lastUsedAt,
+  );
+  ContactRow copyWithCompanion(ContactsCompanion data) {
+    return ContactRow(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      email: data.email.present ? data.email.value : this.email,
+      name: data.name.present ? data.name.value : this.name,
+      timesUsed: data.timesUsed.present ? data.timesUsed.value : this.timesUsed,
+      lastUsedAt: data.lastUsedAt.present
+          ? data.lastUsedAt.value
+          : this.lastUsedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ContactRow(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('email: $email, ')
+          ..write('name: $name, ')
+          ..write('timesUsed: $timesUsed, ')
+          ..write('lastUsedAt: $lastUsedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, accountId, email, name, timesUsed, lastUsedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ContactRow &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.email == this.email &&
+          other.name == this.name &&
+          other.timesUsed == this.timesUsed &&
+          other.lastUsedAt == this.lastUsedAt);
+}
+
+class ContactsCompanion extends UpdateCompanion<ContactRow> {
+  final Value<int> id;
+  final Value<int> accountId;
+  final Value<String> email;
+  final Value<String> name;
+  final Value<int> timesUsed;
+  final Value<DateTime> lastUsedAt;
+  const ContactsCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.email = const Value.absent(),
+    this.name = const Value.absent(),
+    this.timesUsed = const Value.absent(),
+    this.lastUsedAt = const Value.absent(),
+  });
+  ContactsCompanion.insert({
+    this.id = const Value.absent(),
+    required int accountId,
+    required String email,
+    this.name = const Value.absent(),
+    this.timesUsed = const Value.absent(),
+    this.lastUsedAt = const Value.absent(),
+  }) : accountId = Value(accountId),
+       email = Value(email);
+  static Insertable<ContactRow> custom({
+    Expression<int>? id,
+    Expression<int>? accountId,
+    Expression<String>? email,
+    Expression<String>? name,
+    Expression<int>? timesUsed,
+    Expression<DateTime>? lastUsedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (email != null) 'email': email,
+      if (name != null) 'name': name,
+      if (timesUsed != null) 'times_used': timesUsed,
+      if (lastUsedAt != null) 'last_used_at': lastUsedAt,
+    });
+  }
+
+  ContactsCompanion copyWith({
+    Value<int>? id,
+    Value<int>? accountId,
+    Value<String>? email,
+    Value<String>? name,
+    Value<int>? timesUsed,
+    Value<DateTime>? lastUsedAt,
+  }) {
+    return ContactsCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      email: email ?? this.email,
+      name: name ?? this.name,
+      timesUsed: timesUsed ?? this.timesUsed,
+      lastUsedAt: lastUsedAt ?? this.lastUsedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<int>(accountId.value);
+    }
+    if (email.present) {
+      map['email'] = Variable<String>(email.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (timesUsed.present) {
+      map['times_used'] = Variable<int>(timesUsed.value);
+    }
+    if (lastUsedAt.present) {
+      map['last_used_at'] = Variable<DateTime>(lastUsedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ContactsCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('email: $email, ')
+          ..write('name: $name, ')
+          ..write('timesUsed: $timesUsed, ')
+          ..write('lastUsedAt: $lastUsedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $PendingOperationsTable extends PendingOperations
     with TableInfo<$PendingOperationsTable, PendingOperationRow> {
   @override
@@ -5439,6 +6314,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $MessageBodiesTable messageBodies = $MessageBodiesTable(this);
   late final $AttachmentsTable attachments = $AttachmentsTable(this);
   late final $LabelsTable labels = $LabelsTable(this);
+  late final $SignaturesTable signatures = $SignaturesTable(this);
+  late final $ContactsTable contacts = $ContactsTable(this);
   late final $PendingOperationsTable pendingOperations =
       $PendingOperationsTable(this);
   @override
@@ -5452,6 +6329,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messageBodies,
     attachments,
     labels,
+    signatures,
+    contacts,
     pendingOperations,
   ];
   @override
@@ -5497,6 +6376,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('labels', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('signatures', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('contacts', kind: UpdateKind.delete)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -5603,6 +6496,42 @@ final class $$AccountsTableReferences
     ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_labelsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$SignaturesTable, List<SignatureRow>>
+  _signaturesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.signatures,
+    aliasName: 'accounts__id__signatures__account_id',
+  );
+
+  $$SignaturesTableProcessedTableManager get signaturesRefs {
+    final manager = $$SignaturesTableTableManager(
+      $_db,
+      $_db.signatures,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_signaturesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$ContactsTable, List<ContactRow>>
+  _contactsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.contacts,
+    aliasName: 'accounts__id__contacts__account_id',
+  );
+
+  $$ContactsTableProcessedTableManager get contactsRefs {
+    final manager = $$ContactsTableTableManager(
+      $_db,
+      $_db.contacts,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_contactsRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -5793,6 +6722,56 @@ class $$AccountsTableFilterComposer
           }) => $$LabelsTableFilterComposer(
             $db: $db,
             $table: $db.labels,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> signaturesRefs(
+    Expression<bool> Function($$SignaturesTableFilterComposer f) f,
+  ) {
+    final $$SignaturesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.signatures,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SignaturesTableFilterComposer(
+            $db: $db,
+            $table: $db.signatures,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> contactsRefs(
+    Expression<bool> Function($$ContactsTableFilterComposer f) f,
+  ) {
+    final $$ContactsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.contacts,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ContactsTableFilterComposer(
+            $db: $db,
+            $table: $db.contacts,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -6073,6 +7052,56 @@ class $$AccountsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> signaturesRefs<T extends Object>(
+    Expression<T> Function($$SignaturesTableAnnotationComposer a) f,
+  ) {
+    final $$SignaturesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.signatures,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$SignaturesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.signatures,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> contactsRefs<T extends Object>(
+    Expression<T> Function($$ContactsTableAnnotationComposer a) f,
+  ) {
+    final $$ContactsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.contacts,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ContactsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.contacts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> pendingOperationsRefs<T extends Object>(
     Expression<T> Function($$PendingOperationsTableAnnotationComposer a) f,
   ) {
@@ -6117,6 +7146,8 @@ class $$AccountsTableTableManager
             bool mailboxesRefs,
             bool messagesRefs,
             bool labelsRefs,
+            bool signaturesRefs,
+            bool contactsRefs,
             bool pendingOperationsRefs,
           })
         > {
@@ -6220,6 +7251,8 @@ class $$AccountsTableTableManager
                 mailboxesRefs = false,
                 messagesRefs = false,
                 labelsRefs = false,
+                signaturesRefs = false,
+                contactsRefs = false,
                 pendingOperationsRefs = false,
               }) {
                 return PrefetchHooks(
@@ -6228,6 +7261,8 @@ class $$AccountsTableTableManager
                     if (mailboxesRefs) db.mailboxes,
                     if (messagesRefs) db.messages,
                     if (labelsRefs) db.labels,
+                    if (signaturesRefs) db.signatures,
+                    if (contactsRefs) db.contacts,
                     if (pendingOperationsRefs) db.pendingOperations,
                   ],
                   addJoins: null,
@@ -6296,6 +7331,48 @@ class $$AccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (signaturesRefs)
+                        await $_getPrefetchedData<
+                          AccountRow,
+                          $AccountsTable,
+                          SignatureRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._signaturesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).signaturesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (contactsRefs)
+                        await $_getPrefetchedData<
+                          AccountRow,
+                          $AccountsTable,
+                          ContactRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._contactsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).contactsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (pendingOperationsRefs)
                         await $_getPrefetchedData<
                           AccountRow,
@@ -6341,6 +7418,8 @@ typedef $$AccountsTableProcessedTableManager =
         bool mailboxesRefs,
         bool messagesRefs,
         bool labelsRefs,
+        bool signaturesRefs,
+        bool contactsRefs,
         bool pendingOperationsRefs,
       })
     >;
@@ -6363,6 +7442,7 @@ typedef $$MailboxesTableCreateCompanionBuilder =
       Value<DateTime?> lastSyncAt,
       Value<int> sortOrder,
       Value<bool> hasMoreOnServer,
+      Value<int> retentionLimit,
     });
 typedef $$MailboxesTableUpdateCompanionBuilder =
     MailboxesCompanion Function({
@@ -6383,6 +7463,7 @@ typedef $$MailboxesTableUpdateCompanionBuilder =
       Value<DateTime?> lastSyncAt,
       Value<int> sortOrder,
       Value<bool> hasMoreOnServer,
+      Value<int> retentionLimit,
     });
 
 final class $$MailboxesTableReferences
@@ -6512,6 +7593,11 @@ class $$MailboxesTableFilterComposer
 
   ColumnFilters<bool> get hasMoreOnServer => $composableBuilder(
     column: $table.hasMoreOnServer,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retentionLimit => $composableBuilder(
+    column: $table.retentionLimit,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6653,6 +7739,11 @@ class $$MailboxesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get retentionLimit => $composableBuilder(
+    column: $table.retentionLimit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$AccountsTableOrderingComposer get accountId {
     final $$AccountsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -6755,6 +7846,11 @@ class $$MailboxesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get retentionLimit => $composableBuilder(
+    column: $table.retentionLimit,
+    builder: (column) => column,
+  );
+
   $$AccountsTableAnnotationComposer get accountId {
     final $$AccountsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -6849,6 +7945,7 @@ class $$MailboxesTableTableManager
                 Value<DateTime?> lastSyncAt = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> hasMoreOnServer = const Value.absent(),
+                Value<int> retentionLimit = const Value.absent(),
               }) => MailboxesCompanion(
                 id: id,
                 accountId: accountId,
@@ -6867,6 +7964,7 @@ class $$MailboxesTableTableManager
                 lastSyncAt: lastSyncAt,
                 sortOrder: sortOrder,
                 hasMoreOnServer: hasMoreOnServer,
+                retentionLimit: retentionLimit,
               ),
           createCompanionCallback:
               ({
@@ -6887,6 +7985,7 @@ class $$MailboxesTableTableManager
                 Value<DateTime?> lastSyncAt = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> hasMoreOnServer = const Value.absent(),
+                Value<int> retentionLimit = const Value.absent(),
               }) => MailboxesCompanion.insert(
                 id: id,
                 accountId: accountId,
@@ -6905,6 +8004,7 @@ class $$MailboxesTableTableManager
                 lastSyncAt: lastSyncAt,
                 sortOrder: sortOrder,
                 hasMoreOnServer: hasMoreOnServer,
+                retentionLimit: retentionLimit,
               ),
           withReferenceMapper: (p0) => p0
               .map(
@@ -7017,6 +8117,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<bool> isAnswered,
       Value<bool> isDraft,
       Value<bool> isDeleted,
+      Value<bool> isForwarded,
       Value<bool> hasAttachments,
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
@@ -7050,6 +8151,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<bool> isAnswered,
       Value<bool> isDraft,
       Value<bool> isDeleted,
+      Value<bool> isForwarded,
       Value<bool> hasAttachments,
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
@@ -7241,6 +8343,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<bool> get isDeleted => $composableBuilder(
     column: $table.isDeleted,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isForwarded => $composableBuilder(
+    column: $table.isForwarded,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7491,6 +8598,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isForwarded => $composableBuilder(
+    column: $table.isForwarded,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
     builder: (column) => ColumnOrderings(column),
@@ -7656,6 +8768,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<bool> get isDeleted =>
       $composableBuilder(column: $table.isDeleted, builder: (column) => column);
+
+  GeneratedColumn<bool> get isForwarded => $composableBuilder(
+    column: $table.isForwarded,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
@@ -7848,6 +8965,7 @@ class $$MessagesTableTableManager
                 Value<bool> isAnswered = const Value.absent(),
                 Value<bool> isDraft = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
+                Value<bool> isForwarded = const Value.absent(),
                 Value<bool> hasAttachments = const Value.absent(),
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -7879,6 +8997,7 @@ class $$MessagesTableTableManager
                 isAnswered: isAnswered,
                 isDraft: isDraft,
                 isDeleted: isDeleted,
+                isForwarded: isForwarded,
                 hasAttachments: hasAttachments,
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,
@@ -7912,6 +9031,7 @@ class $$MessagesTableTableManager
                 Value<bool> isAnswered = const Value.absent(),
                 Value<bool> isDraft = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
+                Value<bool> isForwarded = const Value.absent(),
                 Value<bool> hasAttachments = const Value.absent(),
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -7943,6 +9063,7 @@ class $$MessagesTableTableManager
                 isAnswered: isAnswered,
                 isDraft: isDraft,
                 isDeleted: isDeleted,
+                isForwarded: isForwarded,
                 hasAttachments: hasAttachments,
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,
@@ -9106,6 +10227,649 @@ typedef $$LabelsTableProcessedTableManager =
       LabelRow,
       PrefetchHooks Function({bool accountId})
     >;
+typedef $$SignaturesTableCreateCompanionBuilder =
+    SignaturesCompanion Function({
+      Value<int> id,
+      required int accountId,
+      required String name,
+      Value<String> body,
+      Value<bool> isDefault,
+    });
+typedef $$SignaturesTableUpdateCompanionBuilder =
+    SignaturesCompanion Function({
+      Value<int> id,
+      Value<int> accountId,
+      Value<String> name,
+      Value<String> body,
+      Value<bool> isDefault,
+    });
+
+final class $$SignaturesTableReferences
+    extends BaseReferences<_$AppDatabase, $SignaturesTable, SignatureRow> {
+  $$SignaturesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('signatures__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<int>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$SignaturesTableFilterComposer
+    extends Composer<_$AppDatabase, $SignaturesTable> {
+  $$SignaturesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isDefault => $composableBuilder(
+    column: $table.isDefault,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SignaturesTableOrderingComposer
+    extends Composer<_$AppDatabase, $SignaturesTable> {
+  $$SignaturesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isDefault => $composableBuilder(
+    column: $table.isDefault,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SignaturesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $SignaturesTable> {
+  $$SignaturesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<bool> get isDefault =>
+      $composableBuilder(column: $table.isDefault, builder: (column) => column);
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$SignaturesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $SignaturesTable,
+          SignatureRow,
+          $$SignaturesTableFilterComposer,
+          $$SignaturesTableOrderingComposer,
+          $$SignaturesTableAnnotationComposer,
+          $$SignaturesTableCreateCompanionBuilder,
+          $$SignaturesTableUpdateCompanionBuilder,
+          (SignatureRow, $$SignaturesTableReferences),
+          SignatureRow,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$SignaturesTableTableManager(_$AppDatabase db, $SignaturesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$SignaturesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$SignaturesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$SignaturesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int> accountId = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<String> body = const Value.absent(),
+                Value<bool> isDefault = const Value.absent(),
+              }) => SignaturesCompanion(
+                id: id,
+                accountId: accountId,
+                name: name,
+                body: body,
+                isDefault: isDefault,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required int accountId,
+                required String name,
+                Value<String> body = const Value.absent(),
+                Value<bool> isDefault = const Value.absent(),
+              }) => SignaturesCompanion.insert(
+                id: id,
+                accountId: accountId,
+                name: name,
+                body: body,
+                isDefault: isDefault,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$SignaturesTable, SignatureRow>(table),
+                  $$SignaturesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$SignaturesTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$SignaturesTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$SignaturesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $SignaturesTable,
+      SignatureRow,
+      $$SignaturesTableFilterComposer,
+      $$SignaturesTableOrderingComposer,
+      $$SignaturesTableAnnotationComposer,
+      $$SignaturesTableCreateCompanionBuilder,
+      $$SignaturesTableUpdateCompanionBuilder,
+      (SignatureRow, $$SignaturesTableReferences),
+      SignatureRow,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$ContactsTableCreateCompanionBuilder =
+    ContactsCompanion Function({
+      Value<int> id,
+      required int accountId,
+      required String email,
+      Value<String> name,
+      Value<int> timesUsed,
+      Value<DateTime> lastUsedAt,
+    });
+typedef $$ContactsTableUpdateCompanionBuilder =
+    ContactsCompanion Function({
+      Value<int> id,
+      Value<int> accountId,
+      Value<String> email,
+      Value<String> name,
+      Value<int> timesUsed,
+      Value<DateTime> lastUsedAt,
+    });
+
+final class $$ContactsTableReferences
+    extends BaseReferences<_$AppDatabase, $ContactsTable, ContactRow> {
+  $$ContactsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('contacts__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<int>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$ContactsTableFilterComposer
+    extends Composer<_$AppDatabase, $ContactsTable> {
+  $$ContactsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get email => $composableBuilder(
+    column: $table.email,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get timesUsed => $composableBuilder(
+    column: $table.timesUsed,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get lastUsedAt => $composableBuilder(
+    column: $table.lastUsedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ContactsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ContactsTable> {
+  $$ContactsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get email => $composableBuilder(
+    column: $table.email,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get timesUsed => $composableBuilder(
+    column: $table.timesUsed,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get lastUsedAt => $composableBuilder(
+    column: $table.lastUsedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ContactsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ContactsTable> {
+  $$ContactsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get email =>
+      $composableBuilder(column: $table.email, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<int> get timesUsed =>
+      $composableBuilder(column: $table.timesUsed, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get lastUsedAt => $composableBuilder(
+    column: $table.lastUsedAt,
+    builder: (column) => column,
+  );
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ContactsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ContactsTable,
+          ContactRow,
+          $$ContactsTableFilterComposer,
+          $$ContactsTableOrderingComposer,
+          $$ContactsTableAnnotationComposer,
+          $$ContactsTableCreateCompanionBuilder,
+          $$ContactsTableUpdateCompanionBuilder,
+          (ContactRow, $$ContactsTableReferences),
+          ContactRow,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$ContactsTableTableManager(_$AppDatabase db, $ContactsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ContactsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ContactsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ContactsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int> accountId = const Value.absent(),
+                Value<String> email = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<int> timesUsed = const Value.absent(),
+                Value<DateTime> lastUsedAt = const Value.absent(),
+              }) => ContactsCompanion(
+                id: id,
+                accountId: accountId,
+                email: email,
+                name: name,
+                timesUsed: timesUsed,
+                lastUsedAt: lastUsedAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required int accountId,
+                required String email,
+                Value<String> name = const Value.absent(),
+                Value<int> timesUsed = const Value.absent(),
+                Value<DateTime> lastUsedAt = const Value.absent(),
+              }) => ContactsCompanion.insert(
+                id: id,
+                accountId: accountId,
+                email: email,
+                name: name,
+                timesUsed: timesUsed,
+                lastUsedAt: lastUsedAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$ContactsTable, ContactRow>(table),
+                  $$ContactsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$ContactsTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$ContactsTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$ContactsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ContactsTable,
+      ContactRow,
+      $$ContactsTableFilterComposer,
+      $$ContactsTableOrderingComposer,
+      $$ContactsTableAnnotationComposer,
+      $$ContactsTableCreateCompanionBuilder,
+      $$ContactsTableUpdateCompanionBuilder,
+      (ContactRow, $$ContactsTableReferences),
+      ContactRow,
+      PrefetchHooks Function({bool accountId})
+    >;
 typedef $$PendingOperationsTableCreateCompanionBuilder =
     PendingOperationsCompanion Function({
       Value<int> id,
@@ -9535,6 +11299,10 @@ class $AppDatabaseManager {
       $$AttachmentsTableTableManager(_db, _db.attachments);
   $$LabelsTableTableManager get labels =>
       $$LabelsTableTableManager(_db, _db.labels);
+  $$SignaturesTableTableManager get signatures =>
+      $$SignaturesTableTableManager(_db, _db.signatures);
+  $$ContactsTableTableManager get contacts =>
+      $$ContactsTableTableManager(_db, _db.contacts);
   $$PendingOperationsTableTableManager get pendingOperations =>
       $$PendingOperationsTableTableManager(_db, _db.pendingOperations);
 }

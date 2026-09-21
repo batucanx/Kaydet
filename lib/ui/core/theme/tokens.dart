@@ -60,6 +60,11 @@ abstract final class Motion {
   static const Duration slow = Duration(milliseconds: 300);
   static const Duration page = Duration(milliseconds: 320);
   static const Duration pageBack = Duration(milliseconds: 240);
+  // "Derinlik" push geçişinin süresi (bkz. `KaydetTransitionStyle.
+  // horizontalPush`) — diğer geçişlerden (`page`/`pageBack`) bağımsız,
+  // native/snappy hissettiren kendi hızında tutulur.
+  static const Duration horizontalPush = Duration(milliseconds: 300);
+  static const Duration horizontalPushBack = Duration(milliseconds: 250);
 
   static const Curve standard = Curves.easeOutCubic;
   static const Curve emphasized = Curves.fastOutSlowIn;
@@ -70,11 +75,15 @@ abstract final class Motion {
 abstract final class Dimens {
   static const double appBarHeight = 56;
   static const double bottomNavHeight = 60;
-  // Outlook ölçeğindeki liste tipografisiyle (bkz. AppText.listSender*/
+  // Küçültülmüş liste tipografisiyle (bkz. AppText.listSender*/
   // listSubject*/listPreview) iki satırlık içerik + dikey boşluk bu tabana
   // sığar; taşarsa `minHeight` olduğu için satır kendiliğinden büyür.
-  static const double listRowMinHeight = 64;
+  // Kullanıcı isteğiyle sıkılaştırıldı: tek ekranda daha fazla ileti görünsün.
+  static const double listRowMinHeight = 56;
   static const double avatarSize = 36;
+  // Outlook'un hesap şeridindeki avatar ölçeği — yan menünün sol rayında
+  // (bkz. `FolderDrawer`) hesap değiştirmeyi tek bakışta belirginleştirir.
+  static const double navRailAvatarSize = 52;
   static const double fabSize = 56;
   static const double touchTarget = 48;
   static const double controlHeight = 48;
@@ -86,6 +95,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   const KaydetTokens({
     required this.brightness,
     required this.bg,
+    required this.appBarBg,
     required this.surface,
     required this.surfaceElevated,
     required this.surfaceDeep,
@@ -109,6 +119,10 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   final Brightness brightness;
 
   final Color bg;
+  // Çoğu temada `bg` ile aynıdır; yalnızca Outlook Koyu gibi AppBar'ın
+  // zeminden farklı bir tonda olduğu temalarda ayrışır (bkz. `AppTheme._build`
+  // içindeki `appBarTheme.backgroundColor`).
+  final Color appBarBg;
   final Color surface;
   final Color surfaceElevated;
   final Color surfaceDeep;
@@ -141,6 +155,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
     bg: Color(0xFF0E1114),
+    appBarBg: Color(0xFF0E1114),
     surface: Color(0xFF13161A),
     surfaceElevated: Color(0xFF1A1E24),
     surfaceDeep: Color(0xFF090B0D),
@@ -165,6 +180,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   static const KaydetTokens light = KaydetTokens(
     brightness: Brightness.light,
     bg: Color(0xFFFFFFFF),
+    appBarBg: Color(0xFFFFFFFF),
     surface: Color(0xFFF6F8F9),
     surfaceElevated: Color(0xFFFFFFFF),
     surfaceDeep: Color(0xFFEEF2F4),
@@ -183,6 +199,37 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     border: Color(0xFFD3DBDE),
     scrim: Color(0x73000000),
     avatarTones: _lightAvatarTones,
+  );
+
+  /// Outlook Koyu — kullanıcının verdiği referans paletin birebir kopyası.
+  /// Ekstra, isteğe bağlı bir seçenektir; `dark`/`light`i değiştirmez.
+  /// Belirtilmeyen alanlar (surface/surfaceElevated, danger/success/warning,
+  /// avatarTones) `dark` temasından devralınır — bu ton saf siyah zeminde de
+  /// kontrastı korur, yeni bir palet icat etmeye gerek yok.
+  static const KaydetTokens outlookDark = KaydetTokens(
+    brightness: Brightness.dark,
+    bg: Color(0xFF000000),
+    appBarBg: Color(0xFF121212),
+    surface: Color(0xFF121212),
+    surfaceElevated: Color(0xFF1E1E1E),
+    surfaceDeep: Color(0xFF1E1E1E), // Drawer zemini
+    textPrimary: Color(0xFFFFFFFF),
+    textSecondary: Color(0xFFA6A6A6),
+    textTertiary: Color(0xFF7A7A7A),
+    accent: Color(0xFF4285F4),
+    accentFill: Color(0xFF4285F4),
+    onAccentFill: Color(0xFFFFFFFF),
+    // Seçili klasör/liste satırının arka planı — bkz. `FolderDrawer`
+    // içindeki `_FolderTile` ve `listTileTheme.selectedColor`.
+    accentSubtle: Color(0xFF172336),
+    danger: Color(0xFFEC5A5F),
+    dangerFill: Color(0xFFC62A2F),
+    success: Color(0xFF30A46C),
+    warning: Color(0xFFF5A623),
+    divider: Color(0xFF2D2D2D),
+    border: Color(0xFF2D2D2D),
+    scrim: Color(0x8C000000),
+    avatarTones: _darkAvatarTones,
   );
 
   /// 15 ton — hepsinde harf/zemin kontrastı ≥ 6:1 (ölçüldü).
@@ -247,6 +294,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   KaydetTokens copyWith({
     Brightness? brightness,
     Color? bg,
+    Color? appBarBg,
     Color? surface,
     Color? surfaceElevated,
     Color? surfaceDeep,
@@ -268,6 +316,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   }) => KaydetTokens(
     brightness: brightness ?? this.brightness,
     bg: bg ?? this.bg,
+    appBarBg: appBarBg ?? this.appBarBg,
     surface: surface ?? this.surface,
     surfaceElevated: surfaceElevated ?? this.surfaceElevated,
     surfaceDeep: surfaceDeep ?? this.surfaceDeep,
@@ -295,6 +344,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     return KaydetTokens(
       brightness: t < 0.5 ? brightness : other.brightness,
       bg: c(bg, other.bg),
+      appBarBg: c(appBarBg, other.appBarBg),
       surface: c(surface, other.surface),
       surfaceElevated: c(surfaceElevated, other.surfaceElevated),
       surfaceDeep: c(surfaceDeep, other.surfaceDeep),

@@ -15,11 +15,22 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <!-- Büyük eklerin indirilmesi sırasında işin kesilmemesi için. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Ayarlar > Bildirimler'den kullanıcı isteğiyle pil optimizasyonundan
+         hariç tutma dialogu açmak için (bkz. NotificationsSettingsScreen).
+         Play Console'a yüklenirken "temel işlev" gerekçesi beyan edilmesi
+         gerekir. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Anlık bildirim: uygulama kapalıyken de Gelen Kutusu'nu IMAP IDLE ile
+         dinleyen ön plan servisi (bkz. lib/app/push_service.dart). Android 14+
+         her ön plan servisi için bir tür ve o türe ait izin ister. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
 
     <application
         android:label="Kaydet"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -37,6 +48,27 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Anlık bildirim servisinin durum çubuğu simgesi
+             (bkz. PushService._iconMetaData). Ad birebir aynı olmalı. -->
+        <meta-data
+            android:name="tr.com.pazarlik.kaydet.push_icon"
+            android:resource="@drawable/ic_stat_kaydet" />
+
+        <!-- Uyarı: servis adı değiştirilmemeli, flutter_foreground_task bunu
+             sabit bir adla başlatır. `dataSync` türü Android 15'te 24 saatte
+             6 saatle sınırlıdır ve sürekli IDLE için uygun değildir; bu
+             yüzden `specialUse` kullanılır. Play Console'a yüklenirken bu
+             kullanım gerekçesi beyan edilmelidir. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Persistent IMAP IDLE connection that delivers new-mail notifications instantly" />
+        </service>
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

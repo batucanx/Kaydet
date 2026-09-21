@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:drift/drift.dart';
 
@@ -19,6 +20,7 @@ class SyncOutcome {
     this.changedCount = 0,
     this.deletedCount = 0,
     this.resynced = false,
+    this.initialDownload = false,
   });
 
   final List<int> newMessageIds;
@@ -27,6 +29,19 @@ class SyncOutcome {
 
   /// UIDVALIDITY değiştiği için klasör baştan indirildi mi?
   final bool resynced;
+
+  /// Klasör bu turda ilk kez (ya da baştan) indirildi mi? Bu durumda
+  /// [newMessageIds] "yeni gelen" değil, mevcut iletilerdir — bildirim
+  /// üretilmemeli, yoksa yeni eklenen bir hesap geçmiş iletiler için
+  /// bildirim yağdırır.
+  final bool initialDownload;
+
+  /// Değişiklik (yeni/silinen/bayrağı değişen ileti) var mı?
+  bool get hasChanges =>
+      newMessageIds.isNotEmpty ||
+      changedCount > 0 ||
+      deletedCount > 0 ||
+      initialDownload;
 }
 
 /// IMAP ↔ yerel veritabanı eşitlemesi.
@@ -51,6 +66,17 @@ class SyncEngine {
 
   /// Arka planda önizleme için gövdesi çekilecek ileti sayısı.
   static const int bodyPrefetchCount = 25;
+
+  /// Bu boyutun altındaki HTML gövdeler doğrudan bu isolate'te temizlenir.
+  ///
+  /// `TextExtraction.htmlToPlain` regex tabanlıdır (DOM ayrıştırmaz) ve
+  /// küçük/orta gövdelerde isolate açmanın kendisi işin maliyetinden daha
+  /// pahalıdır. Büyük bülten/pazarlama e-postalarında (yüzlerce KB, derin
+  /// iç içe tablo) regex geçişleri kare bütçesini (16 ms) aşabilir — bu
+  /// senkronizasyon `unawaited` çalışsa bile AYNI isolate'te yürüdüğü için
+  /// ana thread'in kare çizimini yine çalar; eşik üstündekiler ayrı
+  /// isolate'e taşınır.
+  static const int _htmlIsolateThreshold = 20000;
 
   // ------------------------------------------------------------- klasörler
 
@@ -174,7 +200,12 @@ class SyncEngine {
     final localHighest = await _db.highestUid(mailbox.id);
     List<int> newIds = const [];
 
-    if (localHighest == null || resynced) {
+    // Yerel kayıt yokluğu tek başına "ilk indirme" demek değildir: kullanıcı
+    // tüm iletileri arşivleyip/silip Gelen Kutusu'nu boşaltmış olabilir. Klasör
+    // daha önce eşitlendiyse (`uidNext` biliniyor) yalnızca yeni iletiler
+    // çekilir ve bildirim bastırılmaz.
+    final neverSynced = mailbox.uidNext == null;
+    if (resynced || (localHighest == null && neverSynced)) {
       // İlk indirme: en yeni N ileti.
       final all = await _connection.imap.searchAllUids();
       if (all is Err<List<int>>) return Err(all.failure);
@@ -190,14 +221,23 @@ class SyncEngine {
         uidNext: state.uidNext,
         hasMoreOnServer: uids.length > slice.length,
       );
-      return Ok(SyncOutcome(newMessageIds: newIds, resynced: resynced));
+      return Ok(
+        SyncOutcome(
+          newMessageIds: newIds,
+          resynced: resynced,
+          initialDownload: true,
+        ),
+      );
     }
 
-    if (state.uidNext > localHighest + 1) {
+    final fromUid = localHighest != null
+        ? localHighest + 1
+        : mailbox.uidNext!;
+    if (state.uidNext > fromUid) {
       final fetched = await _fetchRangeAndStore(
         accountId,
         mailbox,
-        fromUid: localHighest + 1,
+        fromUid: fromUid,
         toUid: state.uidNext - 1,
       );
       if (fetched is Err<List<int>>) return Err(fetched.failure);
@@ -312,7 +352,7 @@ class SyncEngine {
   Future<void> storeBody(MessageRow row, FetchedBody body) async {
     final plain =
         body.plainText ??
-        (body.html != null ? TextExtraction.htmlToPlain(body.html!) : null);
+        (body.html != null ? await _htmlToPlain(body.html!) : null);
 
     await _db.upsertBody(messageId: row.id, plainText: plain, html: body.html);
 
@@ -351,6 +391,13 @@ class SyncEngine {
   }
 
   // ------------------------------------------------------------ iç yardımcı
+
+  Future<String> _htmlToPlain(String html) {
+    if (html.length < _htmlIsolateThreshold) {
+      return Future.value(TextExtraction.htmlToPlain(html));
+    }
+    return Isolate.run(() => TextExtraction.htmlToPlain(html));
+  }
 
   Future<void> _recordKeywordSupport(int accountId, MailboxState state) async {
     if (state.permanentFlags.isEmpty) return;
@@ -433,6 +480,7 @@ class SyncEngine {
           isSeen: Value(envelope.isSeen),
           isFlagged: Value(envelope.isFlagged),
           isAnswered: Value(envelope.isAnswered),
+          isForwarded: Value(envelope.isForwarded),
           isDraft: Value(envelope.isDraft),
           isDeleted: Value(envelope.isDeleted),
           hasAttachments: Value(envelope.hasAttachments),
@@ -442,7 +490,34 @@ class SyncEngine {
       );
     }
 
-    return _db.upsertServerMessages(companions);
+    final inserted = await _db.upsertServerMessages(companions);
+
+    // Yalnızca Gelen Kutusu: Gereksiz (spam) göndericilerini veya kendi
+    // adresimizi (Gönderilenler'in "from"ı) kişi olarak eklemek istemeyiz.
+    if (mailbox.specialUse == SpecialUse.inbox) {
+      await _captureContactsFromInbox(accountId, sorted);
+    }
+
+    return inserted;
+  }
+
+  Future<void> _captureContactsFromInbox(
+    int accountId,
+    List<FetchedEnvelope> envelopes,
+  ) async {
+    final byEmail = <String, EmailAddress>{};
+    for (final envelope in envelopes) {
+      final from = envelope.from;
+      if (from == null || !from.isValid) continue;
+      byEmail[from.email.toLowerCase()] = from;
+    }
+    for (final address in byEmail.values) {
+      await _db.upsertContact(
+        accountId: accountId,
+        email: address.email,
+        name: address.name,
+      );
+    }
   }
 
   /// Yeni iletileri var olan konuşmalara bağlar.
@@ -550,12 +625,18 @@ class SyncEngine {
       final isSeen = remote.flags.contains(r'\Seen');
       final isFlagged = remote.flags.contains(r'\Flagged');
       final isAnswered = remote.flags.contains(r'\Answered');
-      final keywords = remote.flags.where((f) => !f.startsWith(r'\')).toList();
+      final isForwarded = remote.flags.any(
+        (f) => f.toLowerCase() == r'$forwarded',
+      );
+      final keywords = remote.flags
+          .where((f) => !f.startsWith(r'\') && f.toLowerCase() != r'$forwarded')
+          .toList();
       final labelsJson = jsonEncode(keywords);
 
       if (row.isSeen == isSeen &&
           row.isFlagged == isFlagged &&
           row.isAnswered == isAnswered &&
+          row.isForwarded == isForwarded &&
           row.labelsJson == labelsJson) {
         continue;
       }
@@ -566,6 +647,7 @@ class SyncEngine {
           isSeen: Value(isSeen),
           isFlagged: Value(isFlagged),
           isAnswered: Value(isAnswered),
+          isForwarded: Value(isForwarded),
           labelsJson: Value(labelsJson),
         ),
       );

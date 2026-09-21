@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -7,9 +9,11 @@ import '../../../app/sync_controller.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/actions/message_actions.dart';
+import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../auth/login_screen.dart';
+import '../contacts/contacts_screen.dart';
 import '../mail_list/mail_list_screen.dart';
 import '../settings/settings_screen.dart';
 
@@ -56,48 +60,75 @@ class _AppShellState extends ConsumerState<AppShell>
     }
   }
 
+  /// Kökte değilken sistem geri tuşu: yığıt temizlenip Gelen Kutusu'na
+  /// dönülür — `_choose`nin klasör seçimiyle aynı sıfırlama (bkz. o
+  /// metodun belgesi), yalnızca senkron tetiklemesi olmadan; geri tuşu
+  /// veri değiştirmez, zaten canlı akan yerel veriyi yeniden gösterir.
+  void _popToInbox() {
+    ref.read(activeTabProvider.notifier).select(0);
+    ref.read(selectedFolderRawProvider.notifier).reset();
+    ref.read(pageLimitProvider.notifier).reset();
+    ref.read(selectionProvider.notifier).clear();
+  }
+
   @override
   Widget build(BuildContext context) {
     final isSelectionMode = ref.watch(isSelectionModeProvider);
     final tab = ref.watch(activeTabProvider);
+    final isAtRoot = ref.watch(isAtRootDestinationProvider);
 
-    return Scaffold(
-      drawer: const FolderDrawer(),
-      // Seçim modunda yan menü kaydırmayla açılmaz: liste üzerindeki
-      // yatay kaydırma hareketiyle çakışır.
-      drawerEnableOpenDragGesture: !isSelectionMode,
-      body: switch (tab) {
-        0 => const MailListScreen(),
-        3 => const SettingsScreen(),
-        _ => _ComingSoon(tab: tab),
+    return PopScope(
+      // Kökteyken (İletiler + Gelen Kutusu) geri tuşu varsayılan davranışa
+      // (uygulamadan çık) bırakılır; aksi halde yutulup Gelen Kutusu'na
+      // dönülür — bkz. `isAtRootDestinationProvider`.
+      canPop: isAtRoot,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _popToInbox();
       },
+      child: Scaffold(
+        // NOT: `Scaffold.drawerAnimationStyle` bu Flutter sürümünde
+        // (3.44.8) yok — `Scaffold` kaynağında yalnızca `drawerScrimColor`/
+        // `drawerEdgeDragWidth` var, drawer'ın kapanış süresi
+        // (`_kBaseSettleDuration`, 246ms) private ve özelleştirilemiyor.
+        // Kapanış süresini kısaltmak yerine, drawer'ın kendi (sabit)
+        // animasyonu sürerken hesap değiştirme işinin ONUNLA AYNI kareye
+        // girmemesi sağlanıyor (bkz. `_FolderDrawerState.
+        // _selectAccountAndOpenInbox`'taki `Future.delayed` ertelemesi) —
+        // asıl kare düşürme sebebi buydu, animasyon süresi değil.
+        drawer: const FolderDrawer(),
+        // Seçim modunda yan menü kaydırmayla açılmaz: liste üzerindeki
+        // yatay kaydırma hareketiyle çakışır.
+        drawerEnableOpenDragGesture: !isSelectionMode,
+        // Modül geçişi (İletiler/Takvim/Kişiler/Ayarlar) eskiden ham
+        // `switch` ile anlık widget değişimiydi — "sıfır sert geçiş"
+        // kuralı gereği artık `AnimatedSwitcher` üzerinden yumuşak
+        // crossfade'e sarılır. `ValueKey` şart: `AnimatedSwitcher` yalnızca
+        // child'ın KEY'i değiştiğinde geçiş animasyonunu tetikler.
+        body: AnimatedSwitcher(
+          duration: context.motion(Motion.page),
+          switchInCurve: Motion.standard,
+          switchOutCurve: Motion.standard,
+          child: switch (tab) {
+            0 => const MailListScreen(key: ValueKey('tab-mail')),
+            2 => const ContactsScreen(key: ValueKey('tab-contacts')),
+            3 => const SettingsScreen(key: ValueKey('tab-settings')),
+            _ => const _ComingSoon(key: ValueKey('tab-coming-soon')),
+          },
+        ),
+      ),
     );
   }
 }
 
-/// Takvim ve Kişiler v2'de gelecek; sekmeler şimdiden yerinde durur ki
-/// eklenince gezinme yeniden tasarlanmasın.
+/// Takvim v2'de gelecek (CardDAV); sekme şimdiden yerinde durur ki
+/// eklenince gezinme yeniden tasarlanmasın. Kişiler artık burada değil —
+/// yerel kişi defteri çalışıyor (bkz. `ContactsScreen`).
 class _ComingSoon extends StatelessWidget {
-  const _ComingSoon({required this.tab});
-
-  final int tab;
+  const _ComingSoon({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final (icon, title, description) = tab == 1
-        ? (
-            LucideIcons.calendarDays,
-            'Takvim yakında',
-            'Sunucudaki CalDAV takviminiz bir sonraki sürümde bu sekmede '
-                'görünecek.',
-          )
-        : (
-            LucideIcons.users,
-            'Kişiler yakında',
-            'CardDAV adres defteriniz bir sonraki sürümde bu sekmede '
-                'görünecek.',
-          );
-
     return Scaffold(
       appBar: AppBar(
         // Bu ekranın kendi `Scaffold`u `AppShell`'in klasör/modül menüsünü
@@ -108,19 +139,29 @@ class _ComingSoon extends StatelessWidget {
           tooltip: 'Menü',
           onPressed: () => Scaffold.of(context).openDrawer(),
         ),
-        title: Text(tab == 1 ? 'Takvim' : 'Kişiler'),
+        title: const Text('Takvim'),
       ),
-      body: EmptyState(icon: icon, title: title, description: description),
+      body: const EmptyState(
+        icon: LucideIcons.calendarDays,
+        title: 'Takvim yakında',
+        description:
+            'Sunucudaki CalDAV takviminiz bir sonraki sürümde bu sekmede '
+            'görünecek.',
+      ),
     );
   }
 }
 
 /// Klasör listesi.
 ///
-/// Tüm hesaplar aynı anda görünür — eM Client'ta olduğu gibi her hesap
-/// kendi başlığı altında klasörleriyle listelenir. Başka bir hesabın
-/// klasörüne dokunmak o hesabı sessizce etkinleştirir (bkz. [_choose]);
-/// ayrı bir "hesap değiştir" adımı yoktur.
+/// Soldan sağa üç şerit: (1) [NavigationRail] — üstte büyük hesap avatarları
+/// (Outlook ölçeğinde, bkz. `Dimens.navRailAvatarSize`) + hesap ekle, altta
+/// İletiler/Takvim/Kişiler modülleri, en altta (her zaman, bkz.
+/// `trailingAtBottom`) onlarla aynı boyuttaki Ayarlar; (2) o an etkin hesabın
+/// klasörleri. Rayda bir
+/// avatara dokunmak o hesabı etkinleştirir ve doğrudan Gelen Kutusu'nu açar
+/// (bkz. [_selectAccountAndOpenInbox]) — ayrı bir "klasörleri göster/gizle"
+/// adımı yoktur, her zaman tek hesabın klasörleri görünür.
 class FolderDrawer extends ConsumerStatefulWidget {
   const FolderDrawer({super.key});
 
@@ -129,30 +170,92 @@ class FolderDrawer extends ConsumerStatefulWidget {
 }
 
 class _FolderDrawerState extends ConsumerState<FolderDrawer> {
-  final Set<int> _collapsedAccountIds = {};
+  // Avatara dokunulduğu AN (DB/provider güncellemesi bitmeden) hangi hesabın
+  // görsel olarak aktif görüneceği — bkz. `_selectAccountAndOpenInbox`.
+  // Gerçek geçiş tamamlanınca (veya başarısız olursa) `null`e döner, o andan
+  // sonra halka tekrar `activeAccountId`i (DB'deki gerçeği) yansıtır.
+  int? _pendingAccountId;
 
-  Future<void> _choose(int accountId, SelectedFolder folder) async {
-    final activeId = ref.read(accountIdProvider);
+  void _addAccount() {
     Navigator.of(context).pop();
-    // Kullanıcı Ayarlar/Takvim/Kişiler modülündeyken bir posta klasörü
-    // seçerse İletiler'e geçilir — aksi hâlde klasör değişir ama ekranda
-    // hâlâ önceki modül görünür kalırdı.
-    ref.read(activeTabProvider.notifier).select(0);
-    if (accountId != activeId) {
-      await ref.read(accountRepositoryProvider).switchAccount(accountId);
+    context.pushScreen(const LoginScreen(isAddingAccount: true));
+  }
+
+  /// Rayda bir avatara dokunma: o hesabı etkinleştirir ve panelinde
+  /// Gelen Kutusu'nu gösterir. Klasör seçimi `null`e sıfırlanınca
+  /// `selectedFolderProvider` zaten yeni hesabın Gelen Kutusu'na düşer
+  /// (bkz. o sağlayıcının dosya başı açıklaması) — elle çözmeye gerek yok.
+  ///
+  /// Outlook'taki sıra: (1) parmak değer değmez halka anında yeni hesaba
+  /// geçer, (2) drawer hızla kapanır, (3) İÇERİK REBUILD'İ drawer kapanma
+  /// animasyonuyla AYNI kareye girmez. Eski sürümde `pop()`in hemen ardından
+  /// 5 provider senkron güncelleniyordu; bu, rayin tamamı + panel + her
+  /// klasörün rozet sayacını drawer'ın kapanma animasyonuyla aynı karede
+  /// yeniden kurup kare düşürüyordu (takılma hissi buradan geliyordu).
+  void _selectAccountAndOpenInbox(int accountId) {
+    // 1. Optimistic: halka DB/provider beklemeden anında yeni hesaba geçer.
+    setState(() => _pendingAccountId = accountId);
+    // 2. Drawer hemen kapanmaya başlar.
+    Navigator.of(context).pop();
+
+    // 3. Asıl state güncellemesi `Motion.fast` (120ms) kadar ertelenir —
+    // drawer'ın sabit ~246ms'lik kapanış animasyonunun (bkz. `AppShell`
+    // içindeki not) İLK karesinde değil, ortasında biter; ekran drawer
+    // tamamen kaybolmadan önce zaten hazır olur.
+    Future.delayed(context.motion(Motion.fast), () {
       if (!mounted) return;
+      final activeId = ref.read(accountIdProvider);
+      ref.read(activeTabProvider.notifier).select(0);
+      ref.read(selectedFolderRawProvider.notifier).reset();
+      ref.read(pageLimitProvider.notifier).reset();
+      ref.read(selectionProvider.notifier).clear();
+
+      if (accountId == activeId) {
+        // Zaten aktif hesap seçildi — geçiş yok, optimistik halka hemen
+        // gerçek duruma eşitlenir.
+        setState(() => _pendingAccountId = null);
+        ref.read(syncControllerProvider.notifier).syncCurrentFolder();
+        return;
+      }
+      unawaited(_switchAccount(accountId));
+    });
+  }
+
+  Future<void> _switchAccount(int accountId) async {
+    try {
+      await ref.read(accountRepositoryProvider).switchAccount(accountId);
+    } finally {
+      // Başarılı da olsa hata da olsa optimistik halka bırakılır — aksi
+      // hâlde bir hata durumunda halka yanlış hesapta takılı kalırdı.
+      if (mounted) setState(() => _pendingAccountId = null);
     }
-    ref.read(selectedFolderRawProvider.notifier).select(folder);
-    ref.read(pageLimitProvider.notifier).reset();
-    ref.read(selectionProvider.notifier).clear();
+    if (!mounted) return;
     ref.read(syncControllerProvider.notifier).syncCurrentFolder();
   }
 
-  void _toggleAccount(int accountId) {
-    setState(() {
-      if (!_collapsedAccountIds.remove(accountId)) {
-        _collapsedAccountIds.add(accountId);
-      }
+  /// Panelde bir klasöre/Sabitlenenler'e dokunma. Panel her zaman etkin
+  /// hesabın klasörlerini gösterdiği için burada hesap değiştirmeye
+  /// gerek yoktur.
+  ///
+  /// `_selectAccountAndOpenInbox`daki gibi asıl state güncellemesi
+  /// `pop()`in hemen ardından değil, `Motion.fast` kadar ertelenir: artık
+  /// mail listesi klasör değiştiğinde de crossfade oluyor (bkz.
+  /// `MailListScreen` içindeki `AnimatedSwitcher`), o yüzden bu güncelleme
+  /// senkron olsaydı hem o crossfade hem `syncCurrentFolder()`ın provider
+  /// güncellemeleri drawer'ın kendi ~246ms'lik kapanış animasyonunun İLK
+  /// karesine denk gelip kare düşürürdü.
+  void _choose(SelectedFolder folder) {
+    Navigator.of(context).pop();
+    Future.delayed(context.motion(Motion.fast), () {
+      if (!mounted) return;
+      // Kullanıcı Ayarlar/Takvim/Kişiler modülündeyken bir posta klasörü
+      // seçerse İletiler'e geçilir — aksi hâlde klasör değişir ama ekranda
+      // hâlâ önceki modül görünür kalırdı.
+      ref.read(activeTabProvider.notifier).select(0);
+      ref.read(selectedFolderRawProvider.notifier).select(folder);
+      ref.read(pageLimitProvider.notifier).reset();
+      ref.read(selectionProvider.notifier).clear();
+      ref.read(syncControllerProvider.notifier).syncCurrentFolder();
     });
   }
 
@@ -167,7 +270,7 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
     final t = context.tokens;
     final accounts =
         ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
-    final activeId = ref.watch(accountIdProvider);
+    final activeAccount = ref.watch(activeAccountProvider).value;
     final pending = ref.watch(pendingOperationCountProvider).value ?? 0;
     final activeTab = ref.watch(activeTabProvider);
 
@@ -175,62 +278,29 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
       backgroundColor: t.surfaceDeep,
       child: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                Space.xl,
-                Space.xl,
-                Space.md,
-                Space.lg,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Kaydet',
-                      style: Theme.of(
-                        context,
-                      ).textTheme.titleLarge?.copyWith(letterSpacing: -0.5),
-                    ),
-                  ),
-                  Tooltip(
-                    message: 'Hesap ekle',
-                    child: IconButton(
-                      icon: Icon(
-                        LucideIcons.userPlus,
-                        color: t.textSecondary,
-                        size: IconSize.md,
-                      ),
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                        Navigator.of(context).push(
-                          MaterialPageRoute<void>(
-                            builder: (_) =>
-                                const LoginScreen(isAddingAccount: true),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Divider(color: t.divider, height: 1),
-
             Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final account in accounts)
-                    _AccountSection(
-                      account: account,
-                      isActive: account.id == activeId,
-                      isExpanded: !_collapsedAccountIds.contains(account.id),
-                      onToggleExpanded: () => _toggleAccount(account.id),
-                      onChooseFolder: (folder) => _choose(account.id, folder),
-                    ),
-                  const SizedBox(height: Space.xl),
+                  _SideRail(
+                    accounts: accounts,
+                    activeAccountId: activeAccount?.id,
+                    pendingAccountId: _pendingAccountId,
+                    onSelectAccount: _selectAccountAndOpenInbox,
+                    onAddAccount: _addAccount,
+                    activeTab: activeTab,
+                    onSelectTab: _selectTab,
+                  ),
+                  VerticalDivider(color: t.divider, width: 1),
+                  Expanded(
+                    child: activeAccount == null
+                        ? const SizedBox.shrink()
+                        : _AccountFolderPanel(
+                            account: activeAccount,
+                            onChooseFolder: _choose,
+                          ),
+                  ),
                 ],
               ),
             ),
@@ -256,44 +326,6 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
                   ],
                 ),
               ),
-
-            Divider(color: t.divider, height: 1),
-            // Modül geçişi: eskiden ayrı bir alt gezinme çubuğundaydı,
-            // artık eM Client'taki gibi buradan yapılıyor (bkz.
-            // `AppShell`'in dosya başı dokümantasyonu) — burada tek satır
-            // hâlinde, yalnızca simgelerle, soldan sağa.
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: Space.sm),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  _ModuleIcon(
-                    icon: LucideIcons.mail,
-                    tooltip: 'İletiler',
-                    isSelected: activeTab == 0,
-                    onTap: () => _selectTab(0),
-                  ),
-                  _ModuleIcon(
-                    icon: LucideIcons.calendarDays,
-                    tooltip: 'Takvim',
-                    isSelected: activeTab == 1,
-                    onTap: () => _selectTab(1),
-                  ),
-                  _ModuleIcon(
-                    icon: LucideIcons.users,
-                    tooltip: 'Kişiler',
-                    isSelected: activeTab == 2,
-                    onTap: () => _selectTab(2),
-                  ),
-                  _ModuleIcon(
-                    icon: LucideIcons.settings,
-                    tooltip: 'Ayarlar',
-                    isSelected: activeTab == 3,
-                    onTap: () => _selectTab(3),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
       ),
@@ -301,12 +333,139 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
   }
 }
 
-/// Modül şeridindeki tek simge: etiketsiz, seçiliyken dairesel vurgu alır.
+/// Yan menünün sol şeridi: üstte ([leading]) büyük hesap avatarları + hesap
+/// ekle, altta (bkz. `groupAlignment: 1`) bir [NavigationRail] ile
+/// İletiler/Takvim/Kişiler modülleri arasında geçiş, en altta
+/// ([trailing] + `trailingAtBottom`) onlarla aynı ikon boyutundaki Ayarlar.
+/// Modül geçişi eskiden ayrı bir yatay şeritteydi; artık gerçek bir
+/// `NavigationRail` — soldaki dikey konumu ve varsayılan seçili-simge
+/// vurgusu bunun için var.
+class _SideRail extends StatelessWidget {
+  const _SideRail({
+    required this.accounts,
+    required this.activeAccountId,
+    required this.pendingAccountId,
+    required this.onSelectAccount,
+    required this.onAddAccount,
+    required this.activeTab,
+    required this.onSelectTab,
+  });
+
+  final List<AccountRow> accounts;
+  final int? activeAccountId;
+  // Optimistik seçim — doluysa görsel aktif hesabı DB'nin önüne geçer
+  // (bkz. `_FolderDrawerState._selectAccountAndOpenInbox`).
+  final int? pendingAccountId;
+  final ValueChanged<int> onSelectAccount;
+  final VoidCallback onAddAccount;
+  final int activeTab;
+  final ValueChanged<int> onSelectTab;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return NavigationRail(
+      backgroundColor: t.surfaceDeep,
+      minWidth: 76,
+      groupAlignment: 1,
+      labelType: NavigationRailLabelType.none,
+      trailingAtBottom: true,
+      indicatorColor: t.accentSubtle,
+      selectedIconTheme: IconThemeData(color: t.accent),
+      unselectedIconTheme: IconThemeData(color: t.textSecondary),
+      // 3 (Ayarlar) formal bir hedef değil, `trailing`de — o yüzden
+      // hedefler listesinde hiçbiri seçili görünmemeli.
+      selectedIndex: activeTab < 3 ? activeTab : null,
+      onDestinationSelected: onSelectTab,
+      leading: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final account in accounts)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: Space.xs),
+              child: _AccountAvatarButton(
+                account: account,
+                // Optimistik seçim varsa (halka daha az önce tıklanmış
+                // hesaba doğru anında kaymış olsun diye) DB'deki gerçek
+                // aktif hesabın önüne geçer.
+                isActive: account.id == (pendingAccountId ?? activeAccountId),
+                onTap: () => onSelectAccount(account.id),
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Space.xs),
+            child: Tooltip(
+              message: 'Hesap ekle',
+              child: InkWell(
+                onTap: onAddAccount,
+                borderRadius: BorderRadius.circular(Radii.full),
+                child: Container(
+                  width: Dimens.avatarSize,
+                  height: Dimens.avatarSize,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: t.divider),
+                  ),
+                  child: Icon(
+                    LucideIcons.plus,
+                    size: IconSize.md,
+                    color: t.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: Space.md),
+          Divider(
+            color: t.divider,
+            height: 1,
+            indent: Space.md,
+            endIndent: Space.md,
+          ),
+        ],
+      ),
+      destinations: const [
+        NavigationRailDestination(
+          icon: Icon(LucideIcons.mail),
+          label: Text('İletiler'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(LucideIcons.calendarDays),
+          label: Text('Takvim'),
+        ),
+        NavigationRailDestination(
+          icon: Icon(LucideIcons.users),
+          label: Text('Kişiler'),
+        ),
+      ],
+      trailing: Padding(
+        padding: const EdgeInsets.only(bottom: Space.lg),
+        child: _RailIconButton(
+          icon: LucideIcons.settings,
+          tooltip: 'Ayarlar',
+          isSelected: activeTab == 3,
+          onTap: () => onSelectTab(3),
+        ),
+      ),
+    );
+  }
+}
+
+/// Ayarlar, [NavigationRail]'in formal hedef listesinde değil ([trailing]
+/// alanında) olduğu için seçili-durum vurgusu ayrıca burada uygulanır —
+/// diğer üç modülün otomatik aldığı görünümle aynı: dairesel `accentSubtle`
+/// arka plan.
 ///
-/// Etiket görünürde yok, ama `Tooltip` üzerinden erişilebilir kalır (uzun
-/// basma/masaüstünde üzerine gelme).
-class _ModuleIcon extends StatelessWidget {
-  const _ModuleIcon({
+/// [NavigationRail]'in kendi hedefleri (İletiler/Takvim/Kişiler) seçim
+/// değiştiğinde Flutter'ın dahili `AnimationController`larıyla (bkz.
+/// `_destinationControllers`, `kThemeAnimationDuration`) zaten yumuşak geçer
+/// — burası formal hedef listesinde OLMADIĞI için o mekanizmadan
+/// yararlanamaz, aynı yumuşaklığı `AnimatedContainer`/`TweenAnimationBuilder`
+/// ile elle sağlar; aksi hâlde arka plan ve ikon rengi sert bir sıçramayla
+/// değişirdi.
+class _RailIconButton extends StatelessWidget {
+  const _RailIconButton({
     required this.icon,
     required this.tooltip,
     required this.isSelected,
@@ -321,12 +480,15 @@ class _ModuleIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final duration = context.motion(Motion.fast);
     return Tooltip(
       message: tooltip,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(Radii.full),
-        child: Container(
+        child: AnimatedContainer(
+          duration: duration,
+          curve: Motion.standard,
           width: Dimens.touchTarget,
           height: Dimens.touchTarget,
           alignment: Alignment.center,
@@ -334,10 +496,12 @@ class _ModuleIcon extends StatelessWidget {
             color: isSelected ? t.accentSubtle : Colors.transparent,
             shape: BoxShape.circle,
           ),
-          child: Icon(
-            icon,
-            size: IconSize.md,
-            color: isSelected ? t.accent : t.textSecondary,
+          child: TweenAnimationBuilder<Color?>(
+            tween: ColorTween(end: isSelected ? t.accent : t.textSecondary),
+            duration: duration,
+            curve: Motion.standard,
+            builder: (context, color, _) =>
+                Icon(icon, size: IconSize.lg, color: color),
           ),
         ),
       ),
@@ -345,25 +509,95 @@ class _ModuleIcon extends StatelessWidget {
   }
 }
 
-/// Tek bir hesabın klasör ağacı — başlığa dokununca daralır/genişler.
-///
-/// [isActive] yalnızca seçili klasör vurgusunu doğru hesaba bağlamak için
-/// kullanılır; klasörler her hesap için ayrı akışlardan
-/// ([mailboxesForAccountProvider] vb.) gelir, etkin hesap değişmeden de
-/// güncel kalır.
-class _AccountSection extends ConsumerWidget {
-  const _AccountSection({
+class _AccountAvatarButton extends StatelessWidget {
+  const _AccountAvatarButton({
     required this.account,
     required this.isActive,
-    required this.isExpanded,
-    required this.onToggleExpanded,
-    required this.onChooseFolder,
+    required this.onTap,
   });
 
   final AccountRow account;
   final bool isActive;
-  final bool isExpanded;
-  final VoidCallback onToggleExpanded;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Tooltip(
+      message: account.email,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Radii.full),
+        // Halka rengi/kalınlığı `isActive` değiştiğinde anlık atlamaz,
+        // `Motion.fast` boyunca akıcı geçer — optimistik seçimin
+        // (`_pendingAccountId`) görsel karşılığı budur.
+        child: AnimatedContainer(
+          duration: context.motion(Motion.fast),
+          curve: Motion.standard,
+          padding: const EdgeInsets.all(2),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isActive ? t.accent : Colors.transparent,
+              width: isActive ? 2.5 : 1.5,
+            ),
+          ),
+          // Hafif büyüme — Outlook'un "seçildi" hissi.
+          child: AnimatedScale(
+            scale: isActive ? 1.0 : 0.95,
+            duration: context.motion(Motion.fast),
+            curve: Motion.standard,
+            child: BrandAvatar(
+              name: account.displayName,
+              email: account.email,
+              size: Dimens.navRailAvatarSize,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Sağdaki panel: etkin hesabın başlığı + klasörleri. Her zaman tek hesabı
+/// gösterir — hesap değişimi rayda yapılır (bkz. [_SideRail]).
+///
+/// İçerik ([_AccountFolderPanelContent]) hesap değiştiğinde anlık
+/// yenilenmez, `Motion.base` boyunca yumuşak bir crossfade ile geçer —
+/// `ValueKey(account.id)` şart, aksi hâlde `AnimatedSwitcher` hangi child'ın
+/// değiştiğini anlayamaz ve geçiş hiç tetiklenmez.
+class _AccountFolderPanel extends StatelessWidget {
+  const _AccountFolderPanel({
+    required this.account,
+    required this.onChooseFolder,
+  });
+
+  final AccountRow account;
+  final ValueChanged<SelectedFolder> onChooseFolder;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: context.motion(Motion.base),
+      switchInCurve: Motion.standard,
+      switchOutCurve: Motion.standard,
+      child: _AccountFolderPanelContent(
+        key: ValueKey(account.id),
+        account: account,
+        onChooseFolder: onChooseFolder,
+      ),
+    );
+  }
+}
+
+class _AccountFolderPanelContent extends ConsumerWidget {
+  const _AccountFolderPanelContent({
+    super.key,
+    required this.account,
+    required this.onChooseFolder,
+  });
+
+  final AccountRow account;
   final ValueChanged<SelectedFolder> onChooseFolder;
 
   @override
@@ -379,93 +613,76 @@ class _AccountSection extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          onTap: onToggleExpanded,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(
-              Space.lg,
-              Space.md,
-              Space.lg,
-              Space.sm,
-            ),
-            child: Row(
-              children: [
-                KaydetAvatar(
-                  name: account.displayName,
-                  email: account.email,
-                  size: 24,
-                ),
-                const SizedBox(width: Space.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        account.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: t.textPrimary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                      Text(
-                        account.email,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(
-                  isExpanded
-                      ? LucideIcons.chevronDown
-                      : LucideIcons.chevronRight,
-                  size: IconSize.sm,
-                  color: t.textTertiary,
-                ),
-              ],
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Space.lg,
+            Space.xl,
+            Space.lg,
+            Space.lg,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                account.displayName.isEmpty
+                    ? account.email
+                    : account.displayName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                account.email,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+              ),
+            ],
           ),
         ),
-        if (isExpanded) ...[
-          for (final box in mailboxes.where((m) => m.isSelectable))
-            _FolderTile(
-              icon: folderIcon(box.specialUse),
-              label: box.name,
-              isSelected: isActive && selected?.mailboxId == box.id,
-              badge: box.specialUse == SpecialUse.drafts
-                  ? null
-                  : ref.watch(unreadCountProvider(box.id)).value,
-              onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
-            ),
-          // Sabitlenenler sanal bir klasördür: IMAP \Flagged bayrağı taşıyan
-          // iletiler, hangi klasörde olursa olsun — her hesabın kendi
-          // sabitlenenleri vardır.
-          _FolderTile(
-            icon: LucideIcons.pin,
-            label: 'Sabitlenenler',
-            isSelected: isActive && (selected?.isFlaggedView ?? false),
-            badge: flaggedCount > 0 ? flaggedCount : null,
-            onTap: () => onChooseFolder(const SelectedFolder.flagged()),
+        Divider(color: t.divider, height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: Space.sm),
+            children: [
+              for (final box in mailboxes.where((m) => m.isSelectable))
+                _FolderTile(
+                  icon: folderIcon(box.specialUse),
+                  label: box.name,
+                  isSelected: selected?.mailboxId == box.id,
+                  badge: box.specialUse == SpecialUse.drafts
+                      ? null
+                      : ref.watch(unreadCountProvider(box.id)).value,
+                  onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
+                ),
+              // Sabitlenenler sanal bir klasördür: IMAP \Flagged bayrağı
+              // taşıyan iletiler, hangi klasörde olursa olsun.
+              _FolderTile(
+                icon: LucideIcons.pin,
+                label: 'Sabitlenenler',
+                isSelected: selected?.isFlaggedView ?? false,
+                badge: flaggedCount > 0 ? flaggedCount : null,
+                onTap: () => onChooseFolder(const SelectedFolder.flagged()),
+              ),
+            ],
           ),
-          const SizedBox(height: Space.sm),
-        ],
-        Divider(
-          color: t.divider,
-          height: 1,
-          indent: Space.lg,
-          endIndent: Space.lg,
         ),
       ],
     );
   }
 }
 
+/// Panelde bir klasör satırı. Seçili durum değiştiğinde (bkz. `isSelected`)
+/// arka plan, sol kenar çubuğu, ikon/metin rengi ve rozet artık anlık
+/// sıçramıyor — hepsi `Motion.fast` boyunca birlikte yumuşak geçiyor
+/// (bkz. `AnimatedContainer`/`AnimatedDefaultTextStyle`/
+/// `TweenAnimationBuilder`), tıpkı sağdaki hesap halkasında olduğu gibi
+/// (bkz. `_AccountAvatarButton`).
 class _FolderTile extends StatelessWidget {
   const _FolderTile({
     required this.icon,
@@ -484,9 +701,12 @@ class _FolderTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final duration = context.motion(Motion.fast);
     return InkWell(
       onTap: onTap,
-      child: Container(
+      child: AnimatedContainer(
+        duration: duration,
+        curve: Motion.standard,
         constraints: const BoxConstraints(minHeight: Dimens.touchTarget),
         padding: const EdgeInsets.symmetric(
           horizontal: Space.lg,
@@ -503,25 +723,29 @@ class _FolderTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
-              icon,
-              size: IconSize.md,
-              color: isSelected ? t.accent : t.textSecondary,
+            TweenAnimationBuilder<Color?>(
+              tween: ColorTween(end: isSelected ? t.accent : t.textSecondary),
+              duration: duration,
+              curve: Motion.standard,
+              builder: (context, color, _) =>
+                  Icon(icon, size: IconSize.md, color: color),
             ),
             const SizedBox(width: Space.md),
             Expanded(
-              child: Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              child: AnimatedDefaultTextStyle(
+                duration: duration,
+                curve: Motion.standard,
+                style: Theme.of(context).textTheme.bodyMedium!.copyWith(
                   color: isSelected ? t.textPrimary : t.textSecondary,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                 ),
+                child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
               ),
             ),
             if (badge != null && badge! > 0)
-              Container(
+              AnimatedContainer(
+                duration: duration,
+                curve: Motion.standard,
                 padding: const EdgeInsets.symmetric(
                   horizontal: Space.sm,
                   vertical: 1,
@@ -530,11 +754,13 @@ class _FolderTile extends StatelessWidget {
                   color: isSelected ? t.accent : t.surface,
                   borderRadius: BorderRadius.circular(Radii.full),
                 ),
-                child: Text(
-                  '${badge!}',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                child: AnimatedDefaultTextStyle(
+                  duration: duration,
+                  curve: Motion.standard,
+                  style: Theme.of(context).textTheme.labelSmall!.copyWith(
                     color: isSelected ? t.onAccentFill : t.textSecondary,
                   ),
+                  child: Text('${badge!}'),
                 ),
               ),
           ],

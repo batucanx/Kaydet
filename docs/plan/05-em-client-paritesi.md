@@ -144,8 +144,8 @@ alınabilir:
 - Erteleme (snooze)
 - Gönderiyi geri al (undo send — SMTP'ye gönderimden önce kısa bir bekleme penceresi)
 - Hızlı Metin / Şablonlar
-- İzleme pikseli algılama (mevcut `showRemoteImages` anahtarının ötesinde, mesaj
-  başına uyarı)
+- İzleme pikseli algılama (uzak görseller artık her zaman yüklendiği için
+  mesaj başına uyarı)
 - Uygulama kilidi (PIN/biyometrik — `local_auth`)
 
 ---
