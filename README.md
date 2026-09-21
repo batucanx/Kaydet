@@ -46,7 +46,7 @@ veya `flutter build appbundle` tercih edilmelidir.
 - Sonsuz kaydırma — yerelde biterse sunucudan bir sonraki sayfa indirilir
 - Tam metin arama (SQLite FTS5) — Türkçe karakter katlamasıyla: "sahan" → "Şahan"
 - Konuşma (thread) gruplama — `References`/`In-Reply-To` başlıklarından yerel hesap
-- HTML ileti gösterimi; uzak görseller gizlilik için varsayılan olarak engelli
+- HTML ileti gösterimi; uzak görseller varsayılan olarak yüklenir
 - Ek dosya indirme ve cihazda açma; gönderirken dosya ekleme
 - Çoklu seçim: sil, okundu/okunmadı, sabitle, arşivle, taşı, etiketle
 - Kaydırma hareketleri: sağa arşivle, sola sil
@@ -54,7 +54,8 @@ veya `flutter build appbundle` tercih edilmelidir.
 - Sesli yazma (Türkçe konuşma tanıma)
 - Otomatik taslak kaydetme (3 sn yazma duraklamasında) + çıkışta taslak diyaloğu
 - Giden kutusu: ağ yokken yazılan ileti kaybolmaz, bağlantı gelince gönderilir
-- Bildirimler + arka plan senkronizasyonu (WorkManager)
+- Anlık bildirim: uygulama kapalıyken de yeni ileti geldiği anda bildirilir (ön plan servisi + IMAP IDLE, her hesap için ayrı bağlantı). Bildirimde gönderen, konu, önizleme, hesap ve Arşivle / Sil / Yanıtla eylemleri
+- Arka plan senkronizasyonu (WorkManager) — anlık bildirimin yedeği ve diğer kontrol sıklıkları için
 - Koyu ve açık tema, sistem ayarını izleme
 - Etiket yönetimi (ad + renk); sunucu destekliyorsa IMAP anahtar kelimesi olarak yazılır
 
@@ -105,7 +106,6 @@ Ayrıntılı planlar: [`docs/plan/`](docs/plan/)
 | **Türkçe büyük/küçük harf** — `'ISI'.toLowerCase()` yanlış sonuç verir | Tüm metin işlemleri `trLower`/`trUpper`/`foldForSearch` üzerinden geçer |
 | **Yanıtta `References` zincirinin kopması** — alıcının istemcisi konuşmayı böler | Yanıt ve tümünü-yanıtla `In-Reply-To` + `References` başlıklarını doğru kurar |
 | **Okundu işaretinin anında konması** — yanlış iletiye dokunup çıkan kullanıcı onu okumuş sayılır | 1,5 saniyelik gecikme |
-| **Uzak görseller** gönderene iletinin okunduğunu bildirir | Varsayılan olarak engellenir, kullanıcı isterse gösterir |
 
 ---
 
@@ -165,7 +165,13 @@ flutter run   # bağlı cihaz veya emülatörle
 - [ ] Bir iletiyi sil → webmail'de Çöp Kutusu'na taşındı mı
 - [ ] Sabitle → webmail'de yıldızlı göründü mü
 - [ ] Kendine mail gönder → hem ulaştı hem Gönderilenler'de göründü mü
-- [ ] Uygulamayı kapat, dışarıdan mail gönder → bildirim geldi mi
+- [ ] İlk girişten sonra bildirim izni soruluyor mu; izin verilince durum çubuğunda sessiz "Kaydet" bildirimi kalıyor mu
+- [ ] Uygulamayı kapat (son kullanılanlardan da kaydır), dışarıdan mail gönder → bildirim birkaç saniye içinde geldi mi
+- [ ] Bildirimde gönderen, konu, önizleme ve hesap e-postası doğru mu; iki hesapta bildirimler hesaba göre ayrışıyor mu
+- [ ] Bildirimden Arşivle / Sil → webmail'de gerçekten taşındı mı (uygulama kapalıyken de)
+- [ ] Bildirimden Yanıtla → o iletinin yanıt ekranı açılıyor mu
+- [ ] İleti başka cihazdan okununca ya da hesap çıkışı yapılınca bildirimi kalkıyor mu
+- [ ] Telefon kilitli ve ekran kapalıyken (birkaç saat) bildirim hâlâ anında geliyor mu (Samsung'da pil optimizasyonu istisnası verilmiş olarak)
 
 ---
 

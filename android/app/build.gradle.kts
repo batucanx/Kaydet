@@ -6,7 +6,10 @@ plugins {
 
 android {
     namespace = "tr.com.pazarlik.kaydet"
-    compileSdk = flutter.compileSdkVersion
+    // permission_handler_android SDK 37'ye karşı derlenmiş; Flutter'ın
+    // varsayılanı (flutter.compileSdkVersion, şu an 36) yetersiz kalıyor.
+    // SDK'lar geriye dönük uyumlu, minSdk/targetSdk bundan etkilenmez.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

@@ -31,9 +31,6 @@ dependencies:
   flutter_appauth: 12.1.0
   http: ^1.6.0
 
-  # Navigasyon
-  go_router: ^18.0.1
-
   # UI
   lucide_icons_flutter: ^3.1.19
   flutter_slidable: ^4.0.3
@@ -47,6 +44,7 @@ dependencies:
   # Arka plan + bildirim
   workmanager: ^0.10.10
   flutter_local_notifications: ^22.3.1
+  permission_handler: ^13.0.2
 
   # Yardımcılar
   shared_preferences: ^2.5.5
@@ -61,6 +59,7 @@ dependencies:
   webview_flutter: ^4.14.1
   webview_flutter_android: ^4.14.1
   url_launcher: ^6.3.2
+  flutter_foreground_task: ^11.0.3
 
 dev_dependencies:
   flutter_test:
@@ -78,14 +77,15 @@ flutter:
   uses-material-design: true
   assets:
     - assets/icon/app_logo.png
+    - assets/web/mail_render.js
   fonts:
-    - family: Inter
+    - family: Satoshi
       fonts:
-        - asset: assets/fonts/Inter-Variable.ttf
+        - asset: assets/fonts/Satoshi-Variable.ttf
           weight: 400
-        - asset: assets/fonts/Inter-Variable.ttf
+        - asset: assets/fonts/Satoshi-Variable.ttf
           weight: 500
-        - asset: assets/fonts/Inter-Variable.ttf
+        - asset: assets/fonts/Satoshi-Variable.ttf
           weight: 600
-        - asset: assets/fonts/Inter-Variable.ttf
+        - asset: assets/fonts/Satoshi-Variable.ttf
           weight: 700

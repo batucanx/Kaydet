@@ -2,6 +2,7 @@ import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
+import 'package:kaydet/domain/models/search_filters.dart';
 
 import 'helpers/test_db.dart';
 
@@ -41,11 +42,15 @@ void main() {
     String preview = '',
     bool seen = false,
     bool flagged = false,
+    bool hasAttachments = false,
+    bool draft = false,
+    bool deleted = false,
+    int? mailbox,
     DateTime? date,
   }) =>
       MessagesCompanion.insert(
         accountId: accountId,
-        mailboxId: inboxId,
+        mailboxId: mailbox ?? inboxId,
         dateUtc: date ?? DateTime.utc(2026, 9, 14, 10, 30),
         uid: Value(uid),
         subject: Value(subject),
@@ -54,6 +59,9 @@ void main() {
         preview: Value(preview),
         isSeen: Value(seen),
         isFlagged: Value(flagged),
+        hasAttachments: Value(hasAttachments),
+        isDraft: Value(draft),
+        isDeleted: Value(deleted),
       );
 
   group('şema', () {
@@ -261,6 +269,235 @@ void main() {
         query: 'teklif',
       );
       expect(after, isEmpty);
+    });
+  });
+
+  group('arama: sıralama ve filtreler', () {
+    late int trashId;
+    late int draftsId;
+    late int workId;
+
+    setUp(() async {
+      trashId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: accountId,
+          path: 'Trash',
+          name: 'Çöp Kutusu',
+          specialUse: const Value(SpecialUse.trash),
+        ),
+      );
+      draftsId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: accountId,
+          path: 'Drafts',
+          name: 'Taslaklar',
+          specialUse: const Value(SpecialUse.drafts),
+        ),
+      );
+      // Özel klasör: `specialUse` varsayılanı `custom`.
+      workId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: accountId,
+          path: 'Work',
+          name: 'Work',
+        ),
+      );
+    });
+
+    Future<List<String>> subjectsOf(List<int> ids) async => [
+      for (final id in ids) (await db.messageById(id))!.subject,
+    ];
+
+    test('sonuçlar tarihe göre yeniden eskiye gelir', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Rapor eski', date: DateTime.utc(2026, 1, 10)),
+        message(uid: 2, subject: 'Rapor yeni', date: DateTime.utc(2026, 9, 10)),
+        message(uid: 3, subject: 'Rapor orta', date: DateTime.utc(2026, 5, 10)),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'rapor',
+      );
+
+      expect(await subjectsOf(ids), ['Rapor yeni', 'Rapor orta', 'Rapor eski']);
+    });
+
+    test('sınır, en yeni sonuçları korur', () async {
+      await db.upsertServerMessages([
+        for (var day = 1; day <= 5; day++)
+          message(
+            uid: day,
+            subject: 'Bülten $day',
+            date: DateTime.utc(2026, 1, day),
+          ),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'bulten',
+        limit: 2,
+      );
+
+      expect(await subjectsOf(ids), ['Bülten 5', 'Bülten 4']);
+    });
+
+    test('"Ekleri Var" yalnızca ekli iletileri getirir', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Fatura ekli', hasAttachments: true),
+        message(uid: 2, subject: 'Fatura eksiz'),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'fatura',
+        filters: const SearchFilters(withAttachmentsOnly: true),
+      );
+
+      expect(await subjectsOf(ids), ['Fatura ekli']);
+    });
+
+    test('Çöp Kutusu varsayılan olarak dışarıda kalır, '
+        '"silinmiş öğeler" ile gelir', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Sözleşme gelen'),
+        message(uid: 2, subject: 'Sözleşme silinmiş', mailbox: trashId),
+      ]);
+
+      final withoutTrash = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'sozlesme',
+      );
+      final withTrash = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'sozlesme',
+        filters: const SearchFilters(includeDeleted: true),
+      );
+
+      expect(await subjectsOf(withoutTrash), ['Sözleşme gelen']);
+      expect(withTrash, hasLength(2));
+    });
+
+    test('standart klasör filtresi yalnızca o klasörü kapsar', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Toplantı notu'),
+        message(
+          uid: 2,
+          subject: 'Toplantı taslağı',
+          mailbox: draftsId,
+          draft: true,
+        ),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'toplanti',
+        filters: const SearchFilters(
+          folder: SearchFolder.standard(SpecialUse.drafts),
+        ),
+      );
+
+      expect(await subjectsOf(ids), ['Toplantı taslağı']);
+      expect((await db.messageById(ids.single))!.isDraft, isTrue);
+    });
+
+    test('özel klasör ada göre eşleşir', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Proje planı'),
+        message(uid: 2, subject: 'Proje bütçesi', mailbox: workId),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'proje',
+        filters: const SearchFilters(folder: SearchFolder.custom('Work')),
+      );
+
+      expect(await subjectsOf(ids), ['Proje bütçesi']);
+    });
+
+    test('Çöp Kutusu açıkça seçilirse "silinmiş öğeler" kapalıyken de '
+        'aranır', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Anlaşma gelen'),
+        message(uid: 2, subject: 'Anlaşma silinmiş', mailbox: trashId),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'anlasma',
+        filters: const SearchFilters(
+          folder: SearchFolder.standard(SpecialUse.trash),
+        ),
+      );
+
+      expect(await subjectsOf(ids), ['Anlaşma silinmiş']);
+    });
+
+    test(r'`\Deleted` bayraklı iletiler hiçbir durumda çıkmaz', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Duyuru aktif'),
+        message(uid: 2, subject: 'Duyuru silinecek', deleted: true),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'duyuru',
+        filters: const SearchFilters(includeDeleted: true),
+      );
+
+      expect(await subjectsOf(ids), ['Duyuru aktif']);
+    });
+
+    test('dosya araması klasör ve silinmiş öğe filtrelerine uyar', () async {
+      final ids = await db.upsertServerMessages([
+        message(uid: 1, subject: 'Ek gelen', hasAttachments: true),
+        message(
+          uid: 2,
+          subject: 'Ek silinmiş',
+          hasAttachments: true,
+          mailbox: trashId,
+        ),
+      ]);
+      for (final id in ids) {
+        await db.addAttachment(
+          AttachmentsCompanion.insert(
+            messageId: id,
+            fileName: const Value('sozlesme.pdf'),
+          ),
+        );
+      }
+
+      Future<int> fileCount(SearchFilters filters) async => (await db
+              .searchAttachments(
+                accountId: accountId,
+                query: 'sozlesme',
+                filters: filters,
+              ))
+          .length;
+
+      expect(await fileCount(const SearchFilters()), 1);
+      expect(await fileCount(const SearchFilters(includeDeleted: true)), 2);
+      expect(
+        await fileCount(
+          const SearchFilters(folder: SearchFolder.standard(SpecialUse.trash)),
+        ),
+        1,
+      );
+    });
+
+    test('klasör listesi seçilebilir klasörleri döner', () async {
+      final options = await db.selectableMailboxes(accountId: accountId);
+
+      expect(
+        options.map((m) => m.specialUse),
+        unorderedEquals([
+          SpecialUse.inbox,
+          SpecialUse.trash,
+          SpecialUse.drafts,
+          SpecialUse.custom,
+        ]),
+      );
     });
   });
 

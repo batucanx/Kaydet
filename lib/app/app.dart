@@ -4,9 +4,12 @@ import 'package:flutter_quill/flutter_quill.dart'
     show FlutterQuillLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../data/services/app_settings.dart';
 import '../ui/core/theme/app_theme.dart';
+import '../ui/core/theme/tokens.dart';
 import '../ui/features/auth/login_screen.dart';
 import '../ui/features/shell/app_shell.dart';
+import 'navigation.dart';
 import 'providers.dart';
 
 /// Uygulamanın kökü.
@@ -16,13 +19,18 @@ class KaydetApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(settingsProvider);
+    // Outlook Koyu, sistem/açık/koyu üçlüsünün dışında ekstra bir seçenek:
+    // kullanıcı onu seçtiğinde `theme`/`darkTheme`nin ikisi de aynı temaya
+    // sabitlenir, böylece sistem parlaklığından bağımsız her zaman görünür.
+    final isOutlookDark = settings.themeMode == AppThemeMode.outlookDark;
 
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'Kaydet',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light(),
-      darkTheme: AppTheme.dark(),
-      themeMode: settings.themeMode,
+      theme: isOutlookDark ? AppTheme.outlookDark() : AppTheme.light(),
+      darkTheme: isOutlookDark ? AppTheme.outlookDark() : AppTheme.dark(),
+      themeMode: settings.themeMode.flutterThemeMode,
       locale: const Locale('tr', 'TR'),
       supportedLocales: const [Locale('tr', 'TR'), Locale('en', 'US')],
       localizationsDelegates: const [
@@ -54,16 +62,30 @@ class _RootGate extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final account = ref.watch(activeAccountProvider);
 
-    return account.when(
-      loading: () => const _SplashScreen(),
-      error: (error, _) => _SplashScreen(error: '$error'),
-      data: (row) => row == null ? const LoginScreen() : const AppShell(),
+    // Splash/Giriş/Ana uygulama arası eskiden anlık swap'tı — açılışta ve
+    // son hesaptan çıkışta/ilk hesap eklemede "tak diye" hissediliyordu.
+    // `ValueKey`'ler şart: `AnimatedSwitcher` yalnızca child'ın KEY'i
+    // değiştiğinde geçiş animasyonunu tetikler.
+    return AnimatedSwitcher(
+      duration: context.motion(Motion.page),
+      switchInCurve: Motion.standard,
+      switchOutCurve: Motion.standard,
+      child: account.when(
+        loading: () => const _SplashScreen(key: ValueKey('root-splash')),
+        error: (error, _) => _SplashScreen(
+          key: const ValueKey('root-error'),
+          error: '$error',
+        ),
+        data: (row) => row == null
+            ? const LoginScreen(key: ValueKey('root-login'))
+            : const AppShell(key: ValueKey('root-shell')),
+      ),
     );
   }
 }
 
 class _SplashScreen extends StatelessWidget {
-  const _SplashScreen({this.error});
+  const _SplashScreen({super.key, this.error});
 
   final String? error;
 
@@ -77,7 +99,7 @@ class _SplashScreen extends StatelessWidget {
             Text(
               'Kaydet',
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontSize: 28,
+                fontSize: 28 * AppText.scale,
                 letterSpacing: -0.5,
               ),
             ),

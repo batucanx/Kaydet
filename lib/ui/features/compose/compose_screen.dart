@@ -14,16 +14,41 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/date_format.dart';
+import '../../../core/turkish.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 
 /// Yazma ekranının açılış biçimi.
 enum ComposeMode { newMessage, reply, replyAll, forward }
+
+/// Yazma ekranı kapanırken çağırana döndürdüğü sonuç (bkz. `openCompose`).
+///
+/// Ekran kapandıktan sonra kullanıcıya geri bildirim veren, ekranı açan
+/// tarafın işidir: yazma ekranının kendisi artık ağaçta değildir.
+sealed class ComposeOutcome {
+  const ComposeOutcome();
+}
+
+/// İçerikli bir taslak kaydedilerek kapandı.
+final class ComposeDraftSaved extends ComposeOutcome {
+  const ComposeDraftSaved(this.draftId);
+
+  final int draftId;
+}
+
+/// İleti gönderim kuyruğuna alındı; gerçek gönderim arka planda sürer ve
+/// sonucu [messageId]'nin gönderim durumundan izlenir.
+final class ComposeSendQueued extends ComposeOutcome {
+  const ComposeSendQueued(this.messageId);
+
+  final int messageId;
+}
 
 /// İleti yazma ekranı.
 class ComposeScreen extends ConsumerStatefulWidget {
@@ -32,6 +57,7 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.draftId,
     this.replyToId,
     this.mode = ComposeMode.newMessage,
+    this.initialTo,
   });
 
   /// Var olan taslağı düzenlemek için.
@@ -41,6 +67,10 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final int? replyToId;
 
   final ComposeMode mode;
+
+  /// Kişiler sekmesinden "yaz" ile açıldığında Kime alanına önceden
+  /// doldurulacak adres (bkz. `ContactsScreen`).
+  final String? initialTo;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -54,7 +84,18 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   late final QuillController _quill;
   final _bodyFocus = FocusNode();
   final _toFocus = FocusNode();
+  final _ccFocus = FocusNode();
+  final _bccFocus = FocusNode();
   bool _toFocusRequested = false;
+
+  /// `PopScope.canPop`in kendisi — açılışta `false`, gerçekten kapatma
+  /// kararı verildiğinde (bkz. [_closeScreen]) anlık olarak `true`ya
+  /// çevrilip hemen ardından pop çağrılır. Bunu hep `false` bırakıp
+  /// `onPopInvokedWithResult` içinden ikinci bir `Navigator.pop` çağırmak
+  /// (eski kod) her kapatma denemesinde geri çağrıyı yeniden tetikliyordu:
+  /// taslak iki kez kaydediliyor, "kaydedildi" bildirimi de iki kez
+  /// gösteriliyordu.
+  bool _readyToPop = false;
 
   final SpeechToText _speech = SpeechToText();
   bool _speechReady = false;
@@ -73,6 +114,18 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool _sending = false;
   bool _initialised = false;
   int? _draftId;
+
+  /// "Gönderen" olarak seçilen hesap — AppBar'daki hesap popup'ından
+  /// değiştirilebilir. GENEL aktif hesaptan (`accountIdProvider`) bağımsızdır:
+  /// burada değiştirmek yalnızca bu iletiyi etkiler, Gelen Kutusu'nun hangi
+  /// hesabı gösterdiğini değiştirmez (bkz. `build()`'daki hesap popup'ı).
+  int? _fromAccountId;
+
+  /// Yanıtlanan/iletilen kaynak ileti. `widget.replyToId` ile başlar, ama bir
+  /// taslak devam ettirilirken taslağın kendi kaydından yeniden yüklenir —
+  /// aksi hâlde taslağı yarıda bırakıp sonra gönderen kullanıcının yanıt/
+  /// iletme oku (bkz. `MailRepository._markSourceMessage`) hiç görünmezdi.
+  int? _replyToMessageId;
   String? _inReplyTo;
   String? _references;
   final List<String> _attachments = [];
@@ -84,6 +137,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   void initState() {
     super.initState();
     _draftId = widget.draftId;
+    _replyToMessageId = widget.replyToId;
+    // `_prefill` taslak/yanıt ise gerçek sahibiyle değiştirecek (aşağı bkz.);
+    // yeni bir iletide bu, ilk karede gösterilecek tek değerdir.
+    _fromAccountId = ref.read(accountIdProvider);
     _quill = QuillController.basic();
     _quill.addListener(_onChanged);
     for (final controller in [_to, _cc, _bcc, _subject]) {
@@ -133,6 +190,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     _bodyFocus.dispose();
     _toFocus.dispose();
+    _ccFocus.dispose();
+    _bccFocus.dispose();
     if (_listening) _speech.stop();
     super.dispose();
   }
@@ -146,12 +205,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   Future<void> _prefill() async {
-    final account = ref.read(activeAccountProvider).value;
-
     if (widget.draftId != null) {
       final row = await ref.read(messageProvider(widget.draftId!).future);
       final body = await ref.read(messageBodyProvider(widget.draftId!).future);
       if (row != null) {
+        // Taslak hangi hesapta oluşturulduysa "Gönderen" o kalır — GENEL
+        // aktif hesap taslaktan sonra değişmiş olabilir.
+        _fromAccountId = row.accountId;
         _to.text = EmailAddress.decodeList(
           row.toAddrJson,
         ).map((a) => a.formatted).join(', ');
@@ -163,6 +223,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         ).map((a) => a.formatted).join(', ');
         _subject.text = row.subject;
         _loadBody(body?.html, body?.plainText);
+        _replyToMessageId = row.replyToMessageId;
         _inReplyTo = row.inReplyTo;
         _references = row.referencesRaw;
         _showCcBcc = _cc.text.isNotEmpty || _bcc.text.isNotEmpty;
@@ -182,10 +243,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         messageBodyProvider(widget.replyToId!).future,
       );
       if (row != null) {
-        _applyReply(row, body, account?.email);
+        // Yanıt/iletme, iletiyi alan hesaptan gönderilir.
+        _fromAccountId = row.accountId;
+        final selfEmail = ref.read(accountByIdProvider(row.accountId))?.email;
+        _applyReply(row, body, selfEmail);
       }
     } else {
-      _setPlainBody(account?.signature ?? '');
+      if (widget.initialTo != null) _to.text = widget.initialTo!;
+      _setPlainBody(_defaultSignatureBody);
     }
 
     if (!mounted) return;
@@ -231,8 +296,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final from = EmailAddress(email: row.fromEmail, name: row.fromName);
     final to = EmailAddress.decodeList(row.toAddrJson);
     final cc = EmailAddress.decodeList(row.ccJson);
-    final account = ref.read(activeAccountProvider).value;
-    final signature = account?.signature ?? '';
+    final signature = _defaultSignatureBody;
 
     final quotedSource =
         body?.plainText ??
@@ -325,12 +389,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _bodyDiffersFromSignature;
 
   bool get _bodyDiffersFromSignature {
-    final signature = ref.read(activeAccountProvider).value?.signature ?? '';
+    final signature = _defaultSignatureBody;
     return _bodyPlainText != signature.trim() && _bodyPlainText.isNotEmpty;
   }
 
+  /// [_fromAccountId] için varsayılan imza — GENEL aktif hesabınkini değil,
+  /// bu iletinin gönderileceği hesabınkini kullanır (bkz. [_fromAccountId]).
+  String get _defaultSignatureBody {
+    final accountId = _fromAccountId;
+    if (accountId == null) return '';
+    return ref.read(defaultSignatureForAccountProvider(accountId))?.body ??
+        '';
+  }
+
   Future<void> _persistDraft() async {
-    final accountId = ref.read(accountIdProvider);
+    final accountId = _fromAccountId;
     if (accountId == null || !_hasContent) return;
     final id = await ref
         .read(mailRepositoryProvider)
@@ -344,15 +417,32 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           body: _bodyPlainText,
           html: _bodyHtml,
           attachmentPaths: _attachments,
-          replyToMessageId: widget.replyToId,
+          replyToMessageId: _replyToMessageId,
           inReplyTo: _inReplyTo,
           references: _references,
         );
     if (id > 0) _draftId = id;
   }
 
+  /// Yanıt taslağı yalnızca `references`'ı yazılır (bkz. `_applyReply`),
+  /// iletme taslağında bu alan hiç doldurulmaz. Taslak yarıda bırakılıp
+  /// sonra gönderildiğinde `widget.mode` artık `newMessage`dır; bu yüzden
+  /// yanıt/iletme ayrımı burada bu izden çıkarılır.
+  bool get _sourceIsReply =>
+      widget.mode == ComposeMode.reply ||
+      widget.mode == ComposeMode.replyAll ||
+      (widget.mode == ComposeMode.newMessage &&
+          _replyToMessageId != null &&
+          _inReplyTo != null);
+
+  bool get _sourceIsForward =>
+      widget.mode == ComposeMode.forward ||
+      (widget.mode == ComposeMode.newMessage &&
+          _replyToMessageId != null &&
+          _inReplyTo == null);
+
   Future<void> _send() async {
-    final accountId = ref.read(accountIdProvider);
+    final accountId = _fromAccountId;
     if (accountId == null) return;
 
     final recipients = EmailAddress.parseInput(_to.text);
@@ -378,37 +468,47 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _sending = true);
     _autosave?.cancel();
 
-    await ref
-        .read(mailRepositoryProvider)
-        .queueSend(
-          accountId: accountId,
-          draftId: _draftId,
-          to: _to.text,
-          cc: _cc.text,
-          bcc: _bcc.text,
-          subject: _subject.text,
-          body: _bodyPlainText,
-          html: _bodyHtml,
-          attachmentPaths: _attachments,
-          replyToMessageId: widget.replyToId,
-          inReplyTo: _inReplyTo,
-          references: _references,
-        );
+    final repository = ref.read(mailRepositoryProvider);
+    final messageId = await repository.queueSend(
+      accountId: accountId,
+      draftId: _draftId,
+      to: _to.text,
+      cc: _cc.text,
+      bcc: _bcc.text,
+      subject: _subject.text,
+      body: _bodyPlainText,
+      html: _bodyHtml,
+      attachmentPaths: _attachments,
+      replyToMessageId: _replyToMessageId,
+      inReplyTo: _inReplyTo,
+      references: _references,
+      markSourceAnswered: _sourceIsReply,
+      markSourceForwarded: _sourceIsForward,
+    );
+    if (!mounted) return;
+
+    // Negatif kimlik ileti hiç kaydedilemedi demektir (klasörler henüz
+    // eşitlenmemiş). Ekran kapatılıp "gönderiliyor" denirse ileti sessizce
+    // kaybolurdu; kullanıcı yazdıklarıyla ekranda kalır ve yeniden dener.
+    if (messageId < 0) {
+      setState(() => _sending = false);
+      _showError('İleti gönderilemedi. Lütfen birkaç saniye sonra tekrar deneyin.');
+      return;
+    }
 
     // Kuyruk hemen işlenmeye çalışılır; başarısız olursa arka planda devam.
-    unawaited(ref.read(mailRepositoryProvider).processQueue(accountId));
+    unawaited(repository.processQueue(accountId));
 
-    if (!mounted) return;
-    Navigator.of(context).pop();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('İleti gönderiliyor…')));
+    // Sonucu (gönderildi / gönderilemedi) kullanıcıya ekranı açan taraf
+    // bildirir — bu ekran kapanınca ağaçtan çıkar (bkz. `SendFeedback`).
+    Navigator.of(context).pop<ComposeOutcome>(ComposeSendQueued(messageId));
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    KaydetNotice.show(
+      Overlay.of(context, rootOverlay: true),
+      message: message,
+    );
   }
 
   Future<bool?> _confirmNoSubject() => showDialog<bool>(
@@ -429,10 +529,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   );
 
   /// Geri tuşu/kapatma: içerik varsa sormadan doğrudan taslak olarak
-  /// kaydedilir ve kaydedilen taslağın id'si `Navigator.pop` sonucu olarak
-  /// çağıran ekrana döndürülür — o ekran altta "İleti Taslaklara
-  /// kaydedildi" bildirimini, yanında bir "Sil" eylemiyle gösterir (bkz.
-  /// `showDraftSavedSnackBar`). İçerik yoksa kaydetmeden `null` döner.
+  /// kaydedilir ve kaydedilen taslak [ComposeDraftSaved] olarak
+  /// `Navigator.pop` sonucuyla döndürülür — ekranı `openCompose` açtığı için
+  /// "İleti Taslaklara kaydedildi" bildirimini, yanında bir "Sil" eylemiyle o
+  /// gösterir (bkz. `compose_launcher.dart`). İçerik yoksa kaydetmeden `null`
+  /// döner.
   Future<int?> _saveDraftOnExit() async {
     if (!_hasContent) return null;
     _autosave?.cancel();
@@ -440,22 +541,36 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return _draftId;
   }
 
-  /// Kaynak seçimi: Galeri / Kamera (+ Dosya isteğe bağlı) gösterir ve
-  /// seçileni eklentiler listesine ekler.
-  Future<void> _showAttachSheet({required bool includeFiles}) async {
-    // Klavye açıkken galeri/kamera/dosya seçici gibi harici bir sistem
-    // ekranı açılırken pencere odağı Flutter'dan uzaklaşıyor; hâlâ bağlı
-    // bir metin girişi varsa bu geçiş sırasında yazılım klavyesi (özellikle
-    // Samsung klavyesi) anlık olarak yeniden tetikleniyor. Seçiciyi açmadan
-    // önce odağı kaldırmak bu titremeyi engeller.
-    FocusScope.of(context).unfocus();
-    final source = await showModalBottomSheet<_AttachSource>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => _AttachSourceSheet(includeFiles: includeFiles),
+  /// Ekranı kapatmanın TEK yolu — hem sistem geri tuşu (bkz. `PopScope`)
+  /// hem de AppBar'daki X düğmesi buraya çıkar. Taslağı kaydeder, `canPop`u
+  /// gerçek kapanış anında `true`ya çevirir ve öyle pop eder — bu sayede
+  /// pop yalnızca BİR kez gerçekleşir (bkz. [_readyToPop] alanının
+  /// açıklaması).
+  Future<void> _closeScreen() async {
+    final draftId = await _saveDraftOnExit();
+    if (!mounted) return;
+    setState(() => _readyToPop = true);
+    Navigator.of(context).pop<ComposeOutcome>(
+      draftId == null ? null : ComposeDraftSaved(draftId),
     );
-    if (source == null) return;
+  }
 
+  /// Ek kaynağı seçildikten sonra (bkz. `_AttachMenuButton`) ilgili
+  /// seçiciyi açar.
+  Future<void> _handleAttachSource(_AttachSource source) async {
+    // Sistem galeri/kamera/dosya seçicisi açılırken pencere odağı
+    // Flutter'dan uzaklaşıyor; hâlâ bağlı bir metin girişi varsa bu geçiş
+    // sırasında yazılım klavyesi (özellikle Samsung klavyesi) anlık olarak
+    // yeniden tetikleniyor. Seçiciyi açmadan önce odağı kaldırmak bu
+    // titremeyi engeller.
+    FocusScope.of(context).unfocus();
+    // `unfocus()` eşzamanlı döner ama klavyenin gerçek kapanma animasyonu
+    // asenkron sürer (~100-200ms). Seçici (yeni bir native Activity/Intent)
+    // hemen ardından açılırsa bu animasyon tam bitmeden pencere odağı
+    // geçişi olur ve klavye bir anlığına yeniden görünür — bu gecikme
+    // animasyonun bitmesini bekleyerek titremeyi engeller.
+    await Future.delayed(const Duration(milliseconds: 150));
+    if (!mounted) return;
     switch (source) {
       case _AttachSource.gallery:
         await _pickFromImagePicker(ImageSource.gallery);
@@ -466,9 +581,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
   }
 
-  Future<void> _pickAttachment() => _showAttachSheet(includeFiles: true);
-
-  Future<void> _pickImage() => _showAttachSheet(includeFiles: false);
+  /// Seçili metnin (varsa) yerine, yoksa imleç konumuna metni ekler — sesli
+  /// yazmayla aynı yerleştirme deseni (bkz. `_startListening`).
+  void _insertSignature(String body) {
+    if (body.isEmpty) return;
+    final selection = _quill.selection;
+    final index = selection.isValid
+        ? selection.start
+        : _quill.document.length - 1;
+    final length = selection.isValid ? selection.end - selection.start : 0;
+    _quill.replaceText(
+      index,
+      length,
+      body,
+      TextSelection.collapsed(offset: index + body.length),
+    );
+  }
 
   Future<void> _pickFromImagePicker(ImageSource source) async {
     final XFile? picked;
@@ -502,26 +630,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _onChanged();
   }
 
-  /// Etiket seçimi: taslak henüz yoksa önce kaydedilir, sonra fark alınan
-  /// etiketler ilgili iletiye uygulanır/kaldırılır.
-  Future<void> _pickLabels() async {
-    final labels = ref.read(labelsProvider).value ?? const <LabelRow>[];
-    final picked = await showModalBottomSheet<Set<String>>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) =>
-          _LabelPickerSheet(labels: labels, initiallySelected: _labels),
-    );
-    if (picked == null) return;
-
-    final added = picked.difference(_labels);
-    final removed = _labels.difference(picked);
-    if (added.isEmpty && removed.isEmpty) return;
-
+  /// Etiket anında değişir — "..." menüsündeki onay kutusuna dokunur
+  /// dokunmaz uygulanır (bkz. `_ComposeMoreMenu`), ayrı bir "Bitti" onayı
+  /// yok. Taslak henüz kaydedilmemişse önce kaydedilir.
+  Future<void> _toggleLabel(String name) async {
+    final adding = !_labels.contains(name);
     setState(() {
-      _labels
-        ..clear()
-        ..addAll(picked);
+      if (adding) {
+        _labels.add(name);
+      } else {
+        _labels.remove(name);
+      }
     });
     _onChanged();
 
@@ -531,21 +650,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final draftId = _draftId;
     if (draftId == null || draftId <= 0) return;
 
-    final repository = ref.read(mailRepositoryProvider);
-    for (final name in added) {
-      await repository.setLabel(
-        messageIds: [draftId],
-        labelName: name,
-        add: true,
-      );
-    }
-    for (final name in removed) {
-      await repository.setLabel(
-        messageIds: [draftId],
-        labelName: name,
-        add: false,
-      );
-    }
+    await ref
+        .read(mailRepositoryProvider)
+        .setLabel(messageIds: [draftId], labelName: name, add: adding);
   }
 
   /// Sesli yazma.
@@ -625,31 +732,128 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final fromAccountId = _fromAccountId;
+    final signatures = fromAccountId == null
+        ? const <SignatureRow>[]
+        : ref.watch(signaturesForAccountProvider(fromAccountId)).value ??
+              const [];
+    final allAccounts =
+        ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
+    final account = fromAccountId == null
+        ? null
+        : ref.watch(accountByIdProvider(fromAccountId));
 
     return PopScope(
-      canPop: false,
+      canPop: _readyToPop,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        final draftId = await _saveDraftOnExit();
-        if (context.mounted) Navigator.of(context).pop(draftId);
+        await _closeScreen();
       },
       child: Scaffold(
         appBar: AppBar(
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child: Divider(height: 1, thickness: 1, color: t.divider),
+          ),
           leading: IconButton(
             icon: const Icon(LucideIcons.x),
             tooltip: 'Kapat',
-            onPressed: () async {
-              final draftId = await _saveDraftOnExit();
-              if (context.mounted) Navigator.of(context).pop(draftId);
-            },
+            onPressed: _closeScreen,
           ),
-          title: Text(_titleForMode()),
-          actions: [
-            IconButton(
-              icon: const Icon(LucideIcons.paperclip),
-              tooltip: 'Dosya ekle',
-              onPressed: _pickAttachment,
+          title: MenuAnchor(
+            animated: true,
+            // Yalnızca tek hesap varsa seçilecek başka bir şey yok — popup'ı
+            // hiç açma (bkz. `builder` altındaki `InkWell.onTap`).
+            menuChildren: [
+              for (final acc in allAccounts)
+                MenuItemButton(
+                  leadingIcon: BrandAvatar(
+                    name: acc.displayName,
+                    email: acc.email,
+                    isSelected: acc.id == fromAccountId,
+                    size: 28,
+                  ),
+                  onPressed: () => setState(() => _fromAccountId = acc.id),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        acc.email,
+                        style: AppText.bodyMedium.copyWith(
+                          color: t.textPrimary,
+                        ),
+                      ),
+                      if (acc.displayName.trim().isNotEmpty)
+                        Text(
+                          acc.displayName,
+                          style: AppText.labelSmall.copyWith(
+                            color: t.textTertiary,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+            builder: (context, controller, child) => InkWell(
+              borderRadius: BorderRadius.circular(Radii.sm),
+              onTap: allAccounts.length < 2
+                  ? null
+                  : () =>
+                        controller.isOpen ? controller.close() : controller.open(),
+              child: Row(
+                children: [
+                  BrandAvatar(
+                    name: account?.displayName,
+                    email: account?.email,
+                    size: 36,
+                  ),
+                  const SizedBox(width: Space.md),
+                  Expanded(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _titleForMode(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: t.textPrimary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 18 * AppText.scale,
+                          ),
+                        ),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Flexible(
+                              child: Text(
+                                account?.email ?? '',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: t.textSecondary,
+                                  fontSize: 13 * AppText.scale,
+                                ),
+                              ),
+                            ),
+                            if (allAccounts.length > 1)
+                              Icon(
+                                Icons.keyboard_arrow_down,
+                                color: t.textSecondary,
+                                size: 16,
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
+          ),
+          actions: [
             IconButton(
               icon: _sending
                   ? SizedBox(
@@ -660,7 +864,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                         color: t.accent,
                       ),
                     )
-                  : const Icon(LucideIcons.sendHorizontal),
+                  : Icon(LucideIcons.sendHorizontal, color: t.textPrimary),
               tooltip: 'Gönder',
               onPressed: _sending ? null : _send,
             ),
@@ -672,11 +876,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             Expanded(
               child: ListView(
                 padding: EdgeInsets.zero,
+                // Kullanıcı gövdeyi kaydırmaya başlar başlamaz klavye
+                // kapanır — aşağıdaki alanlar (ekler, imza) görünür olur.
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
                   _RecipientField(
                     label: 'Kime',
                     controller: _to,
                     focusNode: _toFocus,
+                    accountId: fromAccountId,
                     trailing: IconButton(
                       icon: Icon(
                         _showCcBcc
@@ -689,8 +897,18 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     ),
                   ),
                   if (_showCcBcc) ...[
-                    _RecipientField(label: 'Bilgi', controller: _cc),
-                    _RecipientField(label: 'Gizli', controller: _bcc),
+                    _RecipientField(
+                      label: 'Bilgi',
+                      controller: _cc,
+                      focusNode: _ccFocus,
+                      accountId: fromAccountId,
+                    ),
+                    _RecipientField(
+                      label: 'Gizli',
+                      controller: _bcc,
+                      focusNode: _bccFocus,
+                      accountId: fromAccountId,
+                    ),
                   ],
                   _RecipientField(
                     label: 'Konu',
@@ -729,17 +947,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 ],
               ),
             ),
-            if (_showFormatBar) _FormatBar(controller: _quill),
             _ComposeToolbar(
               listening: _listening,
-              hasLabels: _labels.isNotEmpty,
+              selectedLabels: _labels,
               isFormatBarOpen: _showFormatBar,
+              quillController: _quill,
+              signatures: signatures,
               onMic: _toggleMic,
-              onAttach: _pickAttachment,
-              onImage: _pickImage,
-              onLabels: _pickLabels,
+              onAttachSource: _handleAttachSource,
+              onToggleLabel: _toggleLabel,
               onToggleFormat: () =>
                   setState(() => _showFormatBar = !_showFormatBar),
+              onSignatureSelected: (signature) =>
+                  _insertSignature(signature.body),
             ),
           ],
         ),
@@ -817,6 +1037,7 @@ class _RecipientField extends StatelessWidget {
     this.trailing,
     this.focusNode,
     this.isSubject = false,
+    this.accountId,
   });
 
   final String label;
@@ -824,6 +1045,20 @@ class _RecipientField extends StatelessWidget {
   final Widget? trailing;
   final FocusNode? focusNode;
   final bool isSubject;
+
+  /// Kişi otomatik tamamlaması hangi hesabın kişi defterinden gelsin — bkz.
+  /// `ComposeScreen._fromAccountId`. Yalnızca e-posta alanlarında (Kime/
+  /// Bilgi/Gizli) kullanılır, `isSubject: true` iken yok sayılır.
+  final int? accountId;
+
+  static const _fieldDecoration = InputDecoration(
+    filled: false,
+    border: InputBorder.none,
+    enabledBorder: InputBorder.none,
+    focusedBorder: InputBorder.none,
+    contentPadding: EdgeInsets.symmetric(vertical: Space.md),
+    isDense: true,
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -844,31 +1079,183 @@ class _RecipientField extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
             ),
           ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              focusNode: focusNode,
-              keyboardType: isSubject
-                  ? TextInputType.text
-                  : TextInputType.emailAddress,
-              textCapitalization: isSubject
-                  ? TextCapitalization.sentences
-                  : TextCapitalization.none,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontWeight: isSubject ? FontWeight.w600 : FontWeight.w400,
-              ),
-              decoration: const InputDecoration(
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                contentPadding: EdgeInsets.symmetric(vertical: Space.md),
-                isDense: true,
-              ),
-            ),
-          ),
+          Expanded(child: isSubject ? _plainField(context) : _emailField()),
           ?trailing,
         ],
+      ),
+    );
+  }
+
+  Widget _plainField(BuildContext context) => TextField(
+    controller: controller,
+    focusNode: focusNode,
+    keyboardType: TextInputType.text,
+    textCapitalization: TextCapitalization.sentences,
+    style: Theme.of(
+      context,
+    ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+    decoration: _fieldDecoration,
+  );
+
+  /// Kime/Bilgi/Gizli — kişi defterinden otomatik tamamlama. Alan birden
+  /// çok virgülle ayrılmış adres tutabildiği için `Autocomplete`'in seçim
+  /// davranışı elle yönetilir: yalnızca metnin SON parçası (son virgülden
+  /// sonrası) eşleştirilir/değiştirilir, öncesindeki tamamlanmış adreslere
+  /// dokunulmaz (bkz. [_ContactAutocomplete._lastFragment]).
+  Widget _emailField() => _ContactAutocomplete(
+    controller: controller,
+    focusNode: focusNode!,
+    decoration: _fieldDecoration,
+    accountId: accountId,
+  );
+}
+
+/// [_RecipientField]'ın Kime/Bilgi/Gizli alanlarını sarar: kullanıcı
+/// yazarken seçili "Gönderen" hesabın kişi defterindeki eşleşenleri küçük bir
+/// açılır listede önerir. Liste zaten en son kullanılana göre sıralı
+/// geldiğinden (bkz. `AppDatabase.watchContacts`), tek bir harf yazıldığı
+/// anda en üstte "en son/en çok kullanılan" eşleşme çıkar — ayrı bir "Son
+/// Kullanılanlar" görünümüne gerek bırakmadan aynı amaca hizmet eder.
+class _ContactAutocomplete extends ConsumerWidget {
+  const _ContactAutocomplete({
+    required this.controller,
+    required this.focusNode,
+    required this.decoration,
+    this.accountId,
+  });
+
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final InputDecoration decoration;
+  final int? accountId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final id = accountId;
+    final contacts = id == null
+        ? const <ContactRow>[]
+        : ref.watch(contactsForAccountProvider(id)).value ??
+              const <ContactRow>[];
+
+    return Autocomplete<ContactRow>(
+      textEditingController: controller,
+      focusNode: focusNode,
+      displayStringForOption: (contact) => EmailAddress(
+        email: contact.email,
+        name: contact.name.isEmpty ? null : contact.name,
+      ).formatted,
+      optionsBuilder: (value) => _optionsFor(value.text, contacts),
+      onSelected: (contact) => _applySuggestion(controller, contact),
+      optionsViewBuilder: (context, onSelected, options) =>
+          _ContactOptionsList(options: options, onSelected: onSelected),
+      fieldViewBuilder:
+          (context, fieldController, fieldFocusNode, onFieldSubmitted) =>
+              TextField(
+                controller: fieldController,
+                focusNode: fieldFocusNode,
+                keyboardType: TextInputType.emailAddress,
+                style: Theme.of(context).textTheme.bodyMedium,
+                decoration: decoration,
+              ),
+    );
+  }
+
+  static Iterable<ContactRow> _optionsFor(
+    String text,
+    List<ContactRow> contacts,
+  ) {
+    final fragment = foldForSearch(_lastFragment(text));
+    if (fragment.isEmpty) return const [];
+    return contacts
+        .where(
+          (c) =>
+              foldForSearch(c.email).contains(fragment) ||
+              (c.name.isNotEmpty && foldForSearch(c.name).contains(fragment)),
+        )
+        .take(5);
+  }
+
+  static void _applySuggestion(
+    TextEditingController controller,
+    ContactRow contact,
+  ) {
+    final text = controller.text;
+    final sepIndex = _lastSeparatorIndex(text);
+    final prefix = sepIndex == -1 ? '' : '${text.substring(0, sepIndex + 1)} ';
+    final formatted = EmailAddress(
+      email: contact.email,
+      name: contact.name.isEmpty ? null : contact.name,
+    ).formatted;
+    final newText = '$prefix$formatted, ';
+    controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newText.length),
+    );
+  }
+
+  /// "ali@x.com, meh" -> "meh" (son virgül/noktalı virgülden sonrası).
+  static String _lastFragment(String text) {
+    final idx = _lastSeparatorIndex(text);
+    return (idx == -1 ? text : text.substring(idx + 1)).trim();
+  }
+
+  static int _lastSeparatorIndex(String text) {
+    for (var i = text.length - 1; i >= 0; i--) {
+      if (text[i] == ',' || text[i] == ';') return i;
+    }
+    return -1;
+  }
+}
+
+/// Otomatik tamamlama açılır listesi — her kişi avatarı + ad + e-posta.
+class _ContactOptionsList extends StatelessWidget {
+  const _ContactOptionsList({required this.options, required this.onSelected});
+
+  final Iterable<ContactRow> options;
+  final AutocompleteOnSelected<ContactRow> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final list = options.toList();
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Material(
+        elevation: 4,
+        color: t.surfaceElevated,
+        borderRadius: BorderRadius.circular(Radii.md),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 240, maxWidth: 360),
+          child: ListView.builder(
+            padding: EdgeInsets.zero,
+            shrinkWrap: true,
+            itemCount: list.length,
+            itemBuilder: (context, index) {
+              final contact = list[index];
+              return ListTile(
+                dense: true,
+                leading: BrandAvatar(
+                  name: contact.name,
+                  email: contact.email,
+                  size: 28,
+                ),
+                title: Text(
+                  contact.name.isEmpty ? contact.email : contact.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: contact.name.isEmpty
+                    ? null
+                    : Text(
+                        contact.email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                onTap: () => onSelected(contact),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -952,164 +1339,98 @@ class _LabelsRow extends ConsumerWidget {
 
 enum _AttachSource { gallery, camera, files }
 
-/// Ek kaynağı seçim sayfası — eM Client'taki gibi galeri/kamera/dosya.
-class _AttachSourceSheet extends StatelessWidget {
-  const _AttachSourceSheet({required this.includeFiles});
+/// Ek kaynağı seçim popup'ı — eM Client'taki gibi galeri/kamera/(+dosya),
+/// artık tam ekranı kaplayan bir alttan panel değil, düğmenin hemen altına
+/// açılan küçük bir menü (bkz. bellek: popup'lar modallara tercih edilir).
+class _AttachMenuButton extends StatelessWidget {
+  const _AttachMenuButton({
+    required this.icon,
+    required this.tooltip,
+    required this.includeFiles,
+    required this.onSelected,
+    this.color,
+  });
 
+  final IconData icon;
+  final String tooltip;
   final bool includeFiles;
+  final ValueChanged<_AttachSource> onSelected;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
-    return SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SectionHeader(includeFiles ? 'EKLE' : 'GÖRSEL EKLE'),
-          ListTile(
-            leading: Icon(LucideIcons.images, color: t.textSecondary),
-            title: const Text('Galeri'),
-            onTap: () => Navigator.of(context).pop(_AttachSource.gallery),
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.images),
+          onPressed: () => onSelected(_AttachSource.gallery),
+          child: const Text('Galeri'),
+        ),
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.camera),
+          onPressed: () => onSelected(_AttachSource.camera),
+          child: const Text('Kamera'),
+        ),
+        if (includeFiles)
+          MenuItemButton(
+            leadingIcon: const Icon(LucideIcons.folder),
+            onPressed: () => onSelected(_AttachSource.files),
+            child: const Text('Dosyalar'),
           ),
-          ListTile(
-            leading: Icon(LucideIcons.camera, color: t.textSecondary),
-            title: const Text('Kamera'),
-            onTap: () => Navigator.of(context).pop(_AttachSource.camera),
-          ),
-          if (includeFiles)
-            ListTile(
-              leading: Icon(LucideIcons.folder, color: t.textSecondary),
-              title: const Text('Dosyalar'),
-              onTap: () => Navigator.of(context).pop(_AttachSource.files),
-            ),
-          const SizedBox(height: Space.sm),
-        ],
+      ],
+      builder: (context, controller, child) => IconButton(
+        icon: Icon(icon, size: IconSize.md),
+        tooltip: tooltip,
+        color: color,
+        onPressed: () {
+          // Menü klavyenin hemen üstünde/yakınında açılır; klavye açık
+          // kalırsa seçenekleri örter. Düğmeye dokunur dokunmaz kapatılır
+          // (bkz. `_handleAttachSource`'daki aynı gerekçe).
+          FocusScope.of(context).unfocus();
+          controller.isOpen ? controller.close() : controller.open();
+        },
       ),
     );
   }
 }
 
-/// Çoklu seçimli etiket seçici — sadece var olan hesap etiketleri arasından.
-class _LabelPickerSheet extends StatefulWidget {
-  const _LabelPickerSheet({
-    required this.labels,
-    required this.initiallySelected,
+/// İmza seçim popup'ı — seçilen imza imleç konumuna eklenir (bkz.
+/// `_ComposeScreenState._insertSignature`). Yazma açılışında zaten
+/// varsayılan imza otomatik eklendiği için bu, kullanıcının isteğe bağlı
+/// olarak başka bir imza eklemesi/değiştirmesi içindir.
+class _SignatureMenuButton extends StatelessWidget {
+  const _SignatureMenuButton({
+    required this.signatures,
+    required this.onSelected,
+    this.color,
   });
 
-  final List<LabelRow> labels;
-  final Set<String> initiallySelected;
-
-  @override
-  State<_LabelPickerSheet> createState() => _LabelPickerSheetState();
-}
-
-class _LabelPickerSheetState extends State<_LabelPickerSheet> {
-  late final Set<String> _selected = {...widget.initiallySelected};
-
-  void _toggle(String name) => setState(() {
-    if (!_selected.remove(name)) _selected.add(name);
-  });
+  final List<SignatureRow> signatures;
+  final ValueChanged<SignatureRow> onSelected;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(context).height * 0.75,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SectionHeader('ETİKETLER'),
-              if (widget.labels.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(Space.xxl),
-                  child: Text(
-                    'Henüz etiket yok. Ayarlar\'dan ekleyebilirsiniz.',
-                  ),
-                ),
-              for (final label in widget.labels)
-                _LabelPickerRow(
-                  label: label,
-                  isSelected: _selected.contains(label.name),
-                  onTap: () => _toggle(label.name),
-                ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  Space.lg,
-                  Space.md,
-                  Space.lg,
-                  Space.sm,
-                ),
-                child: FilledButton(
-                  onPressed: () => Navigator.of(context).pop(_selected),
-                  child: const Text('Bitti'),
-                ),
-              ),
-            ],
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        for (final signature in signatures)
+          MenuItemButton(
+            leadingIcon: const Icon(LucideIcons.penLine),
+            onPressed: () => onSelected(signature),
+            child: Text(signature.name),
           ),
-        ),
+      ],
+      builder: (context, controller, child) => IconButton(
+        icon: Icon(LucideIcons.penLine, size: IconSize.md, color: color),
+        tooltip: 'İmza ekle',
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
       ),
     );
   }
 }
-
-/// Etiket satırı — Gmail'in etiket menüsündeki gibi renkli anahat ikonu +
-/// ad; seçiliyken sağda onay işareti. Onay kutusu yerine tüm satır
-/// dokunulabilir, daha büyük ve daha rahat bir hedef verir.
-class _LabelPickerRow extends StatelessWidget {
-  const _LabelPickerRow({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final LabelRow label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final tone = t.toneAt(label.toneIndex);
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        constraints: const BoxConstraints(minHeight: Dimens.touchTarget),
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.lg,
-          vertical: Space.sm,
-        ),
-        color: isSelected ? t.accentSubtle : Colors.transparent,
-        child: Row(
-          children: [
-            Icon(LucideIcons.tag, size: IconSize.md, color: tone.foreground),
-            const SizedBox(width: Space.md),
-            Expanded(
-              child: Text(
-                label.name,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-                ),
-              ),
-            ),
-            if (isSelected)
-              Icon(LucideIcons.check, size: IconSize.sm, color: t.accent),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Bir seçim sayfasında "vazgeçildi" (`null`) ile "açıkça temizlendi"
-/// arasındaki farkı işaretlemek için kullanılan tekil değer. İkisi de
-/// `Navigator.pop` ile `null` dönerse, sayfayı dokunmadan kapatmak yanlışça
-/// mevcut rengi/boyutu sıfırlar.
-const Object _clearChoice = Object();
 
 const _textColors = <String>[
   '#EF4444', // kırmızı
@@ -1152,14 +1473,23 @@ Color _parseHexColor(String hex) =>
 Color _contrastingIconColor(Color background) =>
     background.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
 
-/// "A" düğmesiyle açılıp kapanan biçimlendirme çubuğu.
+/// Araç çubuğunun biçimlendirme moduna geçmiş hâli (bkz. `_ComposeToolbar`)
+/// — "Biçimlendir" ikonuna dokunulduğunda ayrı bir satır AÇILMAZ, araç
+/// çubuğunun kendi içeriği bununla yer değiştirir (in-place toolbar swap).
+/// Soldaki geri oku aynı yuvada kalıp yalnızca kapatmaya yarar; sağındaki
+/// seçenekler yatayda kaydırılır.
 ///
 /// Kalın/eğik/altı çizili anında uygulanır; metin/vurgu rengi, yazı boyutu
 /// ve satır aralığı için alt sayfalar açılır (eM Client'taki gibi).
-class _FormatBar extends StatelessWidget {
-  const _FormatBar({required this.controller});
+class _FormatToolbarRow extends StatelessWidget {
+  const _FormatToolbarRow({
+    super.key,
+    required this.controller,
+    required this.onClose,
+  });
 
   final QuillController controller;
+  final VoidCallback onClose;
 
   bool _isActive(Attribute attribute) =>
       controller.getSelectionStyle().attributes.containsKey(attribute.key);
@@ -1184,54 +1514,16 @@ class _FormatBar extends StatelessWidget {
     );
   }
 
-  Future<void> _pickColor(
-    BuildContext context, {
-    required bool background,
-  }) async {
+  void _applyColor(bool background, String? value) {
     final attribute = background ? Attribute.background : Attribute.color;
-    final result = await showModalBottomSheet<Object?>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => _ColorPickerSheet(
-        title: background ? 'VURGU RENGİ' : 'METİN RENGİ',
-        colors: background ? _highlightColors : _textColors,
-        current: _currentString(attribute.key),
-      ),
-    );
-    if (result == null) return;
-    final value = identical(result, _clearChoice) ? null : result as String;
     controller.formatSelection(Attribute.clone(attribute, value));
   }
 
-  Future<void> _pickSize(BuildContext context) async {
-    final result = await showModalBottomSheet<Object?>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => _OptionPickerSheet<String?>(
-        title: 'YAZI BOYUTU',
-        options: _fontSizes,
-        current: _currentString(Attribute.size.key),
-      ),
-    );
-    if (result == null) return;
-    final value = identical(result, _clearChoice) ? null : result as String;
-    controller.formatSelection(Attribute.clone(Attribute.size, value));
-  }
+  void _applySize(String? value) =>
+      controller.formatSelection(Attribute.clone(Attribute.size, value));
 
-  Future<void> _pickLineHeight(BuildContext context) async {
-    final result = await showModalBottomSheet<Object?>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => _OptionPickerSheet<double?>(
-        title: 'SATIR ARALIĞI',
-        options: _lineHeights,
-        current: _currentLineHeight(),
-      ),
-    );
-    if (result == null) return;
-    final value = identical(result, _clearChoice) ? null : result as double;
-    controller.formatSelection(LineHeightAttribute(lineHeight: value));
-  }
+  void _applyLineHeight(double? value) =>
+      controller.formatSelection(LineHeightAttribute(lineHeight: value));
 
   @override
   Widget build(BuildContext context) {
@@ -1240,69 +1532,78 @@ class _FormatBar extends StatelessWidget {
     final backgroundColor = _currentString(Attribute.background.key);
     return AnimatedBuilder(
       animation: controller,
-      builder: (context, _) => Container(
-        decoration: BoxDecoration(
-          color: t.surface,
-          border: Border(top: BorderSide(color: t.divider)),
-        ),
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.sm,
-          vertical: Space.xs,
-        ),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              _FormatButton(
-                icon: LucideIcons.bold,
-                label: 'Kalın',
-                isActive: _isActive(Attribute.bold),
-                onTap: () => _toggle(Attribute.bold),
-              ),
-              _FormatButton(
-                icon: LucideIcons.italic,
-                label: 'Eğik',
-                isActive: _isActive(Attribute.italic),
-                onTap: () => _toggle(Attribute.italic),
-              ),
-              _FormatButton(
-                icon: LucideIcons.underline,
-                label: 'Altı çizili',
-                isActive: _isActive(Attribute.underline),
-                onTap: () => _toggle(Attribute.underline),
-              ),
-              _FormatDivider(color: t.divider),
-              _FormatButton(
-                icon: LucideIcons.palette,
-                label: 'Metin rengi',
-                isActive: textColor != null,
-                tintColor: textColor != null ? _parseHexColor(textColor) : null,
-                onTap: () => _pickColor(context, background: false),
-              ),
-              _FormatButton(
-                icon: LucideIcons.paintBucket,
-                label: 'Vurgu rengi',
-                isActive: backgroundColor != null,
-                tintColor: backgroundColor != null
-                    ? _parseHexColor(backgroundColor)
-                    : null,
-                onTap: () => _pickColor(context, background: true),
-              ),
-              _FormatButton(
-                icon: LucideIcons.caseSensitive,
-                label: 'Yazı boyutu',
-                isActive: _currentString(Attribute.size.key) != null,
-                onTap: () => _pickSize(context),
-              ),
-              _FormatButton(
-                icon: LucideIcons.alignVerticalSpaceAround,
-                label: 'Satır aralığı',
-                isActive: _isActive(Attribute.lineHeight),
-                onTap: () => _pickLineHeight(context),
-              ),
-            ],
+      builder: (context, _) => Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              LucideIcons.arrowLeft,
+              size: IconSize.md,
+              color: t.textSecondary,
+            ),
+            tooltip: 'Biçimlendirmeyi kapat',
+            onPressed: onClose,
           ),
-        ),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  _FormatButton(
+                    icon: LucideIcons.bold,
+                    label: 'Kalın',
+                    isActive: _isActive(Attribute.bold),
+                    onTap: () => _toggle(Attribute.bold),
+                  ),
+                  _FormatButton(
+                    icon: LucideIcons.italic,
+                    label: 'Eğik',
+                    isActive: _isActive(Attribute.italic),
+                    onTap: () => _toggle(Attribute.italic),
+                  ),
+                  _FormatButton(
+                    icon: LucideIcons.underline,
+                    label: 'Altı çizili',
+                    isActive: _isActive(Attribute.underline),
+                    onTap: () => _toggle(Attribute.underline),
+                  ),
+                  _FormatDivider(color: t.divider),
+                  _ColorMenuButton(
+                    icon: LucideIcons.palette,
+                    label: 'Metin rengi',
+                    title: 'METİN RENGİ',
+                    colors: _textColors,
+                    current: textColor,
+                    onSelected: (value) => _applyColor(false, value),
+                  ),
+                  _ColorMenuButton(
+                    icon: LucideIcons.paintBucket,
+                    label: 'Vurgu rengi',
+                    title: 'VURGU RENGİ',
+                    colors: _highlightColors,
+                    current: backgroundColor,
+                    onSelected: (value) => _applyColor(true, value),
+                  ),
+                  _OptionMenuButton<String?>(
+                    icon: LucideIcons.caseSensitive,
+                    label: 'Yazı boyutu',
+                    isActive: _currentString(Attribute.size.key) != null,
+                    options: _fontSizes,
+                    current: _currentString(Attribute.size.key),
+                    onSelected: _applySize,
+                  ),
+                  _OptionMenuButton<double?>(
+                    icon: LucideIcons.alignVerticalSpaceAround,
+                    label: 'Satır aralığı',
+                    isActive: _isActive(Attribute.lineHeight),
+                    options: _lineHeights,
+                    current: _currentLineHeight(),
+                    onSelected: _applyLineHeight,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1368,37 +1669,41 @@ class _FormatButton extends StatelessWidget {
 }
 
 /// Metin/vurgu rengi seçim sayfası — bir renk paleti + "Yok" seçeneği.
-class _ColorPickerSheet extends StatelessWidget {
-  const _ColorPickerSheet({
+/// Metin/vurgu rengi popup'ı — bir renk paleti + "Yok" seçeneği, düğmenin
+/// hemen altına açılır (bkz. bellek: popup'lar modallara tercih edilir).
+class _ColorMenuButton extends StatelessWidget {
+  const _ColorMenuButton({
+    required this.icon,
+    required this.label,
     required this.title,
     required this.colors,
     required this.current,
+    required this.onSelected,
   });
 
+  final IconData icon;
+  final String label;
   final String title;
   final List<String> colors;
   final String? current;
+  final ValueChanged<String?> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SectionHeader(title),
-          Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Space.lg,
-              vertical: Space.sm,
-            ),
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        Padding(
+          padding: const EdgeInsets.all(Space.sm),
+          child: SizedBox(
+            width: 220,
             child: Wrap(
               spacing: Space.sm,
               runSpacing: Space.sm,
               children: [
                 _SwatchButton(
                   isSelected: current == null,
-                  onTap: () => Navigator.of(context).pop<Object?>(_clearChoice),
+                  onSelected: () => onSelected(null),
                   child: Icon(
                     LucideIcons.slash,
                     size: 16,
@@ -1409,29 +1714,37 @@ class _ColorPickerSheet extends StatelessWidget {
                   _SwatchButton(
                     color: _parseHexColor(hex),
                     isSelected: current?.toLowerCase() == hex.toLowerCase(),
-                    onTap: () => Navigator.of(context).pop<Object?>(hex),
+                    onSelected: () => onSelected(hex),
                   ),
               ],
             ),
           ),
-          const SizedBox(height: Space.sm),
-        ],
+        ),
+      ],
+      builder: (context, controller, child) => _FormatButton(
+        icon: icon,
+        label: label,
+        isActive: current != null,
+        tintColor: current != null ? _parseHexColor(current!) : null,
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
       ),
     );
   }
 }
 
+/// Tek bir renk karesi — seçilince kendini kapsayan popup'ı kapatır
+/// ([MenuController.maybeOf] ile, ayrı bir controller taşımaya gerek kalmaz).
 class _SwatchButton extends StatelessWidget {
   const _SwatchButton({
     required this.isSelected,
-    required this.onTap,
+    required this.onSelected,
     this.color,
     this.child,
   });
 
   final Color? color;
   final bool isSelected;
-  final VoidCallback onTap;
+  final VoidCallback onSelected;
   final Widget? child;
 
   @override
@@ -1447,7 +1760,10 @@ class _SwatchButton extends StatelessWidget {
         ),
       ),
       child: InkWell(
-        onTap: onTap,
+        onTap: () {
+          onSelected();
+          MenuController.maybeOf(context)?.close();
+        },
         borderRadius: BorderRadius.circular(Radii.sm),
         child: SizedBox(
           width: 34,
@@ -1468,88 +1784,115 @@ class _SwatchButton extends StatelessWidget {
 }
 
 /// Yazı boyutu / satır aralığı gibi tek seçimli, adlandırılmış listeler için
-/// ortak seçim sayfası.
-class _OptionPickerSheet<T> extends StatelessWidget {
-  const _OptionPickerSheet({
-    required this.title,
+/// ortak popup — bir düğmenin altına açılan radyo listesi.
+class _OptionMenuButton<T> extends StatelessWidget {
+  const _OptionMenuButton({
+    required this.icon,
+    required this.label,
+    required this.isActive,
     required this.options,
     required this.current,
+    required this.onSelected,
   });
 
-  final String title;
+  final IconData icon;
+  final String label;
+  final bool isActive;
   final List<(String, T)> options;
   final T current;
+  final ValueChanged<T> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
-    return SafeArea(
-      top: false,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SectionHeader(title),
-          for (final (label, value) in options)
-            ListTile(
-              title: Text(label),
-              trailing: current == value
-                  ? Icon(LucideIcons.check, color: t.accent)
-                  : null,
-              onTap: () =>
-                  Navigator.of(context).pop<Object?>(value ?? _clearChoice),
-            ),
-          const SizedBox(height: Space.sm),
-        ],
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        for (final (optionLabel, value) in options)
+          RadioMenuButton<T>(
+            value: value,
+            groupValue: current,
+            onChanged: (_) => onSelected(value),
+            child: Text(optionLabel),
+          ),
+      ],
+      builder: (context, controller, child) => _FormatButton(
+        icon: icon,
+        label: label,
+        isActive: isActive,
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
       ),
     );
   }
 }
 
-enum _MoreMenuAction { labels }
-
 /// "..." düğmesinin açtığı sabit menü — Gmail'deki gibi doğrudan etiket
 /// listesine değil, önce bu menüye düşer. Şimdilik tek girişi var ama
 /// ilerideki eklemeler (ör. yapay zekâ, araç çubuğu ayarları) için hazır.
-class _ComposeMoreMenu extends StatelessWidget {
-  const _ComposeMoreMenu({required this.hasLabels, required this.onLabels});
+///
+/// Etiketler tam ekran bir alttan panel yerine kendi alt menüsünde: her
+/// onay kutusu dokunulduğu anda uygulanır (`closeOnActivate: false`, bkz.
+/// `mail_list_screen.dart`daki filtre menüsüyle aynı desen) — ayrı bir
+/// "Bitti" onayına gerek yok, kullanıcı istediği kadar etiketi art arda
+/// açıp kapatabilir.
+class _ComposeMoreMenu extends ConsumerWidget {
+  const _ComposeMoreMenu({
+    required this.selectedLabels,
+    required this.onToggleLabel,
+  });
 
-  final bool hasLabels;
-  final VoidCallback onLabels;
+  final Set<String> selectedLabels;
+  final ValueChanged<String> onToggleLabel;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
-    return PopupMenuButton<_MoreMenuAction>(
-      tooltip: 'Diğer',
-      color: t.surfaceElevated,
-      surfaceTintColor: Colors.transparent,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(Radii.md),
-        side: BorderSide(color: t.divider),
-      ),
-      icon: Icon(
-        LucideIcons.moreHorizontal,
-        size: IconSize.md,
-        color: hasLabels ? t.accent : t.textSecondary,
-      ),
-      onSelected: (action) {
-        switch (action) {
-          case _MoreMenuAction.labels:
-            onLabels();
-        }
-      },
-      itemBuilder: (context) => [
-        PopupMenuItem(
-          value: _MoreMenuAction.labels,
-          child: Row(
-            children: [
-              Icon(LucideIcons.tag, size: IconSize.sm, color: t.textSecondary),
-              const SizedBox(width: Space.md),
-              const Text('Etiketler'),
-            ],
-          ),
+    final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
+
+    return MenuAnchor(
+      animated: true,
+      menuChildren: [
+        SubmenuButton(
+          animated: true,
+          leadingIcon: const Icon(LucideIcons.tag),
+          menuChildren: [
+            if (labels.isEmpty)
+              const MenuItemButton(
+                onPressed: null,
+                child: Text('Henüz etiket yok'),
+              )
+            else
+              for (final label in labels)
+                CheckboxMenuButton(
+                  value: selectedLabels.contains(label.name),
+                  onChanged: (_) => onToggleLabel(label.name),
+                  closeOnActivate: false,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        LucideIcons.tag,
+                        size: IconSize.sm,
+                        color: t.toneAt(label.toneIndex).foreground,
+                      ),
+                      const SizedBox(width: Space.sm),
+                      Text(label.name),
+                    ],
+                  ),
+                ),
+          ],
+          child: const Text('Etiketler'),
         ),
       ],
+      builder: (context, controller, child) => IconButton(
+        icon: Icon(
+          LucideIcons.moreHorizontal,
+          size: IconSize.md,
+          color: selectedLabels.isNotEmpty ? t.accent : t.textSecondary,
+        ),
+        tooltip: 'Diğer',
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
+      ),
     );
   }
 }
@@ -1557,23 +1900,27 @@ class _ComposeMoreMenu extends StatelessWidget {
 class _ComposeToolbar extends StatelessWidget {
   const _ComposeToolbar({
     required this.listening,
-    required this.hasLabels,
+    required this.selectedLabels,
     required this.isFormatBarOpen,
+    required this.quillController,
+    required this.signatures,
     required this.onMic,
-    required this.onAttach,
-    required this.onImage,
-    required this.onLabels,
+    required this.onAttachSource,
+    required this.onToggleLabel,
     required this.onToggleFormat,
+    required this.onSignatureSelected,
   });
 
   final bool listening;
-  final bool hasLabels;
+  final Set<String> selectedLabels;
   final bool isFormatBarOpen;
+  final QuillController quillController;
+  final List<SignatureRow> signatures;
   final VoidCallback onMic;
-  final VoidCallback onAttach;
-  final VoidCallback onImage;
-  final VoidCallback onLabels;
+  final ValueChanged<_AttachSource> onAttachSource;
+  final ValueChanged<String> onToggleLabel;
   final VoidCallback onToggleFormat;
+  final ValueChanged<SignatureRow> onSignatureSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -1590,82 +1937,148 @@ class _ComposeToolbar extends StatelessWidget {
             horizontal: Space.xs,
             vertical: Space.xs,
           ),
-          child: Row(
-            children: [
-              IconButton(
-                icon: const Icon(LucideIcons.paperclip, size: IconSize.md),
-                tooltip: 'Dosya ekle',
-                onPressed: onAttach,
-                color: t.textSecondary,
-              ),
-              IconButton(
-                icon: const Icon(LucideIcons.image, size: IconSize.md),
-                tooltip: 'Görsel ekle',
-                onPressed: onImage,
-                color: t.textSecondary,
-              ),
-              IconButton(
-                // Diğer ikonlarla birebir aynı kutuda (IconSize.md) ortalanır
-                // — aksi hâlde bir `Text`, `Icon`'un metrikleriyle hizalanmaz
-                // ve satırdaki tek başına hafif kaymış/küçük görünür.
-                icon: SizedBox(
-                  width: IconSize.md,
-                  height: IconSize.md,
-                  child: Center(
-                    child: Text(
-                      'A',
-                      style: TextStyle(
-                        fontFamily: AppText.family,
-                        fontSize: 19,
-                        height: 1,
-                        fontWeight: FontWeight.w800,
-                        color: isFormatBarOpen ? t.accent : t.textSecondary,
-                      ),
-                    ),
-                  ),
+          // "Biçimlendir" ikonuna dokunmak ayrı bir satır AÇMAZ — araç
+          // çubuğunun kendisi aynı yerde biçim seçenekleriyle yer değiştirir
+          // (in-place toolbar swap). İki satır da aynı yükseklikte
+          // (`Dimens.touchTarget`) olduğu için geçişte satır zıplamaz.
+          child: SizedBox(
+            height: Dimens.touchTarget,
+            child: ClipRect(
+              child: AnimatedSwitcher(
+                duration: context.motion(Motion.base),
+                switchInCurve: Motion.standard,
+                switchOutCurve: Motion.standard,
+                transitionBuilder: (child, animation) => SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.06, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: FadeTransition(opacity: animation, child: child),
                 ),
-                tooltip: 'Biçimlendir',
-                onPressed: onToggleFormat,
-              ),
-              _ComposeMoreMenu(hasLabels: hasLabels, onLabels: onLabels),
-              IconButton(
-                icon: Icon(
-                  LucideIcons.mic,
-                  size: IconSize.md,
-                  color: listening ? t.danger : t.textSecondary,
-                ),
-                tooltip: listening ? 'Dinleniyor…' : 'Sesli yaz',
-                onPressed: onMic,
-              ),
-              const Spacer(),
-              if (listening)
-                Padding(
-                  padding: const EdgeInsets.only(right: Space.md),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: t.danger,
-                          shape: BoxShape.circle,
-                        ),
+                child: isFormatBarOpen
+                    ? _FormatToolbarRow(
+                        key: const ValueKey('format'),
+                        controller: quillController,
+                        onClose: onToggleFormat,
+                      )
+                    : _MainToolbarRow(
+                        key: const ValueKey('main'),
+                        listening: listening,
+                        selectedLabels: selectedLabels,
+                        signatures: signatures,
+                        onMic: onMic,
+                        onAttachSource: onAttachSource,
+                        onToggleLabel: onToggleLabel,
+                        onToggleFormat: onToggleFormat,
+                        onSignatureSelected: onSignatureSelected,
                       ),
-                      const SizedBox(width: Space.sm),
-                      Text(
-                        'Kaydediliyor',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: t.danger),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+              ),
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MainToolbarRow extends StatelessWidget {
+  const _MainToolbarRow({
+    super.key,
+    required this.listening,
+    required this.selectedLabels,
+    required this.signatures,
+    required this.onMic,
+    required this.onAttachSource,
+    required this.onToggleLabel,
+    required this.onToggleFormat,
+    required this.onSignatureSelected,
+  });
+
+  final bool listening;
+  final Set<String> selectedLabels;
+  final List<SignatureRow> signatures;
+  final VoidCallback onMic;
+  final ValueChanged<_AttachSource> onAttachSource;
+  final ValueChanged<String> onToggleLabel;
+  final VoidCallback onToggleFormat;
+  final ValueChanged<SignatureRow> onSignatureSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Row(
+      children: [
+        _AttachMenuButton(
+          icon: LucideIcons.paperclip,
+          tooltip: 'Dosya ekle',
+          includeFiles: true,
+          onSelected: onAttachSource,
+          color: t.textSecondary,
+        ),
+        _AttachMenuButton(
+          icon: LucideIcons.image,
+          tooltip: 'Görsel ekle',
+          includeFiles: false,
+          onSelected: onAttachSource,
+          color: t.textSecondary,
+        ),
+        IconButton(
+          icon: Icon(
+            LucideIcons.removeFormatting,
+            size: IconSize.md,
+            color: t.textSecondary,
+          ),
+          tooltip: 'Biçimlendir',
+          onPressed: onToggleFormat,
+        ),
+        // Yazma açılışında zaten varsayılan imza otomatik eklendiği için bu,
+        // kullanıcının isteğe bağlı olarak başka bir imza eklemesi/
+        // değiştirmesi içindir (bkz. `_ComposeScreenState._insertSignature`).
+        if (signatures.isNotEmpty)
+          _SignatureMenuButton(
+            signatures: signatures,
+            onSelected: onSignatureSelected,
+            color: t.textSecondary,
+          ),
+        _ComposeMoreMenu(
+          selectedLabels: selectedLabels,
+          onToggleLabel: onToggleLabel,
+        ),
+        IconButton(
+          icon: Icon(
+            LucideIcons.mic,
+            size: IconSize.md,
+            color: listening ? t.danger : t.textSecondary,
+          ),
+          tooltip: listening ? 'Dinleniyor…' : 'Sesli yaz',
+          onPressed: onMic,
+        ),
+        const Spacer(),
+        if (listening)
+          Padding(
+            padding: const EdgeInsets.only(right: Space.md),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: t.danger,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: Space.sm),
+                Text(
+                  'Kaydediliyor',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: t.danger),
+                ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

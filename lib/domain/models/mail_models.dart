@@ -45,6 +45,20 @@ enum PendingOpType {
 /// Kuyruk durumu.
 enum PendingOpStatus { pending, running, failed, done }
 
+/// Outlook tarzı yerel önbellek sınırlaması: her klasör en fazla
+/// `Mailboxes.retentionLimit` (varsayılan [defaultLimit]) kadar ileti
+/// tutar. Kullanıcı "daha fazla göster" dedikçe (bkz.
+/// `SyncController.loadMore`) sınır [step] kadar büyür. Sınırın
+/// [deleteBeyondFactor] katını aşan iletiler tamamen silinir; limit ile
+/// bu üst eşik arasında kalanlar sadece cihaza inmiş eklerini kaybeder
+/// (bkz. `MailRepository.trimMailbox`) — sabitlenmiş, taslak veya
+/// gönderilmeyi bekleyen iletiler bu kurallardan HİÇBİR ZAMAN etkilenmez.
+abstract final class RetentionPolicy {
+  static const int defaultLimit = 500;
+  static const int step = 500;
+  static const int deleteBeyondFactor = 2;
+}
+
 /// E-posta adresi + görünen ad.
 class EmailAddress {
   const EmailAddress({required this.email, this.name});
@@ -237,8 +251,18 @@ class FetchedEnvelope {
   bool get isDraft => flags.contains(r'\Draft');
   bool get isDeleted => flags.contains(r'\Deleted');
 
-  /// `\` ile başlamayan bayraklar kullanıcı etiketleridir.
-  List<String> get keywords => flags.where((f) => !f.startsWith(r'\')).toList();
+  /// `$Forwarded` — standart olmayan ama yaygın kabul gören iletme
+  /// göstergesi (RFC 5788). IMAP anahtar kelimeleri büyük/küçük harfe
+  /// duyarsızdır, bu yüzden karşılaştırma katlanarak yapılır.
+  bool get isForwarded =>
+      flags.any((f) => f.toLowerCase() == r'$forwarded');
+
+  /// `\` ile başlamayan ve `$Forwarded` olmayan bayraklar kullanıcı
+  /// etiketleridir — `$Forwarded` bir kullanıcı etiketi değil, iletme
+  /// durumu göstergesidir ve etiket listesinde görünmemelidir.
+  List<String> get keywords => flags
+      .where((f) => !f.startsWith(r'\') && f.toLowerCase() != r'$forwarded')
+      .toList();
 }
 
 /// Sunucudan çekilen ileti gövdesi.

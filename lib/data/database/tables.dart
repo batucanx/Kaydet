@@ -19,6 +19,8 @@ class Accounts extends Table {
   IntColumn get smtpSecurity =>
       intEnum<SocketSecurity>().withDefault(const Constant(2))();
 
+  /// Kullanılmıyor — [Signatures] tablosu yerini aldı (bkz. v3→v4 göçü).
+  /// Sütun eski satırlarla geriye dönük uyumluluk için duruyor, silinmiyor.
   TextColumn get signature => text().nullable()();
   IntColumn get colorSeed => integer().withDefault(const Constant(0))();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
@@ -30,16 +32,14 @@ class Accounts extends Table {
 
   /// Sunucu özel anahtar kelime (etiket) destekliyor mu? `null` = bilinmiyor.
   BoolColumn get supportsKeywords => boolean().nullable()();
-  TextColumn get capabilitiesJson =>
-      text().withDefault(const Constant('[]'))();
+  TextColumn get capabilitiesJson => text().withDefault(const Constant('[]'))();
 
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   List<Set<Column>> get uniqueKeys => [
-        {email},
-      ];
+    {email},
+  ];
 }
 
 @DataClassName('MailboxRow')
@@ -71,10 +71,18 @@ class Mailboxes extends Table {
   BoolColumn get hasMoreOnServer =>
       boolean().withDefault(const Constant(true))();
 
+  /// Bu klasör için yerelde tutulacak toplam ileti sayısının üst sınırı
+  /// (Outlook tarzı önbellek tavanı, bkz. `RetentionPolicy`). Kullanıcı
+  /// "daha fazla göster" ile sunucudan daha eskiyi istedikçe büyür (bkz.
+  /// `SyncController.loadMore`); aşan iletiler `MailRepository.trimMailbox`
+  /// tarafından kademeli olarak temizlenir.
+  IntColumn get retentionLimit =>
+      integer().withDefault(const Constant(RetentionPolicy.defaultLimit))();
+
   @override
   List<Set<Column>> get uniqueKeys => [
-        {accountId, path},
-      ];
+    {accountId, path},
+  ];
 }
 
 @DataClassName('MessageRow')
@@ -102,8 +110,7 @@ class Messages extends Table {
   TextColumn get bccJson => text().withDefault(const Constant('[]'))();
 
   TextColumn get subject => text().withDefault(const Constant(''))();
-  TextColumn get subjectNormalized =>
-      text().withDefault(const Constant(''))();
+  TextColumn get subjectNormalized => text().withDefault(const Constant(''))();
   TextColumn get preview => text().withDefault(const Constant(''))();
 
   DateTimeColumn get dateUtc => dateTime()();
@@ -113,6 +120,12 @@ class Messages extends Table {
   BoolColumn get isAnswered => boolean().withDefault(const Constant(false))();
   BoolColumn get isDraft => boolean().withDefault(const Constant(false))();
   BoolColumn get isDeleted => boolean().withDefault(const Constant(false))();
+
+  /// IMAP `$Forwarded` anahtar kelimesi — standart bir bayrak değildir ama
+  /// yaygın istemcilerin (Thunderbird, K-9, Gmail) kullandığı fiili ortak
+  /// anahtar kelimedir (RFC 5788). `\Answered`'ın aksine sunucu desteği
+  /// garanti değildir; bkz. `MailRepository._markSourceMessage`.
+  BoolColumn get isForwarded => boolean().withDefault(const Constant(false))();
 
   BoolColumn get hasAttachments =>
       boolean().withDefault(const Constant(false))();
@@ -137,8 +150,7 @@ class MessageBodies extends Table {
       integer().references(Messages, #id, onDelete: KeyAction.cascade)();
   TextColumn get plainText => text().nullable()();
   TextColumn get html => text().nullable()();
-  DateTimeColumn get fetchedAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get fetchedAt => dateTime().withDefault(currentDateAndTime)();
 
   @override
   Set<Column> get primaryKey => {messageId};
@@ -179,8 +191,52 @@ class Labels extends Table {
 
   @override
   List<Set<Column>> get uniqueKeys => [
-        {accountId, name},
-      ];
+    {accountId, name},
+  ];
+}
+
+/// Bir hesabın imzaları — kullanıcı 1 veya daha fazla imza tanımlayabilir.
+/// Yazma ekranı açılışta [isDefault] olanı otomatik ekler; kullanıcı
+/// isterse yazarken başka birini seçip ekleyebilir (bkz. `ComposeScreen`).
+@DataClassName('SignatureRow')
+class Signatures extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get accountId =>
+      integer().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text()();
+  TextColumn get body => text().withDefault(const Constant(''))();
+
+  /// Hesap başına en fazla bir tane olabilir — bkz. kısmi tekil indeks
+  /// `idx_signatures_default` (`AppDatabase._createIndexes`).
+  BoolColumn get isDefault => boolean().withDefault(const Constant(false))();
+}
+
+/// Öğrenilen kişiler — CardDAV değil, tamamen yerel: bir adrese ileti
+/// gönderildiğinde veya Gelen Kutusu'na bir adresten ileti geldiğinde
+/// otomatik eklenir/güncellenir (bkz. `MailRepository.queueSend`,
+/// `SyncEngine._storeEnvelopes`). Yazma ekranındaki Kime/Bilgi/Gizli
+/// otomatik tamamlaması ve Kişiler sekmesi bu tabloyu kullanır.
+@DataClassName('ContactRow')
+class Contacts extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get accountId =>
+      integer().references(Accounts, #id, onDelete: KeyAction.cascade)();
+
+  /// Her zaman küçük harfle saklanır (bkz. `AppDatabase.upsertContact`) —
+  /// e-posta karşılaştırması uygulama genelinde büyük/küçük harfe duyarsız
+  /// (bkz. `EmailAddress.==`).
+  TextColumn get email => text()();
+  TextColumn get name => text().withDefault(const Constant(''))();
+
+  /// Otomatik tamamlamada sıralama için: en çok ve en son kullanılan kişi
+  /// en üstte çıkar.
+  IntColumn get timesUsed => integer().withDefault(const Constant(1))();
+  DateTimeColumn get lastUsedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {accountId, email},
+  ];
 }
 
 @DataClassName('PendingOperationRow')
@@ -190,8 +246,7 @@ class PendingOperations extends Table {
       integer().references(Accounts, #id, onDelete: KeyAction.cascade)();
   IntColumn get type => intEnum<PendingOpType>()();
   TextColumn get payloadJson => text().withDefault(const Constant('{}'))();
-  DateTimeColumn get createdAt =>
-      dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
   IntColumn get attemptCount => integer().withDefault(const Constant(0))();
   DateTimeColumn get nextAttemptAt => dateTime().nullable()();
   TextColumn get lastError => text().nullable()();

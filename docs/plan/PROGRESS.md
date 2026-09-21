@@ -83,6 +83,18 @@ davranış hatalarıdır.
   `flutter_local_notifications`, mikrofon izni `speech_to_text` üzerinden.
 - **`flutter_widget_from_html` yerine `_core`.** Tam paket webview ve
   video_player getiriyordu; yalnızca HTML render gerekiyor.
+- **Anlık bildirim ön plan servisiyle (`flutter_foreground_task`).** İlk sürümde
+  "Anlık" seçeneği yalnızca uygulama açıkken IDLE demekti; arka planda WorkManager'ın
+  15 dakikalık alt sınırı bildirimi 15–20 dk geciktiriyordu. Kalıcı bildirimli bir
+  ön plan servisi her hesabı IDLE ile sürekli dinliyor (bkz. `02-mail-motoru.md`
+  §2.10). FCM seçilmedi: IMAP sunucuları FCM'e itmez, kimlik bilgilerini tutan bir
+  ara sunucu gerektirir. `AndroidManifest`te tür `specialUse` — `dataSync`
+  Android 15'te 6 saatte kesilir. Aynı veritabanı dosyası artık aynı anda birden
+  çok isolate'ten açıldığı için bağlantıya `busy_timeout` + WAL eklendi.
+- **Bildirimde Arşivle / Sil / Yanıtla.** "Okundu işaretle" kaldırıldı (Android en
+  fazla 3 eylem gösterir). Arşivle/Sil arka plan isolate'inde işlem kuyruğuna
+  yazılıp sunucuya gönderilene dek beklenir (`MailRepository.waitForQueue`);
+  Yanıtla uygulamayı yanıt ekranında açar.
 
 ## Sonuç
 

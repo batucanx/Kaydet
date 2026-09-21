@@ -86,6 +86,10 @@ abstract class ImapService {
   Future<Result<void>> startIdle();
   Future<Result<void>> stopIdle();
 
+  /// IDLE şu an sürüyor mu? IDLE sürerken gönderilen her komut (NOOP dâhil)
+  /// onu bitirir; komutu gönderenin bunu bilmesi gerekir.
+  bool get isIdling;
+
   /// Sunucudan gelen "yeni ileti var" bildirimleri.
   Stream<void> get serverChanges;
 }
@@ -129,6 +133,9 @@ class EnoughMailImapService implements ImapService {
 
   @override
   bool get isConnected => _client?.isLoggedIn ?? false;
+
+  @override
+  bool get isIdling => _idling;
 
   em.ImapClient get _requireClient {
     final client = _client;

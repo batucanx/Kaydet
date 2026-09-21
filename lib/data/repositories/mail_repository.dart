@@ -27,6 +27,7 @@ class MailRepository {
     required MailConnection connection,
     required SyncEngine syncEngine,
     required SmtpService smtpService,
+    this.onMessagesHandled,
   }) : _db = database,
        _connection = connection,
        _sync = syncEngine,
@@ -37,6 +38,11 @@ class MailRepository {
   final SyncEngine _sync;
   final SmtpService _smtp;
 
+  /// İletiler bu cihazda "ele alındığında" (okundu işaretlendi, arşivlendi,
+  /// silindi, taşındı) çağrılır — bildirimleri kaldırmak için. Repository
+  /// bildirim eklentisini tanımaz; bağlantıyı çağıran kurar.
+  final void Function(List<int> messageIds)? onMessagesHandled;
+
   AppDatabase get database => _db;
   SyncEngine get syncEngine => _sync;
   MailConnection get connection => _connection;
@@ -45,6 +51,7 @@ class MailRepository {
   static const int maxAttempts = 5;
 
   bool _processing = false;
+  Future<void>? _activeRun;
 
   /// Kuyruğu arka planda hemen işlemeye çalışır.
   ///
@@ -80,6 +87,7 @@ class MailRepository {
         seen ? PendingOpType.markSeen : PendingOpType.markUnseen,
       );
     });
+    if (seen) onMessagesHandled?.call(messageIds);
     kickQueue(rows.first.accountId);
   }
 
@@ -144,6 +152,7 @@ class MailRepository {
       );
       await _db.deleteMessages(remote.map((r) => r.id).toList());
     });
+    onMessagesHandled?.call(remote.map((r) => r.id).toList());
     kickQueue(accountId);
   }
 
@@ -187,6 +196,7 @@ class MailRepository {
       }
       await _db.deleteMessages(rows.map((r) => r.id).toList());
     });
+    onMessagesHandled?.call(rows.map((r) => r.id).toList());
     kickQueue(rows.first.accountId);
   }
 
@@ -201,6 +211,57 @@ class MailRepository {
   /// indirilir.
   Future<int> pruneCachedBodies({Duration keep = const Duration(days: 30)}) =>
       _db.pruneOldBodies(keep: keep);
+
+  /// Outlook tarzı yerel önbellek temizliği — klasörün `retentionLimit`ini
+  /// (bkz. `RetentionPolicy`) aşan iletiler kademeli olarak küçültülür.
+  /// Sabitlenmiş/taslak/gönderilmeyi bekleyen iletiler `trimCandidateIds`
+  /// sayesinde HİÇBİR ZAMAN aday olmaz. Her senkron sonunda fırsatçı olarak
+  /// (bkz. `SyncController`) ve periyodik arka plan görevinde (bkz.
+  /// `background_sync.dart`) çağrılır — "uygulama kapanınca" gibi güvenilir
+  /// olmayan bir tetikleyiciye dayanmaz.
+  ///
+  /// Bir klasörde limit hiç aşılmamışsa (çoğu kullanıcı için çoğu zaman
+  /// böyledir) her iki sorgu da boş döner — dosya silme/DB yazma hiç
+  /// çalışmaz, maliyet indeksli bir SELECT'ten ibaret kalır.
+  Future<void> trimMailbox(int mailboxId) async {
+    final mailbox = await _db.mailboxById(mailboxId);
+    if (mailbox == null) return;
+    final limit = mailbox.retentionLimit;
+
+    // Kademe 1 (limitin hemen üzeri): sadece cihaza inmiş ekler silinir,
+    // mesaj + metin gövdesi kalır.
+    final strippable = await _db.trimCandidateIds(mailboxId, keepNewest: limit);
+    if (strippable.isNotEmpty) {
+      final localAttachments = await _db.attachmentsForMessages(strippable);
+      final clearedIds = <int>[];
+      for (final attachment in localAttachments) {
+        final path = attachment.localPath;
+        if (path == null) continue;
+        try {
+          await File(path).delete();
+        } on FileSystemException {
+          // Dosya zaten yoksa/erişilemezse DB kaydı yine de temizlenir —
+          // asıl amaç disk alanıydı, dosya zaten kaybolmuşsa iş bitmiştir.
+        }
+        clearedIds.add(attachment.id);
+      }
+      await _db.clearAttachmentPaths(clearedIds);
+    }
+
+    // Kademe 2 (limitin çok ötesi): tam satır silme — mesaj + gövde + ek +
+    // FTS girdisi (bkz. `AppDatabase.deleteMessages`). Gerekirse kullanıcı
+    // "daha fazla göster" ile sunucudan yeniden çekebilir.
+    final deletable = await _db.trimCandidateIds(
+      mailboxId,
+      keepNewest: limit * RetentionPolicy.deleteBeyondFactor,
+    );
+    if (deletable.isNotEmpty) {
+      await _db.deleteMessages(deletable);
+      // Silinen eski iletiler sunucuda durur; "daha fazla göster" onlara
+      // yeniden ulaşabilsin.
+      await _db.updateMailboxSync(mailboxId, hasMoreOnServer: true);
+    }
+  }
 
   /// Çöp kutusunu boşaltır.
   Future<void> emptyTrash(int accountId) async {
@@ -459,6 +520,8 @@ class MailRepository {
     int? replyToMessageId,
     String? inReplyTo,
     String? references,
+    bool markSourceAnswered = false,
+    bool markSourceForwarded = false,
   }) async {
     final id = await saveDraft(
       accountId: accountId,
@@ -504,8 +567,108 @@ class MailRepository {
           payloadJson: Value(jsonEncode({'messageId': id})),
         ),
       );
+
+      if (replyToMessageId != null &&
+          (markSourceAnswered || markSourceForwarded)) {
+        await _markSourceMessage(
+          replyToMessageId,
+          answered: markSourceAnswered,
+          forwarded: markSourceForwarded,
+        );
+      }
     });
+
+    // Kişi öğrenme kritik yola dahil değil: gönderim zaten kuyruğa girdi,
+    // burada bir aksaklık en kötü ihtimalle bir sonraki yazmada otomatik
+    // tamamlamada bu adresin eksik kalması demektir — gönderimi etkilemez.
+    try {
+      await _captureContacts(accountId, [to, cc, bcc]);
+    } on Object catch (_) {
+      // Gönderim zaten kuyrukta; kişi kaydı başarısız olursa istisna
+      // yukarı taşınıp kullanıcıya "gönderilemedi" gösterilmemeli (yeniden
+      // gönderim ileti çiftlenmesine yol açardı).
+    }
     return id;
+  }
+
+  /// Bir iletinin gönderim durumunu izler; ileti silinirse `null` yayınlar.
+  ///
+  /// Yazma ekranı kapandıktan sonra gönderimin sonucunu kullanıcıya bildirmek
+  /// için kullanılır (bkz. `SendFeedback`): gönderim arka planda ve bazen
+  /// dakikalar sonra tamamlanır.
+  Stream<OutboxState?> watchOutboxState(int messageId) => _db
+      .watchMessageById(messageId)
+      .map((message) => message?.outboxState)
+      .distinct();
+
+  /// Alıcıları yerel kişi defterine ekler/günceller (bkz.
+  /// `AppDatabase.upsertContact`) — yazma ekranındaki otomatik tamamlama ve
+  /// Kişiler sekmesi bu şekilde beslenir. Sunucudan gelen iletilerin
+  /// göndericisi ise `SyncEngine` tarafından ayrıca yakalanır.
+  Future<void> _captureContacts(
+    int accountId,
+    List<String> rawAddressLists,
+  ) async {
+    final byEmail = <String, EmailAddress>{};
+    for (final raw in rawAddressLists) {
+      for (final address in EmailAddress.parseInput(raw)) {
+        if (!address.isValid) continue;
+        byEmail[address.email.toLowerCase()] = address;
+      }
+    }
+    for (final address in byEmail.values) {
+      await _db.upsertContact(
+        accountId: accountId,
+        email: address.email,
+        name: address.name,
+      );
+    }
+  }
+
+  /// Yanıtlanan/iletilen kaynak iletiyi işaretler.
+  ///
+  /// Gmail/Outlook'taki gibi yanıt/iletme oku "Gönder"e basılır basılmaz
+  /// görünür; diğer bayraklarla aynı iyimser desen (bkz. [setFlagged]) —
+  /// gerçek teslimatı beklemez, kalıcı gönderim hatasında bile işaret kalır.
+  /// `\Answered` standart bir IMAP bayrağıdır ve her sunucuda desteklenir;
+  /// `$Forwarded` yaygın ama standart dışı bir anahtar kelimedir, bu yüzden
+  /// [setLabel]'daki gibi yalnızca sunucu özel anahtar kelime destekliyorsa
+  /// sunucuya gönderilir — desteklenmese de yerel işaret her zaman kalır.
+  Future<void> _markSourceMessage(
+    int sourceId, {
+    required bool answered,
+    required bool forwarded,
+  }) async {
+    final row = await _db.messageById(sourceId);
+    if (row == null) return;
+
+    await _db.updateMessage(
+      sourceId,
+      MessagesCompanion(
+        isAnswered: answered ? const Value(true) : const Value.absent(),
+        isForwarded: forwarded ? const Value(true) : const Value.absent(),
+      ),
+    );
+
+    if (row.uid == null) return; // yerel taslak, sunucuda karşılığı yok
+
+    if (answered) {
+      await _enqueueByMailbox(
+        [row],
+        PendingOpType.addKeyword,
+        extra: {'keyword': r'\Answered'},
+      );
+    }
+    if (forwarded) {
+      final account = await _db.accountById(row.accountId);
+      if (account?.supportsKeywords == true) {
+        await _enqueueByMailbox(
+          [row],
+          PendingOpType.addKeyword,
+          extra: {'keyword': r'$Forwarded'},
+        );
+      }
+    }
   }
 
   // ------------------------------------------------------------ kuyruk
@@ -521,6 +684,8 @@ class MailRepository {
   Future<void> processQueue(int accountId) async {
     if (_processing) return;
     _processing = true;
+    final finished = Completer<void>();
+    _activeRun = finished.future;
     try {
       final operations = await _db.claimDueOperations(accountId);
       if (operations.isEmpty) return;
@@ -542,7 +707,22 @@ class MailRepository {
       }
     } finally {
       _processing = false;
+      _activeRun = null;
+      finished.complete();
     }
+  }
+
+  /// [kickQueue]'nun başlattığı tur bitene kadar bekler.
+  ///
+  /// Arka plan isolate'leri (bildirim eylemleri, periyodik görev) işlem
+  /// kuyruğa alındıktan hemen sonra veritabanını ve bağlantıyı kapatır;
+  /// bekletilmeyen bir tur yarıda kesilir ve işlem bir sonraki eşitlemeye
+  /// kalır. `_processing` bayrağı olduğu için ikinci bir `processQueue`
+  /// çağrısı çalışan turu beklemez, hemen döner — bu yüzden ayrı bir bekleme
+  /// noktası gerekir.
+  Future<void> waitForQueue() async {
+    final run = _activeRun;
+    if (run != null) await run;
   }
 
   Future<void> _handleFailure(

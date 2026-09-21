@@ -73,99 +73,48 @@ Future<bool> deleteWithConfirmation(
   return true;
 }
 
-/// Yazma ekranı, içerikli bir taslağı sormadan otomatik kaydedip geri
-/// döndüğünde çağrılır (bkz. `ComposeScreen._saveDraftOnExit`). Ekranın
-/// altında kısa bir bildirim gösterir; kullanıcı pişman olursa yanındaki
-/// "Sil" eylemiyle taslağı geri alabilir.
-void showDraftSavedSnackBar(BuildContext context, WidgetRef ref, int draftId) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(
-      content: const Text('İleti Taslaklara kaydedildi.'),
-      action: SnackBarAction(
-        label: 'Sil',
-        textColor: context.tokens.danger,
-        onPressed: () => _confirmDeleteAutosavedDraft(context, ref, draftId),
+/// "Taşı" popup'ının menü öğeleri — bkz. bellek: kısa seçim listeleri tam
+/// ekranı kaplayan bir alttan panel yerine anında açılan bir popup'ta.
+List<Widget> folderMenuItems(
+  WidgetRef ref,
+  ValueChanged<SpecialUse> onSelected,
+) {
+  final mailboxes = ref.read(mailboxesProvider).value ?? const <MailboxRow>[];
+  return [
+    for (final box in mailboxes.where((m) => m.isSelectable))
+      MenuItemButton(
+        leadingIcon: Icon(folderIcon(box.specialUse), size: IconSize.sm),
+        onPressed: () => onSelected(box.specialUse),
+        child: Text(box.name),
       ),
-    ),
-  );
+  ];
 }
 
-/// Taslaklar sunucuya hiç gitmemiştir (bkz. `deleteWithConfirmation`), bu
-/// yüzden bu silme de kalıcıdır ve ayrı bir onay ister.
-Future<void> _confirmDeleteAutosavedDraft(
+/// "Etiket" popup'ının menü öğeleri.
+List<Widget> labelMenuItems(
   BuildContext context,
   WidgetRef ref,
-  int draftId,
-) async {
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (context) => AlertDialog(
-      title: const Text('Taslağı silmek istediğinize emin misiniz?'),
-      actionsAlignment: MainAxisAlignment.center,
-      actions: [
-        DialogActions(
-          cancelLabel: 'Hayır',
-          onCancel: () => Navigator.of(context).pop(false),
-          confirmLabel: 'Evet',
-          onConfirm: () => Navigator.of(context).pop(true),
-          destructive: true,
-        ),
-      ],
-    ),
-  );
-  if (confirmed != true) return;
-  await ref.read(mailRepositoryProvider).deletePermanently([draftId]);
-}
-
-/// Klasör seçim sayfası.
-Future<SpecialUse?> showFolderPicker(BuildContext context, WidgetRef ref) {
-  final mailboxes = ref.read(mailboxesProvider).value ?? const <MailboxRow>[];
-  return showModalBottomSheet<SpecialUse>(
-    context: context,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SectionHeader('KLASÖRE TAŞI'),
-          for (final box in mailboxes.where((m) => m.isSelectable))
-            ListTile(
-              leading: Icon(folderIcon(box.specialUse), size: IconSize.md),
-              title: Text(box.name),
-              onTap: () => Navigator.of(context).pop(box.specialUse),
-            ),
-          const SizedBox(height: Space.sm),
-        ],
-      ),
-    ),
-  );
-}
-
-/// Etiket seçim sayfası.
-Future<String?> showLabelPicker(BuildContext context, WidgetRef ref) {
+  ValueChanged<String> onSelected,
+) {
+  final t = context.tokens;
   final labels = ref.read(labelsProvider).value ?? const <LabelRow>[];
-  return showModalBottomSheet<String>(
-    context: context,
-    builder: (context) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SectionHeader('ETİKET EKLE'),
-          if (labels.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(Space.xxl),
-              child: Text('Henüz etiket yok. Ayarlar\'dan ekleyebilirsiniz.'),
-            ),
-          for (final label in labels)
-            ListTile(
-              leading: LabelChip(name: label.name, toneIndex: label.toneIndex),
-              title: const SizedBox.shrink(),
-              onTap: () => Navigator.of(context).pop(label.name),
-            ),
-          const SizedBox(height: Space.sm),
-        ],
+  if (labels.isEmpty) {
+    return const [
+      MenuItemButton(onPressed: null, child: Text('Henüz etiket yok')),
+    ];
+  }
+  return [
+    for (final label in labels)
+      MenuItemButton(
+        leadingIcon: Icon(
+          LucideIcons.tag,
+          size: IconSize.sm,
+          color: t.toneAt(label.toneIndex).foreground,
+        ),
+        onPressed: () => onSelected(label.name),
+        child: Text(label.name),
       ),
-    ),
-  );
+  ];
 }
 
 /// Klasör türüne göre ikon.

@@ -7,6 +7,7 @@ import '../../../app/providers.dart';
 import '../../../core/result.dart';
 import '../../../data/repositories/account_repository.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 
 /// Giriş ekranı.
@@ -167,7 +168,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       'Kaydet',
                       textAlign: TextAlign.center,
                       style: text.titleLarge?.copyWith(
-                        fontSize: 32,
+                        fontSize: 32 * AppText.scale,
                         letterSpacing: -1,
                         fontWeight: FontWeight.w700,
                       ),

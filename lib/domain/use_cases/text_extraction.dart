@@ -130,71 +130,45 @@ abstract final class TextExtraction {
       .map((line) => line.isEmpty ? '>' : '> $line')
       .join('\n');
 
-  /// Uzak görsel içeren HTML mi? (gizlilik uyarısı için)
+  /// E-posta kendi koyu temasını da getiriyor mu?
   ///
-  /// Klasik `<img src="https://...">` dışında `srcset` ve CSS
-  /// `background(-image):url(...)` üzerinden yüklenen, `//` ile başlayan
-  /// protokolsüz adresler dahil tüm uzak kaynaklar taranır — izleme
-  /// pikselleri bu yollarla da gizlenebilir.
-  static bool hasRemoteImages(String html) => _remoteSource.hasMatch(html);
+  /// `@media (prefers-color-scheme: dark)` içeren e-postalar (Apple Mail'e
+  /// uyumlu modern şablonlar, sistem bildirimleri) koyu tasarımlarını kendileri
+  /// taşır; bunlara ayrıca renk dönüşümü uygulamak tasarımcının paletini
+  /// bozardı (bkz. `assets/web/mail_render.js`).
+  static bool supportsDarkScheme(String html) => _prefersDark.hasMatch(html);
 
-  static final RegExp _remoteSource = RegExp(
-    r'''(?:src|srcset)\s*=\s*["']?\s*(?:https?:)?//'''
-    r'''|url\(\s*["']?\s*(?:https?:)?//''',
+  static final RegExp _prefersDark = RegExp(
+    r'prefers-color-scheme\s*:\s*dark',
     caseSensitive: false,
   );
 
-  /// Uzak görselleri, `srcset`'leri ve CSS arka plan görsellerini kaldırır.
+  /// `prefers-color-scheme` medya sorgularını uygulamanın temasına sabitler.
   ///
-  /// Kullanıcı açıkça "görselleri göster" demedikçe uzak kaynaklar
-  /// yüklenmez; aksi hâlde gönderen mailin okunduğunu anlar.
-  static String stripRemoteImages(String html) {
-    final withoutAttrs = html.replaceAllMapped(
-      RegExp(
-        r'''(src|srcset)(\s*=\s*)(["'])(?:https?:)?//[^"']*\3''',
-        caseSensitive: false,
-      ),
-      (m) => 'data-blocked-${m.group(1)!.toLowerCase()}="1"',
-    );
-    return withoutAttrs.replaceAllMapped(
-      RegExp(
-        r'''url\(\s*["']?(?:https?:)?//[^)"' ]*["']?\s*\)''',
-        caseSensitive: false,
-      ),
-      (_) => 'none',
-    );
-  }
+  /// WebView bu sorguyu telefonun SİSTEM temasına göre değerlendirir; oysa
+  /// Kaydet'in kendi tema tercihi var (sistem / açık / koyu / Outlook Koyu).
+  /// Uygulama koyu ama telefon açıkken (ya da tersi) e-postanın koyu stilleri
+  /// yanlış tarafta devreye girerdi. Sorgu uygulamanın temasıyla eşleşiyorsa
+  /// her zaman doğru (`min-width: 0px`), eşleşmiyorsa her zaman yanlış
+  /// (`max-width: 0px`) yapılır; medya sorgusunun geri kalanı (`and`, `not`,
+  /// virgüllü listeler) olduğu gibi korunur.
+  static String resolveColorSchemeQueries(String html, {required bool dark}) =>
+      html.replaceAllMapped(_colorSchemeQuery, (m) {
+        final wantsDark = m.group(1)!.toLowerCase() == 'dark';
+        return wantsDark == dark ? '(min-width: 0px)' : '(max-width: 0px)';
+      });
 
-  /// Masaüstü odaklı e-postalarda sık görülen sabit piksel genişliklerini
-  /// (`style="width:600px"`, `min-width:480px` gibi) CSS'ten temizler.
-  ///
-  /// Bu tür e-postalar (fatura/makbuz şablonları, pazarlama bültenleri) çoğu
-  /// zaman 500-600px'lik sabit sütunlarla tasarlanır. WebView bunu render
-  /// etmekte teknik olarak zorlanmaz (gerçek tarayıcı motoru), ama viewport
-  /// telefon genişliğine sabitlenince (`width=device-width`) içerik kendi
-  /// masaüstü ölçeğinde kalır — kullanıcı her açılışta elle uzaklaştırıp
-  /// yatay kaydırmak zorunda kalır. Eşiğin altındaki küçük, kasıtlı
-  /// genişlikler (rozet, ikon vb.) dokunulmadan kalır; yalnızca ekrana
-  /// sığmayacak kadar büyük olanlar kaldırılır ki öğe doğal/esnek
-  /// genişliğine dönüp ekrana sığsın.
-  static String stripWideFixedWidths(String html, {int thresholdPx = 400}) =>
-      html.replaceAllMapped(
-        RegExp(
-          r'(min-width|width)\s*:\s*(\d+)(?:\.\d+)?px\s*;?',
-          caseSensitive: false,
-        ),
-        (m) {
-          final px = int.tryParse(m.group(2) ?? '');
-          return (px != null && px > thresholdPx) ? '' : m.group(0)!;
-        },
-      );
+  static final RegExp _colorSchemeQuery = RegExp(
+    r'\(\s*prefers-color-scheme\s*:\s*(dark|light)\s*\)',
+    caseSensitive: false,
+  );
 
   /// Kaynak e-postanın kendi `<meta name="viewport">` etiketini kaldırır.
   ///
   /// Bülten/kampanya e-postaları (Mailchimp, SendGrid vb. üretici araçlarla
   /// hazırlanmış) genellikle tam başlı-sonlu birer HTML belgesidir — kendi
   /// `<html><head>` bloğunda kendi viewport meta etiketini de taşırlar. Bu
-  /// ham içerik `_HtmlWebView._wrapDocument`'ın gövdesine olduğu gibi
+  /// ham içerik `MailHtmlDocument.build`in gövdesine olduğu gibi
   /// gömülünce, HTML5 ayrıştırma kuralları gereği gövde içinde rastlanan
   /// `<meta>` etiketleri gerçek `<head>`'e taşınır ve bizim enjekte
   /// ettiğimiz etiketten SONRA gelir. Bir belgede birden çok viewport

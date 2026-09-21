@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 
 import '../../core/avatar.dart';
@@ -256,7 +258,6 @@ class AccountRepository {
       authMethod: Value(authMethod),
       colorSeed: Value(AvatarHash.hash32(email)),
       isActive: const Value(false),
-      signature: Value('\n\n--\n$displayName\nKaydet ile gönderildi'),
     );
 
     final int accountId;
@@ -266,6 +267,7 @@ class AccountRepository {
     } else {
       accountId = await _db.insertAccount(companion);
       await _seedDefaultLabels(accountId);
+      await _seedDefaultSignature(accountId, displayName);
     }
 
     try {
@@ -286,18 +288,31 @@ class AccountRepository {
 
   /// Hesaplar arasında geçiş yapar: hedef etkinleşir, diğerleri pasifleşir.
   ///
-  /// Önceki hesabın IMAP bağlantısı kapatılır; aksi hâlde eski oturum canlı
-  /// kalır ve yeni hesabın senkronizasyonuyla çakışabilir. Etkinleştirme tek
-  /// işlemde yapılır (bkz. `AppDatabase.activateAccount`) — aksi hâlde
-  /// aradaki "hiçbir hesap etkin değil" anı uygulama kökünü anlık olarak
-  /// Giriş ekranına düşürür.
+  /// Etkinleştirme ÖNCE, ağ bağlantısı kapatma SONRA yapılır. Arayüzün tümü
+  /// (`accountIdProvider` ve ona bağlı klasör/liste akışları) bu satırın
+  /// tamamlanmasını bekler; eski sırada burası önce eski IMAP soketinin
+  /// ağdan kapanmasını (`_disconnectTimeout`'a kadar) beklediği için hesap
+  /// değiştirme Outlook'un aksine gözle görülür biçimde donuyordu — yeni
+  /// hesabın verisi zaten yerelde olsa bile ekran hiçbir şey göstermeden
+  /// bekliyordu. Şimdi yerel etkinleştirme anında olur, eski bağlantının
+  /// kapanması arka planda sessizce sürer (`EnoughMailImapService`'in kendi
+  /// kilidi `connect`/`disconnect`'i zaten sıraya koyduğundan, bu arada
+  /// başlayacak yeni senkronizasyonun bağlanma çağrısıyla çakışmaz).
+  ///
+  /// Etkinleştirme tek işlemde yapılır (bkz. `AppDatabase.activateAccount`)
+  /// — aksi hâlde aradaki "hiçbir hesap etkin değil" anı uygulama kökünü
+  /// anlık olarak Giriş ekranına düşürür.
   Future<void> switchAccount(int accountId) async {
+    await _db.activateAccount(accountId);
+    unawaited(_disconnectPrevious());
+  }
+
+  Future<void> _disconnectPrevious() async {
     try {
       await _connection.disconnect().timeout(_disconnectTimeout);
     } on Object catch (_) {
-      // Bağlantı kapanmasa da geçiş sürmeli.
+      // Bağlantı kapanmasa da sorun değil; yeni hesap zaten etkin.
     }
-    await _db.activateAccount(accountId);
   }
 
   Future<void> _seedDefaultLabels(int accountId) async {
@@ -333,12 +348,60 @@ class AccountRepository {
 
   Future<void> deleteLabel(int labelId) => _db.deleteLabel(labelId);
 
-  /// İmzayı günceller.
-  Future<void> updateSignature(int accountId, String signature) =>
-      _db.updateAccountFields(
-        accountId,
-        AccountsCompanion(signature: Value(signature)),
+  Future<void> _seedDefaultSignature(int accountId, String displayName) =>
+      _db.insertSignature(
+        SignaturesCompanion.insert(
+          accountId: accountId,
+          name: 'İmza 1',
+          body: Value('\n\n--\n$displayName\nKaydet ile gönderildi'),
+          isDefault: const Value(true),
+        ),
       );
+
+  /// Yeni imza oluşturur. Hesabın ilk imzasıysa otomatik varsayılan olur —
+  /// aksi hâlde kullanıcı bir imza ekleyip onu hiç varsayılan yapmadan
+  /// yazma ekranına girerse hiçbir imza otomatik eklenmez, bu şaşırtıcı olur.
+  Future<void> createSignature({
+    required int accountId,
+    required String name,
+    required String body,
+  }) async {
+    final hasAny = (await _db.signaturesOf(accountId)).isNotEmpty;
+    await _db.insertSignature(
+      SignaturesCompanion.insert(
+        accountId: accountId,
+        name: name,
+        body: Value(body),
+        isDefault: Value(!hasAny),
+      ),
+    );
+  }
+
+  Future<void> updateSignatureContent({
+    required int signatureId,
+    required String name,
+    required String body,
+  }) => _db.updateSignatureRow(
+    signatureId,
+    SignaturesCompanion(name: Value(name), body: Value(body)),
+  );
+
+  Future<void> deleteSignature(int signatureId) =>
+      _db.deleteSignature(signatureId);
+
+  Future<void> setDefaultSignature(int accountId, int signatureId) =>
+      _db.setDefaultSignature(accountId, signatureId);
+
+  /// Kişiyi elle ekler/günceller — otomatik yakalamayla aynı yol
+  /// (bkz. `AppDatabase.upsertContact`), Kişiler sekmesinin "+" düğmesi
+  /// için.
+  Future<void> createContact({
+    required int accountId,
+    required String email,
+    required String name,
+  }) => _db.upsertContact(accountId: accountId, email: email, name: name);
+
+  Future<void> deleteContact(int contactId) => _db.deleteContact(contactId);
 
   Future<void> updateDisplayName(int accountId, String displayName) =>
       _db.updateAccountFields(

@@ -8,6 +8,7 @@ import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
 import '../data/repositories/sync_engine.dart';
 import 'providers.dart';
+import 'push_service.dart';
 
 /// Eşitleme durumu — arayüzdeki göstergeleri besler.
 class SyncState {
@@ -69,7 +70,14 @@ class SyncController extends Notifier<SyncState> {
         // girişte eski hata afişi ekranda kalır.
         _stopWatching();
         _bootstrapped = false;
-        state = const SyncState();
+        // Bu dinleyici, duraklatılmış bir `Consumer` aboneliği devam ederken
+        // (ör. üstü örtülen ekran yeniden görününce) widget ağacı KURULURKEN
+        // tetiklenebilir; o aşamada bir sağlayıcıyı değiştirmek Riverpod'da
+        // hatadır. Sıfırlama bir sonraki mikro göreve ertelenir.
+        scheduleMicrotask(() {
+          if (!ref.mounted || ref.read(accountIdProvider) != null) return;
+          state = const SyncState();
+        });
         return;
       }
       if (previous != next) {
@@ -163,6 +171,16 @@ class SyncController extends Notifier<SyncState> {
 
       // Önizleme metinleri için gövdeleri arka planda indir.
       unawaited(engine.prefetchBodies(accountId: accountId, mailbox: inbox.first));
+
+      // Yerel önbellek tavanını aşan eski iletiler kademeli temizlenir
+      // (bkz. `MailRepository.trimMailbox`) — arka planda, ekranı bloklamaz.
+      _fireAndForget(
+        ref.read(mailRepositoryProvider).trimMailbox(inbox.first.id),
+      );
+
+      _fireAndForget(
+        _maybeNotify(inbox.first, (outcome as Ok<SyncOutcome>).value),
+      );
     } finally {
       _running = false;
       state = state.copyWith(isSyncing: false);
@@ -199,6 +217,12 @@ class SyncController extends Notifier<SyncState> {
       state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
       await ref.read(mailRepositoryProvider).processQueue(accountId);
       unawaited(engine.prefetchBodies(accountId: accountId, mailbox: mailbox));
+
+      // Yerel önbellek tavanını aşan eski iletiler kademeli temizlenir
+      // (bkz. `MailRepository.trimMailbox`) — arka planda, ekranı bloklamaz.
+      _fireAndForget(ref.read(mailRepositoryProvider).trimMailbox(mailbox.id));
+
+      _fireAndForget(_maybeNotify(mailbox, (outcome as Ok<SyncOutcome>).value));
     } finally {
       _running = false;
       state = state.copyWith(isSyncing: false);
@@ -216,21 +240,37 @@ class SyncController extends Notifier<SyncState> {
     final mailbox = ref.read(currentMailboxProvider);
     if (accountId == null || mailbox == null) return;
 
-    final shown = ref.read(messageListProvider).value?.length ?? 0;
-    final limit = ref.read(pageLimitProvider);
-    if (shown >= limit) {
-      ref.read(pageLimitProvider.notifier).grow();
-      final total = await ref.read(databaseProvider).countMessages(mailbox.id);
-      if (limit + PageLimitNotifier.step <= total) return;
-    }
-
-    if (!mailbox.hasMoreOnServer) {
-      state = state.copyWith(hasMore: false);
-      return;
-    }
-
+    // `isLoadingMore` en baştan, İLK `await`'ten ÖNCE açılır — yerel
+    // önbellekten (aşağıdaki hızlı yol) karşılanan istekler de dahil.
+    // Aksi hâlde bu bayrak yalnızca sunucudan sayfa çekilen yolda
+    // açılıyordu: önbellekte zaten yeterince ileti varsa (genelde öyle,
+    // saklama sınırı gösterilen sayfa sınırından yüksek tutulur) fonksiyon
+    // "Yükleniyor…" hiç görünmeden anında dönüyordu — hem görsel geri
+    // bildirim eksik kalıyor hem de üstteki koruma
+    // (`if (state.isLoadingMore) return;`) bu bekleme sırasında devre dışı
+    // kalıp art arda hızlı dokunuşların yarışa girmesine izin veriyordu.
     state = state.copyWith(isLoadingMore: true);
     try {
+      final shown = ref.read(messageListProvider).value?.length ?? 0;
+      final limit = ref.read(pageLimitProvider);
+      if (shown >= limit) {
+        ref.read(pageLimitProvider.notifier).grow();
+        final total = await ref
+            .read(databaseProvider)
+            .countMessages(mailbox.id);
+        if (limit + PageLimitNotifier.step <= total) return;
+      }
+
+      if (!mailbox.hasMoreOnServer) {
+        state = state.copyWith(hasMore: false);
+        return;
+      }
+
+      // Yerelde gösterilecek her şey tükendi, sunucudan daha eskisi
+      // isteniyor — klasörün yerel tavanı da büyütülür; aksi hâlde
+      // `trimMailbox` birazdan indirilecek bu eski iletileri bir sonraki
+      // senkronda hemen geri silerdi (bkz. `RetentionPolicy`).
+      await ref.read(databaseProvider).raiseRetentionLimit(mailbox.id);
       final result = await ref.read(syncEngineProvider).loadOlder(
             accountId: accountId,
             mailbox: mailbox,
@@ -246,11 +286,60 @@ class SyncController extends Notifier<SyncState> {
     }
   }
 
-  /// Uygulama önplandayken IMAP IDLE ile anlık bildirim alınır.
+  /// Sonucu beklenmeyen yardımcı işler: hata yakalanır, yakalanmamış asenkron
+  /// hataya dönüşmez (bildirim eklentisi, dosya sistemi, kilitli veritabanı).
+  void _fireAndForget(Future<void> work) {
+    unawaited(work.catchError((Object _) {}));
+  }
+
+  /// Ön planda yeni ileti geldiğinde bildirim gösterir — yalnızca Gelen
+  /// Kutusu'nda ve kullanıcı o an tam da o klasörün listesine bakmıyorsa
+  /// (bkz. bellek: farklı klasördeyken/ekrandayken bildir kararı). Aksi
+  /// hâlde ileti zaten canlı olarak listede görünür, bildirim gereksiz
+  /// gürültü olur.
+  Future<void> _maybeNotify(MailboxRow mailbox, SyncOutcome outcome) async {
+    if (mailbox.specialUse != SpecialUse.inbox) return;
+    if (outcome.initialDownload || outcome.newMessageIds.isEmpty) return;
+    if (!ref.read(settingsProvider).notificationsEnabled) return;
+
+    final viewingThisInbox = ref.read(activeTabProvider) == 0 &&
+        ref.read(currentMailboxProvider)?.id == mailbox.id;
+    if (viewingThisInbox) return;
+
+    final accountId = ref.read(accountIdProvider);
+    if (accountId == null) return;
+
+    // Bildirim yalnızca zarf alanlarını (gönderen/konu) ve varsa önizlemeyi
+    // kullanır; gövde beklenmez — `prefetchBodies` arka planda sürer.
+    await ref
+        .read(newMailNotifierProvider)
+        .notifyNew(accountId: accountId, outcome: outcome);
+  }
+
+  /// Ön plan servisi (bkz. `PushService`) çalışıyor mu?
+  Future<bool> _pushServiceRunning() async {
+    try {
+      return await PushService.isRunning;
+    } on Object catch (_) {
+      return false;
+    }
+  }
+
+  /// Uygulama önplandayken IMAP IDLE ile anlık güncelleme alınır.
   ///
   /// RFC 2177 gereği IDLE en geç 29 dakikada bir yenilenmelidir.
+  ///
+  /// "Anlık" modda ön plan servisi TÜM hesapların Gelen Kutusu'nu zaten
+  /// dinler; arayüz o kutu için ikinci bir IDLE açmaz — iki isolate aynı
+  /// kutuyu aynı anda eşitleyip aynı iletiyi iki kez işlemesin. Servisin
+  /// yazdıkları `PushController` aracılığıyla listeye yansır. Diğer klasörler
+  /// (Giden, özel klasörler) servis tarafından izlenmez; oralarda IDLE sürer.
   Future<void> _restartIdle() async {
     _idleRefresh?.cancel();
+    final viewingInbox =
+        ref.read(currentMailboxProvider)?.specialUse == SpecialUse.inbox;
+    if (viewingInbox && await _pushServiceRunning()) return;
+
     final connection = ref.read(mailConnectionProvider);
     if (!connection.isConnected || !connection.capabilities.supportsIdle) {
       return;

@@ -286,13 +286,27 @@ class FakeImapService implements ImapService {
   }
 
   @override
-  Future<Result<void>> noop() async => okVoid;
+  Future<Result<void>> noop() async {
+    commandLog.add('noop');
+    return okVoid;
+  }
+
+  bool _idling = false;
 
   @override
-  Future<Result<void>> startIdle() async => okVoid;
+  bool get isIdling => _idling;
 
   @override
-  Future<Result<void>> stopIdle() async => okVoid;
+  Future<Result<void>> startIdle() async {
+    _idling = true;
+    return okVoid;
+  }
+
+  @override
+  Future<Result<void>> stopIdle() async {
+    _idling = false;
+    return okVoid;
+  }
 
   /// Sunucudan yeni ileti geldiğini bildirir (IDLE benzetimi).
   void notifyChange() => _changes.add(null);

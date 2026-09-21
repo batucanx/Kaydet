@@ -5,11 +5,19 @@ import 'tokens.dart';
 
 /// Tipografi rolleri — `docs/plan/04-tasarim-sistemi.md` §4.5
 abstract final class AppText {
-  static const String family = 'Inter';
+  static const String family = 'Satoshi';
+
+  /// Tüm yazı boyutlarının ortak çarpanı — kullanıcı isteğiyle uygulama
+  /// genelinde bir miktar büyütüldü. Aşağıdaki rol boyutları tasarım
+  /// belgesindeki özgün değerleriyle yazılıdır; bütün ölçeği tek yerden
+  /// ayarlamak için yalnızca bu sabit değiştirilir. Rollerin dışında elle
+  /// yazılan `fontSize` değerleri de aynı çarpana bağlıdır (`N * AppText.scale`).
+  /// Satır aralıkları oran (`height`) olarak verildiğinden birlikte ölçeklenir.
+  static const double scale = 1.1;
 
   static const TextStyle titleLarge = TextStyle(
     fontFamily: family,
-    fontSize: 18,
+    fontSize: 18 * scale,
     height: 24 / 18,
     fontWeight: FontWeight.w700,
     letterSpacing: -0.2,
@@ -17,7 +25,7 @@ abstract final class AppText {
 
   static const TextStyle titleMedium = TextStyle(
     fontFamily: family,
-    fontSize: 15,
+    fontSize: 15 * scale,
     height: 20 / 15,
     fontWeight: FontWeight.w600,
   );
@@ -26,71 +34,73 @@ abstract final class AppText {
   /// ferah satır aralığıyla (1.5).
   static const TextStyle bodyLarge = TextStyle(
     fontFamily: family,
-    fontSize: 16,
+    fontSize: 16 * scale,
     height: 1.5,
     fontWeight: FontWeight.w400,
   );
 
   static const TextStyle bodyMedium = TextStyle(
     fontFamily: family,
-    fontSize: 13,
+    fontSize: 13 * scale,
     height: 18 / 13,
     fontWeight: FontWeight.w400,
   );
 
-  // Liste satırları — Outlook'un ferah gelen kutusu ölçeğiyle eşleşir.
+  // Liste satırları — kullanıcı isteğiyle sıkılaştırıldı: tek ekranda daha
+  // fazla ileti görünsün diye Outlook'un "ferah" ölçeğinden küçültüldü
+  // (bkz. `Dimens.listRowMinHeight`'daki eşleşen satır yüksekliği).
   static const TextStyle listSenderRead = TextStyle(
     fontFamily: family,
-    fontSize: 16,
-    height: 20 / 16,
+    fontSize: 14 * scale,
+    height: 18 / 14,
     fontWeight: FontWeight.w500,
   );
 
   static const TextStyle listSenderUnread = TextStyle(
     fontFamily: family,
-    fontSize: 16,
-    height: 20 / 16,
+    fontSize: 14 * scale,
+    height: 18 / 14,
     fontWeight: FontWeight.w700,
   );
 
   static const TextStyle listSubjectRead = TextStyle(
     fontFamily: family,
-    fontSize: 15,
-    height: 20 / 15,
+    fontSize: 13 * scale,
+    height: 18 / 13,
     fontWeight: FontWeight.w400,
   );
 
   static const TextStyle listSubjectUnread = TextStyle(
     fontFamily: family,
-    fontSize: 15,
-    height: 20 / 15,
+    fontSize: 13 * scale,
+    height: 18 / 13,
     fontWeight: FontWeight.w600,
   );
 
   static const TextStyle listPreview = TextStyle(
     fontFamily: family,
-    fontSize: 14,
-    height: 18 / 14,
+    fontSize: 12 * scale,
+    height: 16 / 12,
     fontWeight: FontWeight.w400,
   );
 
   static const TextStyle labelMedium = TextStyle(
     fontFamily: family,
-    fontSize: 11,
+    fontSize: 11 * scale,
     height: 15 / 11,
     fontWeight: FontWeight.w600,
   );
 
   static const TextStyle labelSmall = TextStyle(
     fontFamily: family,
-    fontSize: 10.5,
+    fontSize: 10.5 * scale,
     height: 13 / 10.5,
     fontWeight: FontWeight.w600,
   );
 
   static const TextStyle overline = TextStyle(
     fontFamily: family,
-    fontSize: 9.5,
+    fontSize: 9.5 * scale,
     height: 13 / 9.5,
     fontWeight: FontWeight.w700,
     letterSpacing: 0.8,
@@ -100,6 +110,7 @@ abstract final class AppText {
 abstract final class AppTheme {
   static ThemeData dark() => _build(KaydetTokens.dark);
   static ThemeData light() => _build(KaydetTokens.light);
+  static ThemeData outlookDark() => _build(KaydetTokens.outlookDark);
 
   static ThemeData _build(KaydetTokens t) {
     final isDark = t.isDark;
@@ -142,7 +153,7 @@ abstract final class AppTheme {
       extensions: [t],
       splashFactory: InkSparkle.splashFactory,
       appBarTheme: AppBarTheme(
-        backgroundColor: t.bg,
+        backgroundColor: t.appBarBg,
         foregroundColor: t.textPrimary,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
@@ -171,6 +182,7 @@ abstract final class AppTheme {
       listTileTheme: ListTileThemeData(
         iconColor: t.textSecondary,
         textColor: t.textPrimary,
+        selectedColor: t.accent,
         minVerticalPadding: Space.md,
       ),
       floatingActionButtonTheme: FloatingActionButtonThemeData(
@@ -191,7 +203,7 @@ abstract final class AppTheme {
           disabledBackgroundColor: t.border,
           disabledForegroundColor: t.textTertiary,
           minimumSize: const Size.fromHeight(Dimens.controlHeight),
-          textStyle: AppText.labelMedium.copyWith(fontSize: 14),
+          textStyle: AppText.labelMedium.copyWith(fontSize: 14 * AppText.scale),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Radii.md),
           ),
@@ -202,7 +214,7 @@ abstract final class AppTheme {
           foregroundColor: t.textPrimary,
           side: BorderSide(color: t.border),
           minimumSize: const Size.fromHeight(Dimens.controlHeight),
-          textStyle: AppText.labelMedium.copyWith(fontSize: 14),
+          textStyle: AppText.labelMedium.copyWith(fontSize: 14 * AppText.scale),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(Radii.md),
           ),
@@ -211,7 +223,7 @@ abstract final class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: t.accent,
-          textStyle: AppText.labelMedium.copyWith(fontSize: 14),
+          textStyle: AppText.labelMedium.copyWith(fontSize: 14 * AppText.scale),
           minimumSize: const Size(Dimens.touchTarget, Dimens.touchTarget),
         ),
       ),
