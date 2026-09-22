@@ -2,8 +2,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Şifrelerin saklandığı yer.
 ///
-/// Android'de Keystore destekli `EncryptedSharedPreferences` kullanılır.
-/// Şifre hiçbir zaman veritabanına, log'a veya kod içine yazılmaz.
+/// Android'de Keystore destekli `EncryptedSharedPreferences`, iOS'ta
+/// Anahtar Zinciri (Keychain) kullanılır — ikisi de `flutter_secure_storage`
+/// üzerinden, platforma özel ek kod gerekmeden. Şifre hiçbir zaman
+/// veritabanına, log'a veya kod içine yazılmaz.
 abstract class SecureStore {
   Future<String?> readPassword(int accountId);
   Future<void> writePassword(int accountId, String password);

@@ -68,6 +68,14 @@ dev_dependencies:
 flutter_launcher_icons:
   android: true
   image_path: "assets/icon/app_logo.png"
+  ios: true
+  # App Store 1024x1024 simgesi saydamlık içeremez. `remove_alpha_ios` +
+  # saydam kaynak görsel kombinasyonu bu sürümde (flutter_launcher_icons
+  # 0.14.4) arka planda yeşil piksel gürültüsü üretiyor (bkz. commit notu);
+  # bunun yerine köşe yuvarlamalı lacivert zemine önceden düzlenmiş, alfasız
+  # ayrı bir iOS kaynağı kullanılır.
+  image_path_ios: "assets/icon/app_logo_ios.png"
+  remove_alpha_ios: true
 
 flutter:
   uses-material-design: true

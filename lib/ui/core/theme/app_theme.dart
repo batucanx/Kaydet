@@ -345,9 +345,17 @@ abstract final class AppTheme {
           ),
         ),
       ),
+      // Yalnızca Android geçişi özelleştirilir; `builders` haritası
+      // varsayılanların TAMAMININ yerini alır (birleştirilmez) — iOS/macOS
+      // burada elenirse platform kendi doğal Cupertino geçişini (ve
+      // kenardan kaydırarak geri gitme jestini) kaybedip Android'in
+      // Zoom-geçişine düşer; bu yüzden iOS/macOS varsayılanları da
+      // açıkça korunur.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
           TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+          TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
         },
       ),
     );

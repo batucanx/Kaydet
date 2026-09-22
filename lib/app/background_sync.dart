@@ -20,7 +20,6 @@ import '../data/services/smtp_service.dart';
 
 /// Arka plan senkronizasyonu.
 ///
-/// Android'de WorkManager'ın en sık çalışma aralığı 15 dakikadır; bu alt
 /// sınır işletim sistemi tarafından dayatılır ve aşılamaz. Bu görev bu yüzden
 /// ANLIK bildirimin değil, yedeğinin işidir: "Anlık" modda ön plan servisi
 /// (bkz. `PushService`) IMAP IDLE ile iletileri geldikleri anda yakalar;
@@ -28,6 +27,13 @@ import '../data/services/smtp_service.dart';
 /// koparsa kaçan iletileri bu periyodik tur toplar. Servis kapalı
 /// sıklıklarda (15 dk / 30 dk / saatte bir) bildirimin tek kaynağıdır.
 /// Uygulama önplandayken IDLE'ı `SyncController` yönetir.
+///
+/// iOS'ta ise `frequency`/`interval` yalnızca bir alt sınır —
+/// BGTaskScheduler görevi istenen aralıktan sonra ne zaman çalıştıracağına
+/// (pil durumu, kullanım alışkanlığı, arka plan yenileme ayarı gibi
+/// etkenlere göre) kendisi karar verir; hiç tetiklenmediği günler olabilir.
+/// Bu, uygulama kodunun düzeltebileceği bir şey değil, iOS'un işletim
+/// sistemi düzeyindeki kısıtlamasıdır.
 abstract final class BackgroundSync {
   static const String taskName = 'kaydet.sync';
   static const String uniqueName = 'kaydet.periodic.sync';

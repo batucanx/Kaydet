@@ -1,6 +1,6 @@
 # KAYDET
 
-Android için gerçek IMAP/SMTP e-posta istemcisi. Flutter ile yazıldı.
+Android ve iOS için gerçek IMAP/SMTP e-posta istemcisi. Flutter ile yazıldı.
 
 ---
 
@@ -23,7 +23,8 @@ gerekirse "Sunucu ayarları" bölümünden düzeltilir.
 | IMAP | mail.pazarlik.com.tr | 993 | SSL/TLS |
 | SMTP | mail.pazarlik.com.tr | 465 | SSL/TLS |
 
-Şifre yalnızca cihazda, Android Keystore ile şifrelenmiş olarak saklanır
+Şifre yalnızca cihazda, işletim sisteminin güvenli deposunda (Android
+Keystore / iOS Anahtar Zinciri) şifrelenmiş olarak saklanır
 (`flutter_secure_storage`). Veritabanına, log'a veya koda hiçbir zaman yazılmaz.
 
 ### Sürüm alma
@@ -55,7 +56,7 @@ veya `flutter build appbundle` tercih edilmelidir.
 - Otomatik taslak kaydetme (3 sn yazma duraklamasında) + çıkışta taslak diyaloğu
 - Giden kutusu: ağ yokken yazılan ileti kaybolmaz, bağlantı gelince gönderilir
 - Anlık bildirim: uygulama kapalıyken de yeni ileti geldiği anda bildirilir (ön plan servisi + IMAP IDLE, her hesap için ayrı bağlantı). Bildirimde gönderen, konu, önizleme, hesap ve Arşivle / Sil / Yanıtla eylemleri
-- Arka plan senkronizasyonu (WorkManager) — anlık bildirimin yedeği ve diğer kontrol sıklıkları için
+- Arka plan senkronizasyonu — anlık bildirimin yedeği ve diğer kontrol sıklıkları için (Android: WorkManager, iOS: BGTaskScheduler)
 - Koyu ve açık tema, sistem ayarını izleme
 - Etiket yönetimi (ad + renk); sunucu destekliyorsa IMAP anahtar kelimesi olarak yazılır
 
@@ -151,6 +152,30 @@ Bunlar dürüstçe listelenmiştir; kod yazıldı ama aşağıdaki nedenlerle
    yazıldı, gerçek mikrofon/dosya seçiciyle sınanmadı.
 4. **Arka plan senkronizasyonu** ancak gerçek cihazda, uygulama arka plandayken
    doğrulanabilir.
+
+### iOS
+
+`ios/` bu ortamda (Windows, Xcode yok) `flutter create --platforms=ios .` ile
+oluşturuldu; derleme yalnızca gerçek bir Mac + Xcode üzerinde `pod install` →
+`flutter build ios`/`flutter run` ile sınanabilir, buradan hiç çalıştırılamadı.
+İlk Mac derlemesinden önce yapılması gerekenler:
+
+1. **Google OAuth istemcisi.** `google_oauth_service.dart` içindeki
+   `_iosClientId`/`_iosRedirectUrl` hâlâ yer tutucu (`REPLACE_WITH_IOS_CLIENT_ID`).
+   Google Cloud Console'da (proje "kaydet") bundle ID `tr.com.pazarlik.kaydet`
+   ile AYRI bir "iOS" türü OAuth istemcisi oluşturulup bu iki sabit ve
+   `ios/Runner/Info.plist` içindeki `CFBundleURLSchemes` gerçek değerle
+   değiştirilmeden Google girişi iOS'ta çalışmaz — Android istemci kimliği
+   paket imzasına bağlı olduğu için burada yeniden kullanılamaz.
+2. **İmzalama.** Xcode'da Runner hedefinin "Signing & Capabilities"
+   sekmesinden kendi Apple Developer Team'iniz seçilmeli (proje şu an
+   imzasız).
+3. **CocoaPods.** `ios/Podfile` elle yazıldı (bu ortamda `pod install`
+   çalıştırılamadı); ilk `flutter run`/`flutter build ios` sırasında
+   `Podfile.lock` ve `Pods/` oluşacak, o hâliyle commit'lenmeli.
+
+Doğrulanamayanlar Android'deki 1–4 numaralı maddelerle aynı, artı yukarıdaki
+üçü — hiçbiri buradan (gerçek cihaz/Mac erişimi olmadan) sınanamadı.
 
 ### İlk gerçek çalıştırmada bakılacaklar
 
