@@ -699,7 +699,16 @@ class MailRepository {
       }
 
       for (final op in operations) {
-        final result = await _execute(accountId, op);
+        // Bu işlemi yürütmeye başlamadan hemen önce kirasını tazele: parti
+        // içindeki önceki işlemler zaman aldıysa (ör. yavaş bir gönderim),
+        // bu işlem kalan değil TAZE bir kira süresiyle başlar.
+        await _db.renewLease(op.id);
+        // `op.status`, `claimDueOperations`'ın DÖNDÜĞÜ (sahiplenmeden ÖNCEKİ)
+        // anlık görüntüdür: `running` ise bu, süresi dolmuş bir kiradan
+        // yeniden sahiplenildiği (önceki işlemcinin muhtemelen çöktüğü)
+        // anlamına gelir — bkz. `_sendQueued`'daki `claimOutboxSend` çağrısı.
+        final wasReclaimed = op.status == PendingOpStatus.running;
+        final result = await _execute(accountId, op, wasReclaimed);
         await result.fold(
           (_) => _db.completeOperation(op.id),
           (failure) => _handleFailure(op, failure),
@@ -777,7 +786,11 @@ class MailRepository {
     return const {};
   }
 
-  Future<Result<void>> _execute(int accountId, PendingOperationRow op) async {
+  Future<Result<void>> _execute(
+    int accountId,
+    PendingOperationRow op,
+    bool wasReclaimed,
+  ) async {
     final payload = _payloadOf(op);
     final uids = (payload['uids'] as List?)?.whereType<int>().toList() ?? [];
     final mailboxPath = payload['mailboxPath'] as String?;
@@ -862,7 +875,7 @@ class MailRepository {
         return withMailbox(() => _connection.imap.deletePermanently(uids));
 
       case PendingOpType.send:
-        return _sendQueued(accountId, payload);
+        return _sendQueued(accountId, payload, wasReclaimed: wasReclaimed);
     }
   }
 
@@ -991,8 +1004,9 @@ class MailRepository {
   /// iki kez alırdı.
   Future<Result<void>> _sendQueued(
     int accountId,
-    Map<String, dynamic> payload,
-  ) async {
+    Map<String, dynamic> payload, {
+    required bool wasReclaimed,
+  }) async {
     final messageId = payload['messageId'];
     if (messageId is! int) return okVoid;
 
@@ -1007,11 +1021,22 @@ class MailRepository {
 
     // Yukarıdaki `outboxState == sent` kontrolü ile buradaki geçiş arasında
     // başka bir işlemci (örn. arka plan isolate'ı) aynı `send` işlemini
-    // eşzamanlı sahiplenip göndermiş olabilir. `claimOutboxSend` bunu tek
-    // atomik `UPDATE ... WHERE outboxState != sent` ile kapatır: 0 dönerse
-    // ileti az önce gönderilmiştir, burada İKİNCİ KEZ göndermek yerine
-    // sessizce çıkılır.
-    final claimed = await _db.claimOutboxSend(messageId);
+    // eşzamanlı sahiplenip göndermiş/göndermekte olabilir. `claimOutboxSend`
+    // bunu tek atomik bir `UPDATE` ile kapatır: 0 dönerse ileti başka bir
+    // işlemcinin elindedir (az önce gönderilmiş VEYA hâlâ gönderiliyor),
+    // burada İKİNCİ KEZ göndermek yerine sessizce çıkılır.
+    //
+    // `wasReclaimed` yalnızca bu işlemi `processQueue`'nun süresi dolmuş
+    // (dolayısıyla önceki sahibi muhtemelen çökmüş — bkz. `renewLease`)
+    // bir kiradan yeniden sahiplendiği durumda `true`dur; bu durumda
+    // `sending`'de takılı kalmış bir ileti de kurtarma için sahiplenilebilir
+    // sayılır. Taze bir sahiplenmede `sending` ASLA kurtarılabilir sayılmaz
+    // — aksi hâlde bu kontrol hiçbir şeyi engellemeyen bir "her zaman evet"
+    // kilidine döner ve alıcı aynı e-postayı iki kez alabilir.
+    final claimed = await _db.claimOutboxSend(
+      messageId,
+      allowReclaim: wasReclaimed,
+    );
     if (claimed == 0) return okVoid;
 
     final outgoing = await _buildOutgoing(row, isDraft: false);

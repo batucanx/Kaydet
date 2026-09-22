@@ -526,7 +526,7 @@ void main() {
   });
 
   group('bekleyen işlem kuyruğu', () {
-    test('sıraya alınır ve zamanı gelenler döner', () async {
+    test('sıraya alınır ve zamanı gelenler sahiplenilir', () async {
       await db.enqueue(
         PendingOperationsCompanion.insert(
           accountId: accountId,
@@ -544,7 +544,7 @@ void main() {
         ),
       );
 
-      final due = await db.dueOperations(accountId);
+      final due = await db.claimDueOperations(accountId);
       expect(due, hasLength(1));
       expect(due.single.type, PendingOpType.markSeen);
     });
@@ -562,7 +562,152 @@ void main() {
         attemptCount: 1,
         permanent: true,
       );
-      expect(await db.dueOperations(accountId), isEmpty);
+      expect(await db.claimDueOperations(accountId), isEmpty);
+    });
+
+    test('aynı işlem iki kez sahiplenilemez (çift-işlem koruması)', () async {
+      await db.enqueue(
+        PendingOperationsCompanion.insert(
+          accountId: accountId,
+          type: PendingOpType.markSeen,
+        ),
+      );
+
+      final first = await db.claimDueOperations(accountId);
+      expect(first, hasLength(1));
+
+      // Kira henüz dolmadı — ikinci bir sahiplenme denemesi boş dönmeli.
+      final second = await db.claimDueOperations(accountId);
+      expect(second, isEmpty);
+    });
+
+    test(
+      'geri çekilmede bekleyen ESKİ işlemler, zamanı gelmiş DAHA YENİ '
+      'işlemlerin sahiplenilmesini engellemez (aday penceresi tıkanmaz)',
+      () async {
+        // `limit` varsayılanı (50) kadar eski işlem, tamamı geri çekilmede
+        // (backoff) — aday penceresini dolduracak sayıda.
+        for (var i = 0; i < 50; i++) {
+          await db.enqueue(
+            PendingOperationsCompanion.insert(
+              accountId: accountId,
+              type: PendingOpType.flag,
+              nextAttemptAt: Value(
+                DateTime.now().toUtc().add(const Duration(hours: 1)),
+              ),
+            ),
+          );
+        }
+        // Sonradan eklenen ve zamanı ÇOKTAN gelmiş tek bir işlem.
+        await db.enqueue(
+          PendingOperationsCompanion.insert(
+            accountId: accountId,
+            type: PendingOpType.markSeen,
+          ),
+        );
+
+        final claimed = await db.claimDueOperations(accountId);
+        expect(claimed, hasLength(1));
+        expect(claimed.single.type, PendingOpType.markSeen);
+      },
+    );
+
+    test('renewLease yalnızca running durumundaki işlemi tazeler', () async {
+      final id = await db.enqueue(
+        PendingOperationsCompanion.insert(
+          accountId: accountId,
+          type: PendingOpType.markSeen,
+        ),
+      );
+      final claimed = await db.claimDueOperations(accountId);
+      expect(claimed, hasLength(1));
+
+      await db.renewLease(id);
+      final activeAfterRenew = await db.activeOperations(accountId);
+      expect(
+        activeAfterRenew.single.nextAttemptAt!.isAfter(
+          DateTime.now().toUtc().add(const Duration(minutes: 2)),
+        ),
+        isTrue,
+      );
+
+      // `pending` bir işlem için (hiç sahiplenilmemiş) renewLease sessizce
+      // hiçbir şeyi değiştirmemeli.
+      final pendingId = await db.enqueue(
+        PendingOperationsCompanion.insert(
+          accountId: accountId,
+          type: PendingOpType.flag,
+        ),
+      );
+      await db.renewLease(pendingId);
+      final stillPending = await db.activeOperations(accountId);
+      final pendingRow = stillPending.firstWhere((p) => p.id == pendingId);
+      expect(pendingRow.status, PendingOpStatus.pending);
+      expect(pendingRow.nextAttemptAt, isNull);
+    });
+
+    test('releaseOperations denemesiz şekilde pending\'e döndürür', () async {
+      await db.enqueue(
+        PendingOperationsCompanion.insert(
+          accountId: accountId,
+          type: PendingOpType.markSeen,
+        ),
+      );
+      final claimed = await db.claimDueOperations(accountId);
+      expect(claimed, hasLength(1));
+
+      await db.releaseOperations([claimed.single.id]);
+      final released = await db.activeOperations(accountId);
+      expect(released.single.status, PendingOpStatus.pending);
+      expect(released.single.nextAttemptAt, isNull);
+      expect(released.single.attemptCount, 0);
+    });
+  });
+
+  group('giden kutusu sahiplenme (claimOutboxSend)', () {
+    test('taze sahiplenme "sending" durumundaki iletiyi yeniden almaz', () async {
+      final messageId = await db.insertLocalMessage(message(uid: 1));
+
+      final firstClaim = await db.claimOutboxSend(
+        messageId,
+        allowReclaim: false,
+      );
+      expect(firstClaim, 1);
+
+      // İkinci bir işlemci aynı iletiyi TAZE bir sahiplenmeyle (kira dolmadı)
+      // tekrar göndermeye çalışırsa reddedilmeli — aksi hâlde alıcı aynı
+      // e-postayı iki kez alır.
+      final secondClaim = await db.claimOutboxSend(
+        messageId,
+        allowReclaim: false,
+      );
+      expect(secondClaim, 0);
+    });
+
+    test(
+      'yalnızca kira dolmuş bir yeniden-sahiplenmede "sending" kurtarılabilir',
+      () async {
+        final messageId = await db.insertLocalMessage(message(uid: 1));
+
+        await db.claimOutboxSend(messageId, allowReclaim: false);
+        // Kira dolmuş bir yeniden sahiplenmeyi simüle eder.
+        final reclaimed = await db.claimOutboxSend(
+          messageId,
+          allowReclaim: true,
+        );
+        expect(reclaimed, 1);
+      },
+    );
+
+    test('"sent" durumundaki ileti hiçbir zaman yeniden sahiplenilmez', () async {
+      final messageId = await db.insertLocalMessage(message(uid: 1));
+      await db.updateMessage(
+        messageId,
+        const MessagesCompanion(outboxState: Value(OutboxState.sent)),
+      );
+
+      expect(await db.claimOutboxSend(messageId, allowReclaim: false), 0);
+      expect(await db.claimOutboxSend(messageId, allowReclaim: true), 0);
     });
   });
 
