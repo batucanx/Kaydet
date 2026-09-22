@@ -99,6 +99,19 @@ class NotificationService {
       StreamController<NotificationTap>.broadcast();
   static Stream<NotificationTap> get taps => _tapController.stream;
 
+  // iOS/macOS'ta "kilit ekranında gönderen/konu gizli" karşılığı yok —
+  // sistem bildirimleri her zaman kilit ekranında tam gösterir.
+  // `interruptionLevel` ile en azından sessiz/pasif bir sunum seçilebilirdi
+  // ama bu, bildirimin hiç düşmemesi riskini taşır; varsayılan (aktif)
+  // seviye bırakılır.
+  static const DarwinNotificationDetails _darwinDetails =
+      DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        threadIdentifier: 'kaydet_inbox',
+      );
+
   Future<void> initialize({
     DidReceiveBackgroundNotificationResponseCallback? onBackgroundResponse,
   }) async {
@@ -106,6 +119,14 @@ class NotificationService {
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings(_smallIcon),
+        // İzin burada istenmez — Android'deki gibi kullanıcı Ayarlar'da
+        // bildirimleri açana kadar sistem izin penceresi çıkmamalı (bkz.
+        // requestPermission).
+        iOS: DarwinInitializationSettings(
+          requestAlertPermission: false,
+          requestBadgePermission: false,
+          requestSoundPermission: false,
+        ),
       ),
       onDidReceiveNotificationResponse: _onForegroundResponse,
       onDidReceiveBackgroundNotificationResponse: onBackgroundResponse,
@@ -120,10 +141,20 @@ class NotificationService {
 
   // ------------------------------------------------------------------ izin
 
-  /// Android 13+ bildirim iznini ister.
+  /// Android 13+ ve iOS bildirim iznini ister.
   Future<bool> requestPermission() async {
-    if (!Platform.isAndroid) return true;
     await initialize();
+    if (Platform.isIOS) {
+      final ios = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      final granted = await ios?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+      return granted ?? false;
+    }
+    if (!Platform.isAndroid) return true;
     final granted = await _android?.requestNotificationsPermission();
     return granted ?? false;
   }
@@ -198,6 +229,7 @@ class NotificationService {
           onlyAlertOnce: true,
           actions: _actions,
         ),
+        iOS: _darwinDetails,
       ),
       payload: '$_payloadPrefix${message.id}',
     );
@@ -208,10 +240,18 @@ class NotificationService {
   ///
   /// Yeni ileti artık tek tek (gerçek zamanlı) geldiğinden sayı, gösterilen
   /// bildirimlerden okunur — bir kerede gelen toplu sayıdan değil.
+  ///
+  /// Yalnızca Android: bu, bildirim gölgesinde "N yeni ileti" başlıklı
+  /// katlanmış grup görünümü için gerekir (`setAsGroupSummary`). iOS'ta
+  /// aynı işi [_darwinDetails]'in `threadIdentifier`'ı zaten yapıyor —
+  /// Bildirim Merkezi [showNewMail] ile gönderilen iletileri kendiliğinden
+  /// aynı yığında toplar; ayrı bir özet bildirimi burada yalnızca
+  /// yinelenen, fazladan bir uyarı olurdu.
   Future<void> refreshGroupSummary(
     int accountId, {
     String? accountLabel,
   }) async {
+    if (Platform.isIOS) return;
     await initialize();
     final groupKey = _groupKeyFor(accountId);
     final summaryId = _summaryId(accountId);

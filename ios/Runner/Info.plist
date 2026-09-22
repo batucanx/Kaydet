@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Kaydet</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>kaydet</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(FLUTTER_BUILD_NAME)</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<!-- Yeni ileti oluştururken kamerayla fotoğraf çekmek için (bkz.
+	     AndroidManifest.xml'deki android.permission.CAMERA). -->
+	<key>NSCameraUsageDescription</key>
+	<string>Eklenti olarak fotoğraf çekebilmek için kameraya erişim gerekir.</string>
+	<!-- Yeni ileti oluştururken galeriden görsel eklemek için. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Eklenti olarak fotoğraf seçebilmek için galeriye erişim gerekir.</string>
+	<!-- Sesli yazma (bkz. AndroidManifest.xml'deki android.permission.RECORD_AUDIO). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sesli yazma için mikrofona erişim gerekir.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Söylediklerinizi metne çevirmek için konuşma tanımaya erişim gerekir.</string>
+	<!-- Gmail OAuth geri dönüşü (flutter_appauth) — google_oauth_service.dart
+	     içindeki `_iosRedirectUrl` ile birebir aynı olmalı. Google Cloud
+	     Console'da AYRI bir "iOS" türü istemci kaydedilmeden bu değer
+	     çalışmaz; bkz. google_oauth_service.dart üzerindeki TODO. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>google_oauth_redirect</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.REPLACE_WITH_IOS_CLIENT_ID</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Arka plan eşitleme (workmanager → BGTaskScheduler). `processing` App
+	     Store incelemesinde gerekçelendirilmesi gerekebilir; yalnızca
+	     bağlantı varken çalışacak şekilde kısıtlıdır (bkz. background_sync.dart). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>kaydet.periodic.sync</string>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneClassName</key>
+					<string>UIWindowScene</string>
+					<key>UISceneConfigurationName</key>
+					<string>flutter</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
+	<key>UIApplicationSupportsIndirectInputEvents</key>
+	<true/>
+	<key>UILaunchStoryboardName</key>
+	<string>LaunchScreen</string>
+	<key>UIMainStoryboardFile</key>
+	<string>Main</string>
+	<!-- main.dart'ta SystemChrome.setPreferredOrientations ile dikey kilitlenir
+	     (bkz. "Uygulama yalnızca dikey çalışır" notu) — sistem seviyesinde de
+	     aynı kısıtlama burada tanımlanır ki açılış anındaki dönme kısa süreliğine
+	     bile görünmesin. -->
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
