@@ -3,7 +3,6 @@ import 'dart:async';
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
-import '../services/google_oauth_service.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
 
@@ -18,18 +17,15 @@ class MailConnection {
     required AppDatabase database,
     required SecureStore secureStore,
     required ImapService imapService,
-    required GoogleOAuthService googleOAuth,
     bool keepAlive = true,
   })  : _db = database,
         _secureStore = secureStore,
         _imap = imapService,
-        _googleOAuth = googleOAuth,
         _keepAliveEnabled = keepAlive;
 
   final AppDatabase _db;
   final SecureStore _secureStore;
   final ImapService _imap;
-  final GoogleOAuthService _googleOAuth;
 
   /// `false` ise 4 dakikalık canlılık zamanlayıcısı kurulmaz. Sürekli IDLE
   /// dinleyen bağlantılar (bkz. `AccountWatcher`) kendi döngüleriyle canlılığı
@@ -152,32 +148,13 @@ class MailConnection {
     );
   }
 
-  /// Hesabın kimlik bilgisini üretir.
-  ///
-  /// OAuth hesaplarında süresi dolmuş erişim token'ı burada, bağlanmadan
-  /// önce sessizce yenilenir ve güvenli depo güncellenir — aksi hâlde
-  /// sunucu genel bir "kimlik doğrulama başarısız" hatası döner ve kullanıcı
-  /// gerçek sebebi (token süresi doldu) hiç göremez.
+  /// Hesabın kimlik bilgisini güvenli depodan üretir.
   Future<Result<MailCredential>> _credentialFor(AccountRow account) async {
-    if (account.authMethod == AuthMethod.password) {
-      final password = await _secureStore.readPassword(account.id);
-      if (password == null || password.isEmpty) {
-        return const Err(AuthFailure(detail: 'kayıtlı şifre yok'));
-      }
-      return Ok(PasswordCredential(password));
+    final password = await _secureStore.readPassword(account.id);
+    if (password == null || password.isEmpty) {
+      return const Err(AuthFailure(detail: 'kayıtlı şifre yok'));
     }
-
-    var tokens = await _secureStore.readOAuthTokens(account.id);
-    if (tokens == null) {
-      return const Err(AuthFailure(detail: 'kayıtlı Google oturumu yok'));
-    }
-    if (tokens.isExpired) {
-      final refreshed = await _googleOAuth.refresh(tokens.refreshToken);
-      if (refreshed is Err<OAuthTokenSet>) return Err(refreshed.failure);
-      tokens = (refreshed as Ok<OAuthTokenSet>).value;
-      await _secureStore.writeOAuthTokens(account.id, tokens);
-    }
-    return Ok(OAuthCredential(tokens.accessToken));
+    return Ok(PasswordCredential(password));
   }
 }
 

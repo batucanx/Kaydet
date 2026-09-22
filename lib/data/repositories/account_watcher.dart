@@ -3,7 +3,6 @@ import 'dart:async';
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
-import '../services/google_oauth_service.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
 import 'mail_connection.dart';
@@ -41,7 +40,6 @@ class AccountWatcher {
     required AppDatabase database,
     required ImapService imapService,
     required SecureStore secureStore,
-    required GoogleOAuthService googleOAuth,
     required this.onSynced,
   }) : _db = database,
        _imap = imapService {
@@ -49,7 +47,6 @@ class AccountWatcher {
       database: database,
       secureStore: secureStore,
       imapService: imapService,
-      googleOAuth: googleOAuth,
       // Kendi canlılık denetimimiz var (bkz. `_idleCycle`).
       keepAlive: false,
     );

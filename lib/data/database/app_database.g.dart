@@ -158,16 +158,6 @@ class $AccountsTable extends Accounts
     ),
     defaultValue: const Constant(true),
   );
-  @override
-  late final GeneratedColumnWithTypeConverter<AuthMethod, int> authMethod =
-      GeneratedColumn<int>(
-        'auth_method',
-        aliasedName,
-        false,
-        type: DriftSqlType.int,
-        requiredDuringInsert: false,
-        defaultValue: const Constant(0),
-      ).withConverter<AuthMethod>($AccountsTable.$converterauthMethod);
   static const VerificationMeta _supportsKeywordsMeta = const VerificationMeta(
     'supportsKeywords',
   );
@@ -221,7 +211,6 @@ class $AccountsTable extends Accounts
     signature,
     colorSeed,
     isActive,
-    authMethod,
     supportsKeywords,
     capabilitiesJson,
     createdAt,
@@ -405,12 +394,6 @@ class $AccountsTable extends Accounts
         DriftSqlType.bool,
         data['${effectivePrefix}is_active'],
       )!,
-      authMethod: $AccountsTable.$converterauthMethod.fromSql(
-        attachedDatabase.typeMapping.read(
-          DriftSqlType.int,
-          data['${effectivePrefix}auth_method'],
-        )!,
-      ),
       supportsKeywords: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}supports_keywords'],
@@ -435,8 +418,6 @@ class $AccountsTable extends Accounts
       const EnumIndexConverter<SocketSecurity>(SocketSecurity.values);
   static JsonTypeConverter2<SocketSecurity, int, int> $convertersmtpSecurity =
       const EnumIndexConverter<SocketSecurity>(SocketSecurity.values);
-  static JsonTypeConverter2<AuthMethod, int, int> $converterauthMethod =
-      const EnumIndexConverter<AuthMethod>(AuthMethod.values);
 }
 
 class AccountRow extends DataClass implements Insertable<AccountRow> {
@@ -457,10 +438,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
   final int colorSeed;
   final bool isActive;
 
-  /// Kimlik doğrulama biçimi — `password` (0) veya `googleOAuth` (1).
-  /// Gerçek şifre/token değeri burada değil, [SecureStore]'da tutulur.
-  final AuthMethod authMethod;
-
   /// Sunucu özel anahtar kelime (etiket) destekliyor mu? `null` = bilinmiyor.
   final bool? supportsKeywords;
   final String capabilitiesJson;
@@ -479,7 +456,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
     this.signature,
     required this.colorSeed,
     required this.isActive,
-    required this.authMethod,
     this.supportsKeywords,
     required this.capabilitiesJson,
     required this.createdAt,
@@ -510,11 +486,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
     }
     map['color_seed'] = Variable<int>(colorSeed);
     map['is_active'] = Variable<bool>(isActive);
-    {
-      map['auth_method'] = Variable<int>(
-        $AccountsTable.$converterauthMethod.toSql(authMethod),
-      );
-    }
     if (!nullToAbsent || supportsKeywords != null) {
       map['supports_keywords'] = Variable<bool>(supportsKeywords);
     }
@@ -540,7 +511,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
           : Value(signature),
       colorSeed: Value(colorSeed),
       isActive: Value(isActive),
-      authMethod: Value(authMethod),
       supportsKeywords: supportsKeywords == null && nullToAbsent
           ? const Value.absent()
           : Value(supportsKeywords),
@@ -572,9 +542,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
       signature: serializer.fromJson<String?>(json['signature']),
       colorSeed: serializer.fromJson<int>(json['colorSeed']),
       isActive: serializer.fromJson<bool>(json['isActive']),
-      authMethod: $AccountsTable.$converterauthMethod.fromJson(
-        serializer.fromJson<int>(json['authMethod']),
-      ),
       supportsKeywords: serializer.fromJson<bool?>(json['supportsKeywords']),
       capabilitiesJson: serializer.fromJson<String>(json['capabilitiesJson']),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
@@ -601,9 +568,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
       'signature': serializer.toJson<String?>(signature),
       'colorSeed': serializer.toJson<int>(colorSeed),
       'isActive': serializer.toJson<bool>(isActive),
-      'authMethod': serializer.toJson<int>(
-        $AccountsTable.$converterauthMethod.toJson(authMethod),
-      ),
       'supportsKeywords': serializer.toJson<bool?>(supportsKeywords),
       'capabilitiesJson': serializer.toJson<String>(capabilitiesJson),
       'createdAt': serializer.toJson<DateTime>(createdAt),
@@ -624,7 +588,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
     Value<String?> signature = const Value.absent(),
     int? colorSeed,
     bool? isActive,
-    AuthMethod? authMethod,
     Value<bool?> supportsKeywords = const Value.absent(),
     String? capabilitiesJson,
     DateTime? createdAt,
@@ -642,7 +605,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
     signature: signature.present ? signature.value : this.signature,
     colorSeed: colorSeed ?? this.colorSeed,
     isActive: isActive ?? this.isActive,
-    authMethod: authMethod ?? this.authMethod,
     supportsKeywords: supportsKeywords.present
         ? supportsKeywords.value
         : this.supportsKeywords,
@@ -670,9 +632,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
       signature: data.signature.present ? data.signature.value : this.signature,
       colorSeed: data.colorSeed.present ? data.colorSeed.value : this.colorSeed,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
-      authMethod: data.authMethod.present
-          ? data.authMethod.value
-          : this.authMethod,
       supportsKeywords: data.supportsKeywords.present
           ? data.supportsKeywords.value
           : this.supportsKeywords,
@@ -699,7 +658,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
           ..write('signature: $signature, ')
           ..write('colorSeed: $colorSeed, ')
           ..write('isActive: $isActive, ')
-          ..write('authMethod: $authMethod, ')
           ..write('supportsKeywords: $supportsKeywords, ')
           ..write('capabilitiesJson: $capabilitiesJson, ')
           ..write('createdAt: $createdAt')
@@ -722,7 +680,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
     signature,
     colorSeed,
     isActive,
-    authMethod,
     supportsKeywords,
     capabilitiesJson,
     createdAt,
@@ -744,7 +701,6 @@ class AccountRow extends DataClass implements Insertable<AccountRow> {
           other.signature == this.signature &&
           other.colorSeed == this.colorSeed &&
           other.isActive == this.isActive &&
-          other.authMethod == this.authMethod &&
           other.supportsKeywords == this.supportsKeywords &&
           other.capabilitiesJson == this.capabilitiesJson &&
           other.createdAt == this.createdAt);
@@ -764,7 +720,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
   final Value<String?> signature;
   final Value<int> colorSeed;
   final Value<bool> isActive;
-  final Value<AuthMethod> authMethod;
   final Value<bool?> supportsKeywords;
   final Value<String> capabilitiesJson;
   final Value<DateTime> createdAt;
@@ -782,7 +737,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
     this.signature = const Value.absent(),
     this.colorSeed = const Value.absent(),
     this.isActive = const Value.absent(),
-    this.authMethod = const Value.absent(),
     this.supportsKeywords = const Value.absent(),
     this.capabilitiesJson = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -801,7 +755,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
     this.signature = const Value.absent(),
     this.colorSeed = const Value.absent(),
     this.isActive = const Value.absent(),
-    this.authMethod = const Value.absent(),
     this.supportsKeywords = const Value.absent(),
     this.capabilitiesJson = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -823,7 +776,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
     Expression<String>? signature,
     Expression<int>? colorSeed,
     Expression<bool>? isActive,
-    Expression<int>? authMethod,
     Expression<bool>? supportsKeywords,
     Expression<String>? capabilitiesJson,
     Expression<DateTime>? createdAt,
@@ -842,7 +794,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
       if (signature != null) 'signature': signature,
       if (colorSeed != null) 'color_seed': colorSeed,
       if (isActive != null) 'is_active': isActive,
-      if (authMethod != null) 'auth_method': authMethod,
       if (supportsKeywords != null) 'supports_keywords': supportsKeywords,
       if (capabilitiesJson != null) 'capabilities_json': capabilitiesJson,
       if (createdAt != null) 'created_at': createdAt,
@@ -863,7 +814,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
     Value<String?>? signature,
     Value<int>? colorSeed,
     Value<bool>? isActive,
-    Value<AuthMethod>? authMethod,
     Value<bool?>? supportsKeywords,
     Value<String>? capabilitiesJson,
     Value<DateTime>? createdAt,
@@ -882,7 +832,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
       signature: signature ?? this.signature,
       colorSeed: colorSeed ?? this.colorSeed,
       isActive: isActive ?? this.isActive,
-      authMethod: authMethod ?? this.authMethod,
       supportsKeywords: supportsKeywords ?? this.supportsKeywords,
       capabilitiesJson: capabilitiesJson ?? this.capabilitiesJson,
       createdAt: createdAt ?? this.createdAt,
@@ -935,11 +884,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
     if (isActive.present) {
       map['is_active'] = Variable<bool>(isActive.value);
     }
-    if (authMethod.present) {
-      map['auth_method'] = Variable<int>(
-        $AccountsTable.$converterauthMethod.toSql(authMethod.value),
-      );
-    }
     if (supportsKeywords.present) {
       map['supports_keywords'] = Variable<bool>(supportsKeywords.value);
     }
@@ -968,7 +912,6 @@ class AccountsCompanion extends UpdateCompanion<AccountRow> {
           ..write('signature: $signature, ')
           ..write('colorSeed: $colorSeed, ')
           ..write('isActive: $isActive, ')
-          ..write('authMethod: $authMethod, ')
           ..write('supportsKeywords: $supportsKeywords, ')
           ..write('capabilitiesJson: $capabilitiesJson, ')
           ..write('createdAt: $createdAt')
@@ -6416,7 +6359,6 @@ typedef $$AccountsTableCreateCompanionBuilder =
       Value<String?> signature,
       Value<int> colorSeed,
       Value<bool> isActive,
-      Value<AuthMethod> authMethod,
       Value<bool?> supportsKeywords,
       Value<String> capabilitiesJson,
       Value<DateTime> createdAt,
@@ -6436,7 +6378,6 @@ typedef $$AccountsTableUpdateCompanionBuilder =
       Value<String?> signature,
       Value<int> colorSeed,
       Value<bool> isActive,
-      Value<AuthMethod> authMethod,
       Value<bool?> supportsKeywords,
       Value<String> capabilitiesJson,
       Value<DateTime> createdAt,
@@ -6634,12 +6575,6 @@ class $$AccountsTableFilterComposer
     column: $table.isActive,
     builder: (column) => ColumnFilters(column),
   );
-
-  ColumnWithTypeConverterFilters<AuthMethod, AuthMethod, int> get authMethod =>
-      $composableBuilder(
-        column: $table.authMethod,
-        builder: (column) => ColumnWithTypeConverterFilters(column),
-      );
 
   ColumnFilters<bool> get supportsKeywords => $composableBuilder(
     column: $table.supportsKeywords,
@@ -6881,11 +6816,6 @@ class $$AccountsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<int> get authMethod => $composableBuilder(
-    column: $table.authMethod,
-    builder: (column) => ColumnOrderings(column),
-  );
-
   ColumnOrderings<bool> get supportsKeywords => $composableBuilder(
     column: $table.supportsKeywords,
     builder: (column) => ColumnOrderings(column),
@@ -6957,12 +6887,6 @@ class $$AccountsTableAnnotationComposer
 
   GeneratedColumn<bool> get isActive =>
       $composableBuilder(column: $table.isActive, builder: (column) => column);
-
-  GeneratedColumnWithTypeConverter<AuthMethod, int> get authMethod =>
-      $composableBuilder(
-        column: $table.authMethod,
-        builder: (column) => column,
-      );
 
   GeneratedColumn<bool> get supportsKeywords => $composableBuilder(
     column: $table.supportsKeywords,
@@ -7177,7 +7101,6 @@ class $$AccountsTableTableManager
                 Value<String?> signature = const Value.absent(),
                 Value<int> colorSeed = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
-                Value<AuthMethod> authMethod = const Value.absent(),
                 Value<bool?> supportsKeywords = const Value.absent(),
                 Value<String> capabilitiesJson = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -7195,7 +7118,6 @@ class $$AccountsTableTableManager
                 signature: signature,
                 colorSeed: colorSeed,
                 isActive: isActive,
-                authMethod: authMethod,
                 supportsKeywords: supportsKeywords,
                 capabilitiesJson: capabilitiesJson,
                 createdAt: createdAt,
@@ -7215,7 +7137,6 @@ class $$AccountsTableTableManager
                 Value<String?> signature = const Value.absent(),
                 Value<int> colorSeed = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
-                Value<AuthMethod> authMethod = const Value.absent(),
                 Value<bool?> supportsKeywords = const Value.absent(),
                 Value<String> capabilitiesJson = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
@@ -7233,7 +7154,6 @@ class $$AccountsTableTableManager
                 signature: signature,
                 colorSeed: colorSeed,
                 isActive: isActive,
-                authMethod: authMethod,
                 supportsKeywords: supportsKeywords,
                 capabilitiesJson: capabilitiesJson,
                 createdAt: createdAt,

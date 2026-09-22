@@ -72,7 +72,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -82,13 +82,8 @@ class AppDatabase extends _$AppDatabase {
       await _createFtsTable();
     },
     onUpgrade: (m, from, to) async {
-      // v1 → v2: OAuth girişi (Gmail) için hesabın kimlik doğrulama
-      // biçimini ayırt eden sütun eklendi. Mevcut hesaplar `password`
-      // (0) ile devam eder — şifreleri zaten çalışıyordu, davranış
-      // değişmez.
-      if (from < 2) {
-        await m.addColumn(accounts, accounts.authMethod);
-      }
+      // v1 → v2: (kaldırılan) OAuth girişi için `auth_method` sütunu
+      // eklenmişti; v6 → v7 adımı onu zaten sildiği için burada eklenmez.
       // v2 → v3: İletme durumu (`$Forwarded`) için sütun eklendi.
       if (from < 3) {
         await m.addColumn(messages, messages.isForwarded);
@@ -123,6 +118,12 @@ class AppDatabase extends _$AppDatabase {
       // sağlar, elle bir değer yazmaya gerek yoktur.
       if (from < 6) {
         await m.addColumn(mailboxes, mailboxes.retentionLimit);
+      }
+      // v6 → v7: Google ile giriş kaldırıldı; hesabın kimlik doğrulama
+      // biçimini tutan `auth_method` sütunu artık yok. Sütun yalnızca v2
+      // ile v6 arasındaki şemalarda vardır (v1'de hiç eklenmemişti).
+      if (from >= 2 && from < 7) {
+        await m.dropColumn(accounts, 'auth_method');
       }
     },
     beforeOpen: (details) async {

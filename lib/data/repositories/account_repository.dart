@@ -7,7 +7,6 @@ import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
-import '../services/google_oauth_service.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
 import '../services/smtp_service.dart';
@@ -53,20 +52,17 @@ class AccountRepository {
     required ImapService imapService,
     required SmtpService smtpService,
     required MailConnection connection,
-    required GoogleOAuthService googleOAuth,
   }) : _db = database,
        _secureStore = secureStore,
        _imap = imapService,
        _smtp = smtpService,
-       _connection = connection,
-       _googleOAuth = googleOAuth;
+       _connection = connection;
 
   final AppDatabase _db;
   final SecureStore _secureStore;
   final ImapService _imap;
   final SmtpService _smtp;
   final MailConnection _connection;
-  final GoogleOAuthService _googleOAuth;
 
   /// Çıkışta IMAP oturumunun kapanması için beklenen en uzun süre.
   static const Duration _disconnectTimeout = Duration(seconds: 5);
@@ -143,86 +139,13 @@ class AccountRepository {
       smtpHost: request.smtpHost.trim(),
       smtpPort: request.smtpPort,
       smtpSecurity: request.smtpSecurity,
-      authMethod: AuthMethod.password,
       writeCredential: (accountId) =>
           _secureStore.writePassword(accountId, request.password),
     );
   }
 
-  /// Google hesabıyla giriş: tarayıcıda OAuth onayı alınır, ardından IMAP/
-  /// SMTP standart Gmail sunucularına karşı doğrulanır.
-  ///
-  /// Gmail için kullanıcıdan sunucu adresi istenmez — gerçek mail
-  /// istemcilerinin (eM Client dahil) yaptığı gibi `imap.gmail.com` ve
-  /// `smtp.gmail.com` sabittir.
-  Future<Result<int>> signInWithGoogle() async {
-    final signInResult = await _googleOAuth.signIn();
-    if (signInResult is Err<GoogleSignInResult>) {
-      return Err(signInResult.failure);
-    }
-    final result = (signInResult as Ok<GoogleSignInResult>).value;
-    final email = result.email.trim();
-    final credential = OAuthCredential(result.tokens.accessToken);
-
-    // 1. IMAP doğrulaması
-    final imapResult = await _imap.connect(
-      MailServerConfig(
-        host: GoogleOAuthService.imapHost,
-        port: GoogleOAuthService.imapPort,
-        security: SocketSecurity.ssl,
-        username: email,
-        credential: credential,
-      ),
-    );
-    if (imapResult is Err<ServerCapabilities>) {
-      await _imap.disconnect();
-      return Err(imapResult.failure);
-    }
-    await _imap.disconnect();
-
-    // 2. SMTP doğrulaması
-    final smtpResult = await _smtp.verify(
-      MailServerConfig(
-        host: GoogleOAuthService.smtpHost,
-        port: GoogleOAuthService.smtpPort,
-        security: SocketSecurity.ssl,
-        username: email,
-        credential: credential,
-      ),
-    );
-    if (smtpResult is Err<void>) {
-      final failure = smtpResult.failure;
-      return Err(
-        failure is AuthFailure
-            ? AuthFailure(detail: 'SMTP: ${failure.detail}')
-            : failure,
-      );
-    }
-
-    // 3. Kayıt
-    return _persistAccount(
-      email: email,
-      username: email,
-      displayName: displayNameFromEmail(email),
-      imapHost: GoogleOAuthService.imapHost,
-      imapPort: GoogleOAuthService.imapPort,
-      imapSecurity: SocketSecurity.ssl,
-      smtpHost: GoogleOAuthService.smtpHost,
-      smtpPort: GoogleOAuthService.smtpPort,
-      smtpSecurity: SocketSecurity.ssl,
-      authMethod: AuthMethod.googleOAuth,
-      writeCredential: (accountId) =>
-          _secureStore.writeOAuthTokens(accountId, result.tokens),
-    );
-  }
-
   /// Hesabı oluşturur/günceller, kimlik bilgisini [writeCredential] ile
-  /// uygun depoya yazar ve hesabı etkinleştirir.
-  ///
-  /// [signIn] ve [signInWithGoogle] arasında ortak olan kayıt adımı burada
-  /// toplanır — ikisi de aynı sırayı izler: hesap önce pasif yazılır (bkz.
-  /// aşağıdaki not), kimlik bilgisi güvenli depoya gider, ancak o başarılı
-  /// olursa hesap etkinleştirilir.
+  /// güvenli depoya yazar ve hesabı etkinleştirir.
   ///
   /// Hesap önce pasif yazılır. `isActive` true olur olmaz kök ekran
   /// uygulamaya geçer ve eşitleme başlar; kimlik bilgisi o an henüz güvenli
@@ -238,7 +161,6 @@ class AccountRepository {
     required String smtpHost,
     required int smtpPort,
     required SocketSecurity smtpSecurity,
-    required AuthMethod authMethod,
     required Future<void> Function(int accountId) writeCredential,
   }) async {
     final existing = await (_db.select(
@@ -255,7 +177,6 @@ class AccountRepository {
       smtpHost: Value(smtpHost),
       smtpPort: Value(smtpPort),
       smtpSecurity: Value(smtpSecurity),
-      authMethod: Value(authMethod),
       colorSeed: Value(AvatarHash.hash32(email)),
       isActive: const Value(false),
     );
@@ -432,11 +353,7 @@ class AccountRepository {
       }
     }
     try {
-      // Hesabın hangi kimlik doğrulama biçimini kullandığına bakılmaksızın
-      // ikisi de silinir — olmayan anahtarı silmek zararsızdır, dallanmaya
-      // gerek yok.
       await _secureStore.deletePassword(accountId);
-      await _secureStore.deleteOAuthTokens(accountId);
     } on Object catch (_) {
       // Keystore'a erişilemese bile hesap kaydı silinir; kimlik bilgisi
       // sahipsiz kalır, hesap olmadan kullanılamaz.

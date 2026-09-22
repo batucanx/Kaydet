@@ -27,10 +27,6 @@ dependencies:
   # Güvenli kimlik saklama
   flutter_secure_storage: ^11.1.1
 
-  # OAuth2 (Gmail girişi) — bkz. docs/plan/05 Faz 2
-  flutter_appauth: 12.1.0
-  http: ^1.6.0
-
   # UI
   lucide_icons_flutter: ^3.1.19
   flutter_slidable: ^4.0.3

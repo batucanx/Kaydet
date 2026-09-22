@@ -29,17 +29,6 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-
-        // flutter_appauth (Gmail OAuth) geri dönüş şeması — Google Cloud
-        // Console'daki Android istemci kimliğinin tersine çevrilmiş hâli.
-        // google_oauth_service.dart'taki `_redirectUrl` ile birebir aynı
-        // olmalı.
-        manifestPlaceholders.putAll(
-            mapOf(
-                "appAuthRedirectScheme" to
-                    "com.googleusercontent.apps.856471546230-onihb0lsnk7qh1apqbcv7qt5no3m6dod"
-            )
-        )
     }
 
     buildTypes {

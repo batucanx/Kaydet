@@ -14,7 +14,6 @@ import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
 import '../data/repositories/sync_engine.dart';
 import '../data/services/app_settings.dart';
-import '../data/services/google_oauth_service.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
@@ -51,18 +50,11 @@ final notificationServiceProvider = Provider<NotificationService>(
   (ref) => NotificationService(),
 );
 
-final googleOAuthServiceProvider = Provider<GoogleOAuthService>((ref) {
-  final service = GoogleOAuthService();
-  ref.onDispose(service.dispose);
-  return service;
-});
-
 final mailConnectionProvider = Provider<MailConnection>((ref) {
   final connection = MailConnection(
     database: ref.watch(databaseProvider),
     secureStore: ref.watch(secureStoreProvider),
     imapService: ref.watch(imapServiceProvider),
-    googleOAuth: ref.watch(googleOAuthServiceProvider),
   );
   ref.onDispose(connection.disconnect);
   return connection;
@@ -103,7 +95,6 @@ final accountRepositoryProvider = Provider<AccountRepository>(
     imapService: ref.watch(imapServiceProvider),
     smtpService: ref.watch(smtpServiceProvider),
     connection: ref.watch(mailConnectionProvider),
-    googleOAuth: ref.watch(googleOAuthServiceProvider),
   ),
 );
 

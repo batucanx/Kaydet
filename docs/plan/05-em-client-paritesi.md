@@ -10,7 +10,7 @@ Kapsam netleştirmesi (kullanıcı onayıyla, aynı gün):
 | Konu | Karar |
 |---|---|
 | Gelen kutusu modeli | **Hesap değiştirici** — eM Client'ın birleşik gelen kutusu değil. Tek seferde bir hesap görünür, üstte hızlı geçiş var. |
-| OAuth uygulama kaydı | Kullanıcı kendi Google Cloud / Microsoft Entra ID hesabıyla oluşturacak; Claude bunu yapamaz (hesap/kimlik oluşturma yasak). |
+| OAuth uygulama kaydı | Kullanıcı kendi Microsoft Entra ID hesabıyla oluşturacak; Claude bunu yapamaz (hesap/kimlik oluşturma yasak). |
 | Takvim + Kişiler + Notlar | Kapsama **alındı** (önceki "v2'ye bırakıldı" kararının üzerine yazıldı). |
 | PGP/S-MIME, AI yardım + anlık çeviri, bulut depolama entegrasyonu | **Kapsam dışı.** MDM zaten sorulmadan kapsam dışı bırakıldı (kurumsal özellik, bu uygulamaya uygun değil). |
 
@@ -19,8 +19,8 @@ Kapsam netleştirmesi (kullanıcı onayıyla, aynı gün):
 | Faz | İçerik | Durum |
 |---|---|---|
 | 1 | Çoklu hesap (hesap değiştirici) | ✅ Kodlandı (2026-09-15) |
-| 2a | **Gmail** OAuth2 girişi | ✅ Kodlandı (2026-09-15) |
-| 2b | **Outlook/MS365** — Graph API (IMAP/SMTP değil) | ⏸ Beklemede — kullanıcı kararı (2026-09-15): önce Gmail bitsin. Ayrıca bkz. "Outlook kararı düzeltmesi" altında. |
+| 2a | **Gmail** OAuth2 girişi | ❌ Kaldırıldı (2026-09-21) — kullanıcı Google ile girişi istemiyor |
+| 2b | **Outlook/MS365** — Graph API (IMAP/SMTP değil) | ⏸ Beklemede. Bkz. "Outlook kararı düzeltmesi" altında. |
 | 3 | Takvim + Kişiler + Notlar (CalDAV/CardDAV) | 🕒 Bekliyor — kendi ayrı bölüm planı gerekir, Faz 1-2'den sonra |
 | 4 | Üretkenlik eşleniği (snooze, gönderiyi geri al, hızlı metin/şablon, izleme pikseli algılama, uygulama kilidi) | 🕒 Bekliyor — küçük ve bağımsız parçalar, paralel alınabilir |
 | — | PGP/S-MIME, AI yardım + çeviri, bulut depolama entegrasyonu, MDM | ❌ Kapsam dışı (kullanıcı kararı) |
@@ -66,61 +66,25 @@ eksik olan tekillik garantisi ve arayüzdü.
 `lib/ui/features/settings/settings_screen.dart`, `lib/ui/features/shell/app_shell.dart`,
 `lib/ui/features/auth/login_screen.dart`, `test/app_flow_test.dart`.
 
-## Faz 2a — Gmail OAuth2 (tamamlandı)
+## Faz 2a — Gmail OAuth2 (kaldırıldı)
 
-Gmail standart sunucu adresleriyle çalışır (`imap.gmail.com:993`, `smtp.gmail.com:465`),
-tek fark kimlik doğrulama — kullanıcı tarayıcıya yönlendirilip OAuth onayı veriyor,
-alınan access token `AUTHENTICATE XOAUTH2` ile IMAP/SMTP'de şifrenin yerini alıyor.
-`enough_mail` 2.1.7 bunu protokol seviyesinde zaten destekliyor
-(`authenticateWithOAuth2`, SMTP `AuthMechanism.xoauth2`).
+Faz 2a 2026-09-15'te kodlanmış, 2026-09-21'de kullanıcı kararıyla **tamamen
+kaldırıldı**: uygulamada yalnızca IMAP/SMTP + şifre girişi var.
 
-**Alınan kimlikler (Google Cloud Console, proje "kaydet"):**
+Kaldırılanlar:
 
-| Değer | Bilgi |
-|---|---|
-| OAuth Client ID (Android) | `856471546230-onihb0lsnk7qh1apqbcv7qt5no3m6dod.apps.googleusercontent.com` — gizli değil, client secret taşımaz |
-| Paket adı | `tr.com.pazarlik.kaydet` |
-| Debug SHA-1 | `43:DE:A2:51:19:75:44:53:9E:56:4F:32:CA:66:33:82:E1:8C:9B:BC` — yalnızca debug derlemesi; release keystore alınınca Google Cloud Console'a **ikinci bir Android istemcisi** olarak eklenmeli |
-
-**Mimari:**
-
-- `MailCredential` sealed sınıfı (`PasswordCredential` \| `OAuthCredential`) —
-  `MailServerConfig.password` yerine `MailServerConfig.credential` (bkz.
-  `domain/models/mail_models.dart`). `ImapService`/`SmtpService` credential türüne göre
-  `LOGIN` veya `AUTHENTICATE XOAUTH2` gönderir.
-- `SecureStore` genişledi: `readOAuthTokens`/`writeOAuthTokens`/`deleteOAuthTokens` —
-  access+refresh token JSON olarak, şifrenin gittiği yere (Android Keystore) gider.
-- `Accounts.authMethod` sütunu eklendi (`password` \| `googleOAuth`, şema v1→v2 migration
-  ile). Hangi hesabın hangi kimlik doğrulamayı kullandığını ayırt eder.
-- `GoogleOAuthService` (yeni, `data/services/google_oauth_service.dart`) —
-  `flutter_appauth` ile tarayıcı OAuth akışı, `refresh()` ile sessiz token yenileme,
-  Google userinfo uç noktasından e-posta adresi çekme.
-- `MailConnection._credentialFor()` — bağlanmadan önce OAuth token süresi dolmuşsa
-  otomatik yeniler; aksi hâlde sunucu genel bir kimlik hatası döner, kullanıcı gerçek
-  sebebi göremezdi.
-- `AccountRepository.signInWithGoogle()` — `signIn()` ile ortak kayıt adımını
-  `_persistAccount()` yardımcı metodunda paylaşır (DRY).
-- Android: `build.gradle.kts`'e `appAuthRedirectScheme` manifest placeholder'ı
-  (istemci kimliğinin tersine çevrilmiş hâli) eklendi; `AndroidManifest.xml`'deki
-  `android:taskAffinity=""` kaldırıldı (flutter_appauth'ın resmi sorun giderme notu —
-  bu satır OAuth yönlendirmesinin uygulamaya geri dönmesini engelleyebiliyor).
-- Giriş ekranına "Google ile devam et" düğmesi eklendi (mevcut IMAP formunun üstünde,
-  ayraçla ayrılmış).
-
-**Değişen/eklenen dosyalar:** `lib/domain/models/mail_models.dart`,
-`lib/data/services/secure_store.dart`, `lib/data/services/google_oauth_service.dart`
-(yeni), `lib/data/services/imap_service.dart`, `lib/data/services/smtp_service.dart`,
-`lib/data/database/tables.dart`, `lib/data/database/app_database.dart`,
-`lib/data/repositories/account_repository.dart`,
-`lib/data/repositories/mail_connection.dart`, `lib/app/providers.dart`,
-`lib/app/background_sync.dart`, `lib/ui/features/auth/login_screen.dart`,
-`android/app/build.gradle.kts`, `android/app/src/main/AndroidManifest.xml`,
-`pubspec.yaml` (`flutter_appauth: 12.1.0`, `http: ^1.6.0`).
-
-**Kullanıcının yapması gereken (kod tarafında bekleyen bir şey yok):** Google Cloud
-Console'da "Android" tipi istemciler için ayrı bir yönlendirme URI'si alanı yok —
-Google, paket adı + SHA-1 eşleşmesine güveniyor, ekstra bir ayar gerekmiyor. Cihazda/
-emülatörde `flutter run` ile "Google ile devam et"i test etmek yeterli.
+- `GoogleOAuthService` (`data/services/google_oauth_service.dart`), `OAuthTokenSet`,
+  `GoogleSignInResult`; `flutter_appauth` ve `http` bağımlılıkları.
+- `OAuthCredential` — `MailCredential` artık yalnızca `PasswordCredential` taşır.
+- `SecureStore` içindeki OAuth token okuma/yazma/silme; `MailConnection` içindeki
+  token yenileme; `AccountRepository.signInWithGoogle()`.
+- `Accounts.authMethod` sütunu ve `AuthMethod` enum'u. Şema **v6 → v7** göçü sütunu
+  siler (`m.dropColumn`). Eski bir Google hesabı cihazda kaldıysa şifresi olmadığı
+  için "kayıtlı şifre yok" hatası verir; hesap kaldırılıp IMAP/SMTP ile yeniden
+  eklenmelidir. Eski OAuth token'ı hesap silinirken güvenli depodan da temizlenir
+  (`FlutterSecureStore.deletePassword`).
+- Giriş ekranındaki "Google ile devam et" düğmesi, `android/app/build.gradle.kts`
+  içindeki `appAuthRedirectScheme` placeholder'ı.
 
 ## Faz 2b — Outlook/MS365 (Graph API) — bekliyor
 
