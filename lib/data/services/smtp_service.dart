@@ -113,10 +113,6 @@ class EnoughMailSmtpService implements SmtpService {
               ? em.AuthMechanism.plain
               : em.AuthMechanism.login,
         ),
-      OAuthCredential(:final accessToken) => (
-          accessToken,
-          em.AuthMechanism.xoauth2,
-        ),
     };
 
     final auth = await client.authenticate(

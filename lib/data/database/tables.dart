@@ -25,11 +25,6 @@ class Accounts extends Table {
   IntColumn get colorSeed => integer().withDefault(const Constant(0))();
   BoolColumn get isActive => boolean().withDefault(const Constant(true))();
 
-  /// Kimlik doğrulama biçimi — `password` (0) veya `googleOAuth` (1).
-  /// Gerçek şifre/token değeri burada değil, [SecureStore]'da tutulur.
-  IntColumn get authMethod =>
-      intEnum<AuthMethod>().withDefault(const Constant(0))();
-
   /// Sunucu özel anahtar kelime (etiket) destekliyor mu? `null` = bilinmiyor.
   BoolColumn get supportsKeywords => boolean().nullable()();
   TextColumn get capabilitiesJson => text().withDefault(const Constant('[]'))();

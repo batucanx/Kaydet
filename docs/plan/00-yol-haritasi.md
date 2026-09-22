@@ -32,7 +32,7 @@
 | 5 | — | Ekran ekran UI + etkileşim planı | ✅ Doğrudan koda döküldü (34 uçtan uca test) |
 | 6 | — | Arka plan senkronizasyonu + bildirimler | ✅ Kodlandı (cihazda doğrulanmalı) |
 | 7 | `README.md` | Test, hata yönetimi, yayın | ✅ 133 test, release APK |
-| 8 | `05` | v1.1 — eM Client paritesi (çoklu hesap, OAuth, takvim/kişiler/notlar, üretkenlik) | 🔄 Faz 1 (çoklu hesap) tamam, gerisi bekliyor |
+| 8 | `05` | v1.1 — eM Client paritesi (çoklu hesap, takvim/kişiler/notlar, üretkenlik) | 🔄 Faz 1 (çoklu hesap) tamam, gerisi bekliyor |
 
 ## Karar Günlüğü
 

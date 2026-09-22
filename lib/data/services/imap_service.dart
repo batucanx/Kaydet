@@ -170,10 +170,6 @@ class EnoughMailImapService implements ImapService {
           config.username,
           password,
         ),
-        OAuthCredential(:final accessToken) => client.authenticateWithOAuth2(
-          config.username,
-          accessToken,
-        ),
       }).timeout(_loginTimeout);
 
       _eventSubscription = client.eventBus.on<em.ImapEvent>().listen((event) {

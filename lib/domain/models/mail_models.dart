@@ -11,13 +11,6 @@ import '../../core/turkish.dart';
 /// Sunucu bağlantı güvenliği.
 enum SocketSecurity { none, startTls, ssl }
 
-/// Hesabın kimlik doğrulama biçimi.
-///
-/// `password` varsayılandır (mevcut hesapların tümü bu — geriye dönük
-/// uyumluluk için indeks 0). `googleOAuth` şifre yerine [SecureStore]'da
-/// saklanan OAuth token'ını kullanır (bkz. `google_oauth_service.dart`).
-enum AuthMethod { password, googleOAuth }
-
 /// IMAP özel klasör türü.
 ///
 /// Sunucudaki klasör adı ne olursa olsun (`INBOX.Sent`, `Gönderilmiş Öğeler`,
@@ -361,12 +354,10 @@ class OutgoingMessage {
   List<EmailAddress> get allRecipients => [...to, ...cc, ...bcc];
 }
 
-/// Sunucu kimlik doğrulaması: düz şifre veya OAuth2 erişim token'ı.
+/// Sunucu kimlik doğrulaması.
 ///
-/// IMAP/SMTP servisleri bu türe göre dallanır — şifreyle klasik
-/// `LOGIN`/`AUTH PLAIN`, token'la `AUTHENTICATE XOAUTH2` gönderir. Değer ne
-/// olursa olsun veritabanına asla yazılmaz; yalnızca [SecureStore]'a
-/// (Android Keystore) gider, tıpkı şifrenin bugüne kadar gittiği yere.
+/// Değer veritabanına asla yazılmaz; yalnızca [SecureStore]'a (Android
+/// Keystore) gider.
 sealed class MailCredential {
   const MailCredential();
 }
@@ -375,16 +366,6 @@ sealed class MailCredential {
 final class PasswordCredential extends MailCredential {
   const PasswordCredential(this.password);
   final String password;
-}
-
-/// OAuth2 erişim token'ı (Gmail; ileride Outlook Graph API ayrı bir yoldan
-/// eklenecek, bkz. `docs/plan/05-em-client-paritesi.md`).
-///
-/// Süresi dolduğunda (~1 saat) [AccountRepository] yenileme akışını
-/// tetikler — bu sınıf yalnızca o anki geçerli token'ı taşır.
-final class OAuthCredential extends MailCredential {
-  const OAuthCredential(this.accessToken);
-  final String accessToken;
 }
 
 /// Bağlantı ayarları — güvenli depodan gelen kimlik bilgisiyle birleştirilir.

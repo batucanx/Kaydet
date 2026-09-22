@@ -118,27 +118,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
-  /// Google ile giriş — tarayıcıda OAuth onayı alınır, sunucu/port sorulmaz.
-  Future<void> _submitGoogle() async {
-    setState(() {
-      _loading = true;
-      _failure = null;
-    });
-
-    final result =
-        await ref.read(accountRepositoryProvider).signInWithGoogle();
-
-    if (!mounted) return;
-    setState(() => _loading = false);
-
-    result.fold(
-      (_) {
-        if (widget.isAddingAccount && mounted) Navigator.of(context).pop();
-      },
-      (failure) => setState(() => _failure = failure),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -173,37 +152,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: Space.xs),
-                    Text(
-                      'Güvenli e-posta istemcisi',
-                      textAlign: TextAlign.center,
-                      style: text.labelSmall?.copyWith(color: t.textTertiary),
-                    ),
                     const SizedBox(height: Space.xxxl),
-
-                    OutlinedButton.icon(
-                      onPressed: _loading ? null : _submitGoogle,
-                      icon: const Icon(LucideIcons.mail, size: IconSize.md),
-                      label: const Text('Google ile devam et'),
-                    ),
-                    const SizedBox(height: Space.lg),
-                    Row(
-                      children: [
-                        Expanded(child: Divider(color: t.divider)),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: Space.sm,
-                          ),
-                          child: Text(
-                            'veya e-posta ile giriş yap',
-                            style: text.labelSmall
-                                ?.copyWith(color: t.textTertiary),
-                          ),
-                        ),
-                        Expanded(child: Divider(color: t.divider)),
-                      ],
-                    ),
-                    const SizedBox(height: Space.lg),
 
                     _Field(
                       controller: _email,
@@ -293,26 +242,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         }),
                         onHostEdited: () => _hostsTouched = true,
                       ),
-                      const SizedBox(height: Space.md),
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(
-                            LucideIcons.info,
-                            size: IconSize.sm,
-                            color: t.textTertiary,
-                          ),
-                          const SizedBox(width: Space.sm),
-                          Expanded(
-                            child: Text(
-                              'Güvenlik "Yok" seçilirse şifreniz ağ üzerinde '
-                              'açık metin olarak gönderilir. SSL/TLS önerilir.',
-                              style: text.labelSmall
-                                  ?.copyWith(color: t.textTertiary),
-                            ),
-                          ),
-                        ],
-                      ),
                     ],
 
                     if (_failure != null) ...[
@@ -333,13 +262,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               ),
                             )
                           : const Text('Giriş yap'),
-                    ),
-                    const SizedBox(height: Space.lg),
-                    Text(
-                      'Şifreniz yalnızca bu cihazda, Android Keystore ile '
-                      'şifrelenerek saklanır.',
-                      textAlign: TextAlign.center,
-                      style: text.labelSmall?.copyWith(color: t.textTertiary),
                     ),
                   ],
                 ),

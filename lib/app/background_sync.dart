@@ -13,7 +13,6 @@ import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
 import '../data/repositories/sync_engine.dart';
 import '../data/services/app_settings.dart';
-import '../data/services/google_oauth_service.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
@@ -91,7 +90,6 @@ Future<bool> runBackgroundSync() async {
     database: database,
     notifications: NotificationService(),
   );
-  final googleOAuth = GoogleOAuthService();
 
   try {
     final accounts = await database.allAccounts();
@@ -104,7 +102,6 @@ Future<bool> runBackgroundSync() async {
       database: database,
       secureStore: secureStore,
       imapService: imap,
-      googleOAuth: googleOAuth,
     );
     final engine = SyncEngine(database: database, connection: connection);
     final repository = MailRepository(
@@ -171,7 +168,6 @@ Future<bool> runBackgroundSync() async {
     return true;
   } finally {
     await imap.dispose();
-    googleOAuth.dispose();
     await database.close();
   }
 }
@@ -227,7 +223,6 @@ Future<void> _applyMessageAction(
   final database = AppDatabase();
   final secureStore = FlutterSecureStore();
   final imap = EnoughMailImapService();
-  final googleOAuth = GoogleOAuthService();
   final notifications = NotificationService();
 
   try {
@@ -238,7 +233,6 @@ Future<void> _applyMessageAction(
       database: database,
       secureStore: secureStore,
       imapService: imap,
-      googleOAuth: googleOAuth,
     );
     final engine = SyncEngine(database: database, connection: connection);
     final repository = MailRepository(
@@ -272,7 +266,6 @@ Future<void> _applyMessageAction(
     // yazıldıysa bir sonraki eşitlemede yine denenir.
   } finally {
     await imap.dispose();
-    googleOAuth.dispose();
     await database.close();
   }
 }

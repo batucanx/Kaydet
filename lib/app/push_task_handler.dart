@@ -6,7 +6,6 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../data/database/app_database.dart';
 import '../data/repositories/account_watcher.dart';
 import '../data/repositories/new_mail_notifier.dart';
-import '../data/services/google_oauth_service.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
@@ -21,7 +20,6 @@ import 'push_protocol.dart';
 class PushTaskHandler extends TaskHandler {
   AppDatabase? _database;
   FlutterSecureStore? _secureStore;
-  GoogleOAuthService? _googleOAuth;
   NewMailNotifier? _notifier;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
 
@@ -42,7 +40,6 @@ class PushTaskHandler extends TaskHandler {
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     final database = _database = AppDatabase();
     _secureStore = FlutterSecureStore();
-    _googleOAuth = GoogleOAuthService();
     _notifier = NewMailNotifier(
       database: database,
       notifications: NotificationService(),
@@ -81,7 +78,6 @@ class PushTaskHandler extends TaskHandler {
         _stopWatching(id).timeout(_shutdownBudget, onTimeout: () {}),
     ]);
 
-    _googleOAuth?.dispose();
     await _database?.close();
   }
 
@@ -143,7 +139,6 @@ class PushTaskHandler extends TaskHandler {
       database: _database!,
       imapService: imap,
       secureStore: _secureStore!,
-      googleOAuth: _googleOAuth!,
       onSynced: _onSynced,
     );
     return _Watched(watcher, imap);
