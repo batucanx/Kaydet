@@ -579,24 +579,34 @@ class AppDatabase extends _$AppDatabase {
     await (update(messages)..where((m) => m.id.isIn(ids))).write(patch);
   }
 
-  /// Yalnızca ileti henüz gönderilmediyse "gönderiliyor" durumuna geçirir.
+  /// Yalnızca ileti henüz gönderilmediyse (ve hâlihazırda gönderiliyor
+  /// değilse) "gönderiliyor" durumuna geçirir.
   ///
   /// Dönüş 0 ise ileti az önce başka bir işlemci tarafından zaten
-  /// gönderilmiş demektir (bkz. `claimDueOperations` — arka plan
-  /// senkronizasyonu ayrı bir isolate'ta çalıştığından aynı `send` işlemi
-  /// teorik olarak iki işlemci tarafından eşzamanlı sahiplenebilir);
-  /// çağıran bu durumda göndermeyi ATLAMALIDIR, aksi hâlde alıcı aynı
-  /// e-postayı iki kez alır. Koşullu `UPDATE ... WHERE outboxState != sent`
-  /// bunu tek bir atomik SQL ifadesiyle garanti eder.
-  Future<int> claimOutboxSend(int messageId) =>
+  /// sahiplenilmiş veya gönderilmiş demektir (bkz. `claimDueOperations` —
+  /// arka plan senkronizasyonu ayrı bir isolate'ta çalıştığından aynı
+  /// `send` işlemi teorik olarak iki işlemci tarafından eşzamanlı
+  /// sahiplenebilir); çağıran bu durumda göndermeyi ATLAMALIDIR, aksi hâlde
+  /// alıcı aynı e-postayı iki kez alır.
+  ///
+  /// `sending` normalde İZİN VERİLEN kaynak durumlar arasında DEĞİLDİR —
+  /// aksi hâlde bu, kendi başına bir "her zaman evet" kilidi olur ve hiçbir
+  /// şey engellemez. [allowReclaim] yalnızca `claimDueOperations` bu işlemi
+  /// süresi dolmuş (muhtemelen çökmüş) bir kiradan yeniden sahiplendiğinde
+  /// `true` geçirilmelidir: bu durumda önceki sahibin ASLA bitirmediği
+  /// varsayılır (bkz. `MailRepository.processQueue` — her işlem
+  /// yürütülmeden hemen önce `renewLease` ile kirasını tazeler; kira yine de
+  /// dolduysa önceki işlemci muhtemelen çökmüştür) ve `sending`'de takılı
+  /// kalan ileti kurtarılabilir hâle gelir.
+  Future<int> claimOutboxSend(int messageId, {required bool allowReclaim}) =>
       (update(messages)..where(
             (m) =>
                 m.id.equals(messageId) &
                 m.outboxState.isIn([
                   OutboxState.none.index,
                   OutboxState.queued.index,
-                  OutboxState.sending.index,
                   OutboxState.failed.index,
+                  if (allowReclaim) OutboxState.sending.index,
                 ]),
           ))
           .write(
@@ -910,32 +920,15 @@ class AppDatabase extends _$AppDatabase {
   Future<int> enqueue(PendingOperationsCompanion row) =>
       into(pendingOperations).insert(row);
 
-  Future<List<PendingOperationRow>> dueOperations(
-    int accountId, {
-    int limit = 50,
-  }) {
-    final now = DateTime.now().toUtc();
-    return (select(pendingOperations)
-          ..where(
-            (p) =>
-                p.accountId.equals(accountId) &
-                p.status.equalsValue(PendingOpStatus.pending) &
-                (p.nextAttemptAt.isNull() |
-                    p.nextAttemptAt.isSmallerOrEqualValue(now)),
-          )
-          ..orderBy([(p) => OrderingTerm(expression: p.createdAt)])
-          ..limit(limit))
-        .get();
-  }
-
   /// Kuyruk zamanlaması (backoff) ne olursa olsun, henüz kalıcı hataya
   /// düşmemiş (terminal olmayan) tüm işlemler.
   ///
   /// [SyncEngine]'in "bu UID'de bekleyen bir kullanıcı işlemi var, sunucudan
   /// gelen eski bayrak durumunu üzerine yazma" kilidi için kullanılır.
-  /// [dueOperations]'ın aksine `nextAttemptAt` filtresi UYGULANMAZ: geri
-  /// çekilme (backoff) bekleyen bir işlem de kilit altında kalmalıdır, aksi
-  /// hâlde tam bu pencerede kullanıcının değişikliği sessizce geri alınabilir.
+  /// `claimDueOperations`'ın aksine `nextAttemptAt` filtresi UYGULANMAZ:
+  /// geri çekilme (backoff) bekleyen bir işlem de kilit altında kalmalıdır,
+  /// aksi hâlde tam bu pencerede kullanıcının değişikliği sessizce geri
+  /// alınabilir.
   Future<List<PendingOperationRow>> activeOperations(
     int accountId, {
     int limit = 200,
@@ -961,67 +954,105 @@ class AppDatabase extends _$AppDatabase {
   /// hâle gelir — aksi hâlde `running` durumunda sonsuza dek asılı kalırdı.
   static const Duration _claimLease = Duration(minutes: 3);
 
-  static bool _isClaimable(PendingOperationRow op, DateTime now) {
-    switch (op.status) {
-      case PendingOpStatus.pending:
-        return op.nextAttemptAt == null || !op.nextAttemptAt!.isAfter(now);
-      case PendingOpStatus.running:
-        return op.nextAttemptAt != null && !op.nextAttemptAt!.isAfter(now);
-      case PendingOpStatus.failed:
-      case PendingOpStatus.done:
-        return false;
-    }
-  }
-
   Expression<bool> _nextAttemptMatches(
     $PendingOperationsTable p,
     DateTime? value,
   ) => value == null ? p.nextAttemptAt.isNull() : p.nextAttemptAt.equals(value);
 
+  /// Şu an sahiplenilebilir (zamanı gelmiş `pending` ya da kirası süresi
+  /// dolmuş `running`) tüm işlemler için SQL koşulu.
+  Expression<bool> _isClaimableNow($PendingOperationsTable p, DateTime now) =>
+      (p.status.equalsValue(PendingOpStatus.pending) &
+          (p.nextAttemptAt.isNull() |
+              p.nextAttemptAt.isSmallerOrEqualValue(now))) |
+      (p.status.equalsValue(PendingOpStatus.running) &
+          p.nextAttemptAt.isSmallerOrEqualValue(now));
+
   /// Bekleyen işlemleri sunucuya uygulamak üzere ATOMİK olarak sahiplenir.
   ///
-  /// [dueOperations] yalnızca SELECT yapar; aynı satır iki farklı işlemci
-  /// (örn. ön plandaki kullanıcı eylemi + WorkManager'ın ayrı isolate'ta
-  /// çalışan arka plan senkronizasyonu — ikisi de aynı sqlite dosyasını
-  /// paylaşır) tarafından eşzamanlı okunup İKİ KEZ işlenebilir; bu özellikle
-  /// `send` işleminde alıcının aynı e-postayı iki kez alması demektir.
+  /// Sahiplenebilirlik (zamanı gelmiş `pending`, ya da kirası süresi dolmuş
+  /// `running`) doğrudan SQL `WHERE`'de filtrelenir ve `LIMIT` bu filtreden
+  /// SONRA uygulanır — aksi hâlde (`activeOperations`'ta olduğu gibi) henüz
+  /// zamanı gelmemiş, geri çekilmede bekleyen ESKİ işlemler `createdAt`
+  /// sırasına göre aday penceresini doldurup zamanı çoktan gelmiş DAHA YENİ
+  /// işlemlerin hiç seçilmemesine (kuyruğun "takılı" görünmesine) yol açabilir.
   ///
-  /// Bu metot her adayı `WHERE id=? AND status=? AND next_attempt_at=?`
-  /// koşullu tek bir `UPDATE` ile "kilitler" — koşul, adayı SELECT ederken
-  /// okunan tam (status, nextAttemptAt) çiftiyle eşleşmelidir. SQLite aynı
-  /// satıra yazan iki `UPDATE`'i sıraya koyduğundan, ikinci çağrının WHERE
-  /// koşulu (satır artık ilk çağrı tarafından değiştirildiği için) eşleşmez
-  /// ve 0 satır etkiler — bu, süreçler/isolate'lar arası doğru çalışan bir
+  /// Basit bir SELECT yeterli olmaz: aynı satır iki farklı işlemci (örn.
+  /// ön plandaki kullanıcı eylemi + WorkManager'ın ayrı isolate'ta çalışan
+  /// arka plan senkronizasyonu — ikisi de aynı sqlite dosyasını paylaşır)
+  /// tarafından eşzamanlı okunup İKİ KEZ işlenebilir; bu özellikle `send`
+  /// işleminde alıcının aynı e-postayı iki kez alması demektir. Bu yüzden
+  /// her aday `WHERE id=? AND status=? AND next_attempt_at=?` koşullu tek
+  /// bir `UPDATE` ile "kilitlenir" — koşul, adayı SELECT ederken okunan tam
+  /// (status, nextAttemptAt) çiftiyle eşleşmelidir. SQLite aynı satıra yazan
+  /// iki `UPDATE`'i sıraya koyduğundan, ikinci çağrının WHERE koşulu (satır
+  /// artık ilk çağrı tarafından değiştirildiği için) eşleşmez ve 0 satır
+  /// etkiler — bu, süreçler/isolate'lar arası doğru çalışan bir
   /// "compare-and-swap" sağlar. Kazanan `status`'u `running`'e çevirir ve
-  /// `nextAttemptAt`'ı bir kira (lease) süresi kadar ileri atar.
+  /// `nextAttemptAt`'ı bir kira (lease) süresi kadar ileri atar. Tüm
+  /// `UPDATE`'ler tek bir `transaction`'da toplanır — aksi hâlde her biri
+  /// ayrı bir diskteki taahhüt (commit) olur.
   Future<List<PendingOperationRow>> claimDueOperations(
     int accountId, {
     int limit = 50,
   }) async {
     final now = DateTime.now().toUtc();
-    final candidates = await activeOperations(accountId, limit: limit);
     final leaseUntil = now.add(_claimLease);
 
-    final claimed = <PendingOperationRow>[];
-    for (final op in candidates) {
-      if (!_isClaimable(op, now)) continue;
-      final affected =
-          await (update(pendingOperations)..where(
+    final candidates =
+        await (select(pendingOperations)
+              ..where(
                 (p) =>
-                    p.id.equals(op.id) &
-                    p.status.equalsValue(op.status) &
-                    _nextAttemptMatches(p, op.nextAttemptAt),
-              ))
-              .write(
-                PendingOperationsCompanion(
-                  status: const Value(PendingOpStatus.running),
-                  nextAttemptAt: Value(leaseUntil),
-                ),
-              );
-      if (affected > 0) claimed.add(op);
-    }
-    return claimed;
+                    p.accountId.equals(accountId) & _isClaimableNow(p, now),
+              )
+              ..orderBy([(p) => OrderingTerm(expression: p.createdAt)])
+              ..limit(limit))
+            .get();
+
+    return transaction(() async {
+      final claimed = <PendingOperationRow>[];
+      for (final op in candidates) {
+        final affected =
+            await (update(pendingOperations)..where(
+                  (p) =>
+                      p.id.equals(op.id) &
+                      p.status.equalsValue(op.status) &
+                      _nextAttemptMatches(p, op.nextAttemptAt),
+                ))
+                .write(
+                  PendingOperationsCompanion(
+                    status: const Value(PendingOpStatus.running),
+                    nextAttemptAt: Value(leaseUntil),
+                  ),
+                );
+        if (affected > 0) claimed.add(op);
+      }
+      return claimed;
+    });
   }
+
+  /// Sahiplenilmiş bir işlemin kirasını tazeler.
+  ///
+  /// `claimDueOperations` tüm partiye TEK bir `_claimLease` süresi tanır;
+  /// kuyrukta önceki işlemler zaman aldıkça sıradaki işlemler için bu süre
+  /// erir. `MailRepository.processQueue` her işlemi yürütmeye başlamadan
+  /// hemen önce bunu çağırır — böylece o işlem (ör. yavaş bir SMTP
+  /// gönderimi) kendi tam kira süresiyle başlar; aksi hâlde kira dolar,
+  /// başka bir işlemci aynı işlemi hâlâ devam ederken yeniden sahiplenip
+  /// (özellikle `send` için) alıcıya aynı e-postayı ikinci kez gönderebilir.
+  /// Satır artık `running` değilse (başka biri zaten yeniden sahiplendiyse)
+  /// koşul eşleşmez ve sessizce hiçbir şey değişmez.
+  Future<void> renewLease(int operationId) =>
+      (update(pendingOperations)..where(
+            (p) =>
+                p.id.equals(operationId) &
+                p.status.equalsValue(PendingOpStatus.running),
+          ))
+          .write(
+            PendingOperationsCompanion(
+              nextAttemptAt: Value(DateTime.now().toUtc().add(_claimLease)),
+            ),
+          );
 
   /// Sahiplenilmiş (`running`) işlemleri hiçbir deneme sayısı artırmadan
   /// `pending`'e geri döndürür.

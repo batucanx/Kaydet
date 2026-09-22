@@ -658,12 +658,12 @@ class SyncEngine {
 
   /// Bekleyen işlem kuyruğundaki iletilerin UID'leri.
   ///
-  /// `dueOperations` yerine `activeOperations` kullanılır: `dueOperations`
-  /// yalnızca zamanı GELMİŞ (backoff beklemeyen) işlemleri döner. Bir işlem
-  /// geçici hatadan sonra geri çekilme (backoff) beklerken de kilitli
-  /// kalmalıdır — aksi hâlde tam bu pencerede araya giren bir senkronizasyon,
-  /// sunucudaki eski bayrağı yerelin üzerine yazıp kullanıcının az önceki
-  /// değişikliğini sessizce geri alabilir.
+  /// `claimDueOperations` yerine `activeOperations` kullanılır:
+  /// `claimDueOperations` yalnızca zamanı GELMİŞ (backoff beklemeyen)
+  /// işlemleri döner. Bir işlem geçici hatadan sonra geri çekilme (backoff)
+  /// beklerken de kilitli kalmalıdır — aksi hâlde tam bu pencerede araya
+  /// giren bir senkronizasyon, sunucudaki eski bayrağı yerelin üzerine
+  /// yazıp kullanıcının az önceki değişikliğini sessizce geri alabilir.
   Future<Set<int>> _lockedUids(int accountId, int mailboxId) async {
     final pending = await _db.activeOperations(accountId, limit: 200);
     final locked = <int>{};
