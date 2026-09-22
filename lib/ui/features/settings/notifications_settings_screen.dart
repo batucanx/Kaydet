@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -97,7 +99,9 @@ class _NotificationsSettingsScreenState
               if (_systemEnabled == false)
                 SettingsTile(
                   icon: LucideIcons.bellOff,
-                  title: 'Bildirimler Android ayarlarında kapalı',
+                  title: Platform.isIOS
+                      ? 'Bildirimler iOS ayarlarında kapalı'
+                      : 'Bildirimler Android ayarlarında kapalı',
                   subtitle:
                       'Yeni ileti bildirimi alabilmek için telefonun '
                       'ayarlarından Kaydet bildirimlerine izin verin.',
@@ -133,7 +137,13 @@ class _NotificationsSettingsScreenState
                 ),
               ),
               // Anlık modun bedeli (kalıcı bildirim, pil) gizlenmez; diğer
-              // modlarda ise Android'in 15 dakikalık sınırı açıkça yazılır.
+              // modlarda ise platformun kontrol sıklığı sınırı açıkça
+              // yazılır. iOS'ta "Anlık" da dahil hiçbir mod gerçek anlamda
+              // garanti değildir: `flutter_foreground_task` iOS'ta yalnızca
+              // ~15 dakikada bir, ~30 saniyeliğine çalışabilir (bkz. paketin
+              // kendi belgeleri) — Android'deki gibi kalıcı bir arka plan
+              // bağlantısı iOS'ta mümkün değildir. Gerçekleşmeyecek bir vaat
+              // vermemek için bu fark platforma göre açıkça yazılır.
               Padding(
                 padding: const EdgeInsets.fromLTRB(
                   Space.lg,
@@ -142,37 +152,57 @@ class _NotificationsSettingsScreenState
                   Space.md,
                 ),
                 child: Text(
-                  isPush
-                      ? 'Yeni iletiler, uygulama kapalıyken de geldikleri '
-                            'anda bildirilir. Bunun için Kaydet arka planda '
-                            'bağlı kalır ve Android durum çubuğunda sessiz bir '
-                            'bildirim gösterir.'
-                      : 'Bu seçenekte Android arka planda en sık 15 dakikada '
-                            'bir kontrole izin verir; bildirimler bu aralıkla '
-                            'gecikebilir. Anında bildirim için "Anlık" '
-                            'seçeneğini kullanın.',
+                  _frequencyExplanation(isPush: isPush),
                   style: Theme.of(
                     context,
                   ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
                 ),
               ),
-              SettingsTile(
-                icon: LucideIcons.batteryCharging,
-                title: 'Pil optimizasyonu',
-                subtitle: isPush
-                    ? 'Anlık bildirimin telefon uykudayken de kesilmemesi '
-                          'için Kaydet\'i pil optimizasyonundan hariç tutun.'
-                    : 'Bazı telefonlar arka plan senkronizasyonunu '
-                          'kısıtlayıp bildirimleri geciktirebilir. '
-                          'Kaydet\'i hariç tutmak bunu azaltır.',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
-                onTap: () => _requestIgnoreBatteryOptimizations(context),
-              ),
+              // "Pil optimizasyonundan hariç tutma" yalnızca Android'de
+              // (Doze) var olan bir kavramdır; iOS'ta kullanıcıya gösterecek
+              // karşılığı yoktur.
+              if (Platform.isAndroid)
+                SettingsTile(
+                  icon: LucideIcons.batteryCharging,
+                  title: 'Pil optimizasyonu',
+                  subtitle: isPush
+                      ? 'Anlık bildirimin telefon uykudayken de kesilmemesi '
+                            'için Kaydet\'i pil optimizasyonundan hariç tutun.'
+                      : 'Bazı telefonlar arka plan senkronizasyonunu '
+                            'kısıtlayıp bildirimleri geciktirebilir. '
+                            'Kaydet\'i hariç tutmak bunu azaltır.',
+                  trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                  onTap: () => _requestIgnoreBatteryOptimizations(context),
+                ),
             ],
           ),
         ],
       ),
     );
+  }
+
+  /// [isPush] doğruysa "Anlık" modun, değilse periyodik modun bedelini
+  /// platforma göre dürüstçe açıklar (bkz. yukarıdaki çağrı noktasının
+  /// doc yorumu).
+  String _frequencyExplanation({required bool isPush}) {
+    if (Platform.isIOS) {
+      return isPush
+          ? 'iOS\'ta uygulama kapalıyken anlık bildirim garanti edilemez — '
+                'sistem arka plan görevini yaklaşık 15 dakikada bir, en '
+                'fazla 30 saniyeliğine çalıştırır. Uygulama açıkken '
+                'iletiler saniyeler içinde düşer.'
+          : 'Bu seçenekte arka plan kontrolünü ne zaman çalıştıracağına '
+                'iOS kendisi karar verir (pil durumu, kullanım '
+                'alışkanlığına göre); seçtiğiniz süre yalnızca bir alt '
+                'sınırdır, hiç tetiklenmediği günler olabilir.';
+    }
+    return isPush
+        ? 'Yeni iletiler, uygulama kapalıyken de geldikleri anda '
+              'bildirilir. Bunun için Kaydet arka planda bağlı kalır ve '
+              'Android durum çubuğunda sessiz bir bildirim gösterir.'
+        : 'Bu seçenekte Android arka planda en sık 15 dakikada bir '
+              'kontrole izin verir; bildirimler bu aralıkla gecikebilir. '
+              'Anında bildirim için "Anlık" seçeneğini kullanın.';
   }
 
   /// Android'in standart "pil optimizasyonundan hariç tut" sistem dialogunu

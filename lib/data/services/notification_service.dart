@@ -162,8 +162,16 @@ class NotificationService {
   /// Bildirimler şu an sistem tarafından gösterilebilir mi? (İzin verilmemiş
   /// ya da kullanıcı sistem ayarlarından kapatmışsa `false`.)
   Future<bool> areEnabled() async {
-    if (!Platform.isAndroid) return true;
     await initialize();
+    if (Platform.isIOS) {
+      final ios = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      final status = await ios?.checkPermissions();
+      // `status == null` eklenti henüz sorguya cevap veremedi demektir —
+      // kullanıcıyı yanlışlıkla "kapalı" göstermemek için `true` varsayılır.
+      return status?.isEnabled ?? true;
+    }
+    if (!Platform.isAndroid) return true;
     return await _android?.areNotificationsEnabled() ?? true;
   }
 
