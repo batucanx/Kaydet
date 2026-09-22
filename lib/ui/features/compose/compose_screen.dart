@@ -204,10 +204,24 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _autosave = Timer(const Duration(seconds: 3), _persistDraft);
   }
 
+  // `databaseProvider`'dan doğrudan tek seferlik sorgu kullanılır — bu
+  // ekranın kendi gösterdiği ileti kalıcı olarak değişmez, bu yüzden
+  // `messageProvider`/`messageBodyProvider`/`attachmentsProvider` gibi
+  // canlı-izleyen (ve `mail_detail_screen.dart`'ın aksine burada hiç
+  // `ref.watch` edilmeyen) `StreamProvider.family`'ler `autoDispose`
+  // olmadıkları için her farklı taslak/yanıt id'sinde kalıcı bir veritabanı
+  // aboneliği sızdırırdı.
   Future<void> _prefill() async {
+    final db = ref.read(databaseProvider);
     if (widget.draftId != null) {
-      final row = await ref.read(messageProvider(widget.draftId!).future);
-      final body = await ref.read(messageBodyProvider(widget.draftId!).future);
+      final id = widget.draftId!;
+      // Üçü de bağımsız; ayrı ayrı `await` etmek yerine hepsini hemen
+      // başlatıp en yavaşı kadar beklemek toplam süreyi üçe bölür.
+      final rowFuture = db.messageById(id);
+      final bodyFuture = db.bodyOf(id);
+      final attachmentsFuture = db.attachmentsOf(id);
+      final row = await rowFuture;
+      final body = await bodyFuture;
       if (row != null) {
         // Taslak hangi hesapta oluşturulduysa "Gönderen" o kalır — GENEL
         // aktif hesap taslaktan sonra değişmiş olabilir.
@@ -227,9 +241,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _inReplyTo = row.inReplyTo;
         _references = row.referencesRaw;
         _showCcBcc = _cc.text.isNotEmpty || _bcc.text.isNotEmpty;
-        final existing = await ref.read(
-          attachmentsProvider(widget.draftId!).future,
-        );
+        final existing = await attachmentsFuture;
         _attachments.addAll(
           existing
               .where((a) => a.isOutgoing && a.localPath != null)
@@ -238,10 +250,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _labels.addAll(_decodeLabels(row.labelsJson));
       }
     } else if (widget.replyToId != null) {
-      final row = await ref.read(messageProvider(widget.replyToId!).future);
-      final body = await ref.read(
-        messageBodyProvider(widget.replyToId!).future,
-      );
+      final id = widget.replyToId!;
+      final rowFuture = db.messageById(id);
+      final bodyFuture = db.bodyOf(id);
+      final row = await rowFuture;
+      final body = await bodyFuture;
       if (row != null) {
         // Yanıt/iletme, iletiyi alan hesaptan gönderilir.
         _fromAccountId = row.accountId;
