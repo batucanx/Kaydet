@@ -56,14 +56,14 @@ void main() {
 
     test('tema renkleri ve gövde belgeye işlenir', () {
       final html = doc(
-        tokens: KaydetTokens.outlookDark,
+        tokens: KaydetTokens.dark,
         body: '<p id="x">Selam</p>',
       );
       expect(
         html,
-        contains('html { background: #000000; overflow-x: hidden; }'),
+        contains('html { background: #1c1c1e; overflow-x: hidden; }'),
       );
-      expect(html, contains('"bg":[0,0,0]'));
+      expect(html, contains('"bg":[28,28,30]'));
       expect(
         html,
         contains('<body><kd-root><p id="x">Selam</p></kd-root></body>'),

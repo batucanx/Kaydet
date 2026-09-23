@@ -111,7 +111,6 @@ abstract final class AppText {
 abstract final class AppTheme {
   static ThemeData dark() => _build(KaydetTokens.dark);
   static ThemeData light() => _build(KaydetTokens.light);
-  static ThemeData outlookDark() => _build(KaydetTokens.outlookDark);
 
   static ThemeData _build(KaydetTokens t) {
     final isDark = t.isDark;

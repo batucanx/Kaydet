@@ -96,6 +96,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     required this.brightness,
     required this.bg,
     required this.appBarBg,
+    required this.readingBg,
     required this.surface,
     required this.surfaceElevated,
     required this.surfaceDeep,
@@ -119,10 +120,15 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   final Brightness brightness;
 
   final Color bg;
-  // Çoğu temada `bg` ile aynıdır; yalnızca Outlook Koyu gibi AppBar'ın
-  // zeminden farklı bir tonda olduğu temalarda ayrışır (bkz. `AppTheme._build`
-  // içindeki `appBarTheme.backgroundColor`).
+  // Çoğu temada `bg` ile aynıdır; yalnızca koyu temada AppBar'ın zeminden
+  // farklı bir tonda olduğu için ayrışır (bkz. `AppTheme._build` içindeki
+  // `appBarTheme.backgroundColor`).
   final Color appBarBg;
+  // Mail detay ekranının okuma bölmesi (WebView gövdesi + iskelet dolgusu).
+  // Açık temada `bg` ile aynıdır; koyu temada, liste/drawer'ın siyah olan
+  // `bg`/`surfaceDeep`'inden ayrışan kendi gri tonu vardır (bkz.
+  // `mail_detail_screen.dart`, `mail_html_document.dart`).
+  final Color readingBg;
   final Color surface;
   final Color surfaceElevated;
   final Color surfaceDeep;
@@ -149,38 +155,12 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
 
   bool get isDark => brightness == Brightness.dark;
 
-  /// Koyu tema — varsayılan. eM Client'ın koyu paletiyle eşleşecek şekilde
-  /// nötr, mavimsi bir kömür tonu kullanır (önceki sürüm daha yeşil/turkuaz
-  /// kaçıyordu).
-  static const KaydetTokens dark = KaydetTokens(
-    brightness: Brightness.dark,
-    bg: Color(0xFF0E1114),
-    appBarBg: Color(0xFF0E1114),
-    surface: Color(0xFF13161A),
-    surfaceElevated: Color(0xFF1A1E24),
-    surfaceDeep: Color(0xFF090B0D),
-    textPrimary: Color(0xFFE8EEF1), // 16.17:1
-    textSecondary: Color(0xFF9FB0B8), // 8.46:1
-    textTertiary: Color(0xFF6B7D85), // 4.42:1
-    accent: Color(0xFF4A9EE0), // 6.55:1 (metin/ikon)
-    accentFill: Color(0xFF2478C7), // beyaz metinle 4.58:1
-    onAccentFill: Color(0xFFFFFFFF),
-    accentSubtle: Color(0x1F4A9EE0),
-    danger: Color(0xFFEC5A5F), // 5.59:1
-    dangerFill: Color(0xFFC62A2F), // beyaz metinle 5.57:1
-    success: Color(0xFF30A46C), // 6.00:1
-    warning: Color(0xFFF5A623), // 9.34:1
-    divider: Color(0xFF20242A),
-    border: Color(0xFF2C323A),
-    scrim: Color(0x8C000000),
-    avatarTones: _darkAvatarTones,
-  );
-
   /// Açık tema.
   static const KaydetTokens light = KaydetTokens(
     brightness: Brightness.light,
     bg: Color(0xFFFFFFFF),
     appBarBg: Color(0xFFFFFFFF),
+    readingBg: Color(0xFFFFFFFF),
     surface: Color(0xFFF6F8F9),
     surfaceElevated: Color(0xFFFFFFFF),
     surfaceDeep: Color(0xFFEEF2F4),
@@ -201,23 +181,29 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     avatarTones: _lightAvatarTones,
   );
 
-  /// Outlook Koyu — kullanıcının verdiği referans paletin birebir kopyası.
-  /// Ekstra, isteğe bağlı bir seçenektir; `dark`/`light`i değiştirmez.
-  /// Belirtilmeyen alanlar (surface/surfaceElevated, danger/success/warning,
-  /// avatarTones) `dark` temasından devralınır — bu ton saf siyah zeminde de
-  /// kontrastı korur, yeni bir palet icat etmeye gerek yok.
-  static const KaydetTokens outlookDark = KaydetTokens(
+  /// Koyu tema — varsayılan. Outlook mobil uygulamasının koyu temasından
+  /// alınan ekran görüntülerinin renk analizinden çıkarıldı.
+  ///
+  /// App bar/durum çubuğu VE navigasyon drawer'ı saf siyah, aynı düzlemde
+  /// (`appBarBg` = `surfaceDeep`); liste ekranları (gelen kutusu vb.) ve
+  /// mail detayının okuma bölmesi ise gözü yormayan gri kömür tonunda
+  /// (`bg` = `readingBg`). `textSecondary`/`textTertiary`, referans
+  /// görsellerdeki beyaz metnin sırasıyla %62 ve %42 opaklığının bu gri
+  /// zemin üzerine düz renk karşılığıdır.
+  static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
-    bg: Color(0xFF000000),
-    appBarBg: Color(0xFF121212),
-    surface: Color(0xFF121212),
-    surfaceElevated: Color(0xFF1E1E1E),
-    surfaceDeep: Color(0xFF1E1E1E), // Drawer zemini
+    bg: Color(0xFF1C1C1E), // Gelen kutusu / liste ekranları
+    appBarBg: Color(0xFF000000),
+    readingBg: Color(0xFF1C1C1E), // Mail detayının okuma bölmesi
+    surface: Color(0xFF1C1C1E),
+    surfaceElevated: Color(0xFF2C2C2E),
+    surfaceDeep: Color(0xFF000000), // Drawer zemini — app bar'la aynı düzlem
     textPrimary: Color(0xFFFFFFFF),
-    textSecondary: Color(0xFFA6A6A6),
-    textTertiary: Color(0xFF7A7A7A),
-    accent: Color(0xFF4285F4),
-    accentFill: Color(0xFF4285F4),
+    // beyaz %62/%42 opaklık, readingBg (1C1C1E) üzerine düz renk karşılığı
+    textSecondary: Color(0xFFA9A9AA),
+    textTertiary: Color(0xFF7B7B7D),
+    accent: Color(0xFF0078D4), // Fluent marka mavisi
+    accentFill: Color(0xFF0078D4),
     onAccentFill: Color(0xFFFFFFFF),
     // Seçili klasör/liste satırının arka planı — bkz. `FolderDrawer`
     // içindeki `_FolderTile` ve `listTileTheme.selectedColor`.
@@ -226,8 +212,11 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     dangerFill: Color(0xFFC62A2F),
     success: Color(0xFF30A46C),
     warning: Color(0xFFF5A623),
-    divider: Color(0xFF2D2D2D),
-    border: Color(0xFF2D2D2D),
+    // `readingBg` (1C1C1E) üzerinde görünür kalması için beyaz %12
+    // opaklığın düz renk karşılığına çekildi (saf siyah `bg` üzerinde de
+    // fazlasıyla kontrastlı kalır).
+    divider: Color(0xFF37373A),
+    border: Color(0xFF37373A),
     scrim: Color(0x8C000000),
     avatarTones: _darkAvatarTones,
   );
@@ -295,6 +284,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     Brightness? brightness,
     Color? bg,
     Color? appBarBg,
+    Color? readingBg,
     Color? surface,
     Color? surfaceElevated,
     Color? surfaceDeep,
@@ -317,6 +307,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     brightness: brightness ?? this.brightness,
     bg: bg ?? this.bg,
     appBarBg: appBarBg ?? this.appBarBg,
+    readingBg: readingBg ?? this.readingBg,
     surface: surface ?? this.surface,
     surfaceElevated: surfaceElevated ?? this.surfaceElevated,
     surfaceDeep: surfaceDeep ?? this.surfaceDeep,
@@ -345,6 +336,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
       brightness: t < 0.5 ? brightness : other.brightness,
       bg: c(bg, other.bg),
       appBarBg: c(appBarBg, other.appBarBg),
+      readingBg: c(readingBg, other.readingBg),
       surface: c(surface, other.surface),
       surfaceElevated: c(surfaceElevated, other.surfaceElevated),
       surfaceDeep: c(surfaceDeep, other.surfaceDeep),

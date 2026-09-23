@@ -4,7 +4,6 @@ import 'package:flutter_quill/flutter_quill.dart'
     show FlutterQuillLocalizations;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../data/services/app_settings.dart';
 import '../ui/core/theme/app_theme.dart';
 import '../ui/core/theme/tokens.dart';
 import '../ui/features/auth/login_screen.dart';
@@ -19,17 +18,13 @@ class KaydetApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(settingsProvider);
-    // Outlook Koyu, sistem/açık/koyu üçlüsünün dışında ekstra bir seçenek:
-    // kullanıcı onu seçtiğinde `theme`/`darkTheme`nin ikisi de aynı temaya
-    // sabitlenir, böylece sistem parlaklığından bağımsız her zaman görünür.
-    final isOutlookDark = settings.themeMode == AppThemeMode.outlookDark;
 
     return MaterialApp(
       navigatorKey: rootNavigatorKey,
       title: 'Kaydet',
       debugShowCheckedModeBanner: false,
-      theme: isOutlookDark ? AppTheme.outlookDark() : AppTheme.light(),
-      darkTheme: isOutlookDark ? AppTheme.outlookDark() : AppTheme.dark(),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
       themeMode: settings.themeMode.flutterThemeMode,
       locale: const Locale('tr', 'TR'),
       supportedLocales: const [Locale('tr', 'TR'), Locale('en', 'US')],
