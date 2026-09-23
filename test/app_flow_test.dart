@@ -418,6 +418,25 @@ void main() {
       expect(find.text('Fiyat teklifi'), findsNothing);
     });
 
+    appTest('sonuç başlığı eşleşme sayısını gösterir', (tester) async {
+      await seedAccount();
+      imap.seedInbox([
+        envelope(uid: 1, subject: 'Logo teklifi'),
+        envelope(uid: 2, subject: 'Logo revizyonu'),
+        envelope(uid: 3, subject: 'Fatura'),
+      ]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Ara'));
+      await settle(tester);
+      await tester.enterText(find.byType(TextField).first, 'logo');
+      await settle(tester);
+
+      expect(find.text('TÜM SONUÇLAR (2)'), findsOneWidget);
+    });
+
     appTest('Türkçe karakter katlaması arayüzde de çalışır',
         (tester) async {
       await seedAccount();
@@ -472,8 +491,8 @@ void main() {
       await settle(tester);
 
       expect(find.text('Teklifimiz ektedir, iyi çalışmalar.'), findsOneWidget);
-      expect(find.text('Yanıtla'), findsOneWidget);
-      expect(find.text('İlet'), findsOneWidget);
+      expect(find.byTooltip('Yanıtla'), findsOneWidget);
+      expect(find.byTooltip('İlet'), findsOneWidget);
     });
 
     appTest('okundu işareti gecikmeli konur', (tester) async {

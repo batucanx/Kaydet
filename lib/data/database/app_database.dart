@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
@@ -6,6 +7,7 @@ import 'package:drift_flutter/drift_flutter.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/models/search_filters.dart';
+import '../../domain/use_cases/label_keywords.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -72,7 +74,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -140,6 +142,33 @@ class AppDatabase extends _$AppDatabase {
       // karşılığı yoktur, salt yerel bir tercihtir.
       if (from < 9) {
         await m.addColumn(mailboxes, mailboxes.isFavorite);
+      }
+      // v9 → v10: `hasAttachments` eskiden imza/logo gibi HTML gövdesine
+      // gömülü (inline) parçaları da "ek" sayıyordu (bkz.
+      // `SyncEngine.storeBody`), bu yüzden "Ekleri Var" filtresi ve ataç
+      // ikonu gerçekte eki olmayan iletilerde de görünüyordu. Gövdesi zaten
+      // indirilmiş iletiler için bayrak, yerel `attachments` tablosundaki
+      // gerçek (inline olmayan) kayıtlara bakılarak bir kerelik düzeltilir;
+      // gövdesi hiç indirilmemiş iletilere dokunulmaz — onlar için henüz
+      // güvenilir bir yerel ek listesi yok, bir sonraki gövde indirmesinde
+      // `storeBody` zaten doğru değeri yazacak.
+      if (from < 10) {
+        await _backfillHasAttachments();
+      }
+      // v10 → v11: Etiketler sunucuya IMAP özel anahtar kelimesi olarak
+      // yazılıyordu (bkz. `MailRepository.setLabel`,
+      // `MailRepository._keywordFor` → şimdi `labelImapKeyword`) ama bu
+      // anahtar kelime `Labels.imapKeyword`'e hiç kaydedilmiyordu. Sonuç:
+      // sunucudan geri okunan bayraklar (bkz. `SyncEngine._syncFlags`,
+      // `_storeEnvelopes`) etiketin görünen adı yerine ham anahtar kelimeyi
+      // (`kaydet_kisisel` gibi) `messages.labelsJson`'a yazıyordu — arayüzde
+      // çirkin bir metin görünüyor, "etikete göre filtrele" ise adla
+      // karşılaştırdığı için hiçbir sonuç bulamıyordu. Var olan etiketlere
+      // eksik anahtar kelime geriye dönük eklenir; zaten ham anahtar
+      // kelimeyle kirlenmiş `labelsJson` değerleri de aynı geçişte
+      // düzeltilir.
+      if (from < 11) {
+        await _backfillLabelImapKeywords();
       }
     },
     beforeOpen: (details) async {
@@ -1059,6 +1088,75 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteContact(int id) =>
       (delete(contacts)..where((c) => c.id.equals(id))).go();
 
+  /// v9 → v10 göçü: bkz. `migration.onUpgrade` üzerindeki yorum.
+  Future<void> _backfillHasAttachments() async {
+    await customStatement('''
+      UPDATE messages
+      SET has_attachments = EXISTS(
+        SELECT 1 FROM attachments
+        WHERE attachments.message_id = messages.id
+          AND attachments.is_inline = 0
+      )
+      WHERE body_fetched_at IS NOT NULL
+    ''');
+  }
+
+  /// v10 → v11 göçü: bkz. `migration.onUpgrade` üzerindeki yorum.
+  Future<void> _backfillLabelImapKeywords() async {
+    final labelRows = await select(labels).get();
+    if (labelRows.isEmpty) return;
+
+    for (final row in labelRows) {
+      if (row.imapKeyword != null) continue;
+      await (update(
+        labels,
+      )..where((l) => l.id.equals(row.id))).write(
+        LabelsCompanion(imapKeyword: Value(labelImapKeyword(row.name))),
+      );
+    }
+
+    // accountId → (bilinen görünen ad ya da anahtar kelime) → görünen ad.
+    // Zaten doğru (ada eşit) girdiler de eşlemeye eklenir ki aşağıdaki
+    // süzme adımı onları olduğu gibi korusun.
+    final byAccount = <int, Map<String, String>>{};
+    for (final row in labelRows) {
+      final lookup = byAccount.putIfAbsent(row.accountId, () => {});
+      lookup[row.name] = row.name;
+      lookup[row.imapKeyword ?? labelImapKeyword(row.name)] = row.name;
+    }
+
+    final taggedMessages = await (select(
+      messages,
+    )..where((m) => m.labelsJson.equals('[]').not())).get();
+
+    for (final message in taggedMessages) {
+      final lookup = byAccount[message.accountId];
+      if (lookup == null) continue;
+
+      List<dynamic> decoded;
+      try {
+        final parsed = jsonDecode(message.labelsJson);
+        if (parsed is! List) continue;
+        decoded = parsed;
+      } on FormatException {
+        continue;
+      }
+
+      final mapped = <String>{
+        for (final token in decoded.whereType<String>())
+          if (lookup[token] != null) lookup[token]!,
+      }.toList();
+
+      final newJson = jsonEncode(mapped);
+      if (newJson == message.labelsJson) continue;
+      await (update(
+        messages,
+      )..where((m) => m.id.equals(message.id))).write(
+        MessagesCompanion(labelsJson: Value(newJson)),
+      );
+    }
+  }
+
   // ------------------------------------------------------------------ kuyruk
 
   Future<int> enqueue(PendingOperationsCompanion row) =>
@@ -1346,11 +1444,23 @@ class AppDatabase extends _$AppDatabase {
         .toList();
   }
 
-  /// Dosya adında geçen ekleri arar; sonuçla birlikte ekin ait olduğu ileti
-  /// de döner (Dosyalar sonuç kartı gönderen/konu/tarih göstermek için buna
-  /// ihtiyaç duyar). Yalnızca alınan iletilerin ekleri aranır — yazma
-  /// ekranından iliştirilip henüz gönderilmemiş dosyalar (`isOutgoing`)
-  /// hariç tutulur. [accountId] `null` ise tüm hesaplarda arar.
+  /// Dosya adında veya gönderende (ad/e-posta) geçen ekleri arar; sonuçla
+  /// birlikte ekin ait olduğu ileti de döner (Dosyalar sonuç kartı
+  /// gönderen/konu/tarih göstermek için buna ihtiyaç duyar). Gönderen de
+  /// eşleştirilir ki arama ekranındaki "Hızlı Kişiler" şeridinden bir kişi
+  /// seçilip Dosyalar sekmesine geçildiğinde o kişinin gönderdiği ekler
+  /// görünsün (dosya adı kişinin adını içermese bile) — bkz.
+  /// `mailSearchResultsProvider`'ın dayandığı `messages_fts` içeriği
+  /// (`_ftsContentFor`), orada da gönderen ad/e-posta aranabilir. Yalnızca
+  /// alınan iletilerin ekleri aranır — yazma ekranından iliştirilip henüz
+  /// gönderilmemiş dosyalar (`isOutgoing`) hariç tutulur. Gömülü (`isInline`)
+  /// parçalar da hariç tutulur: bunlar HTML gövdesi içinde `cid:` ile
+  /// referanslanan imzalar/logolar ya da yönlendirilmiş iletilerin gövdesine
+  /// gömülü görseller gibi kullanıcının kasıtlı gönderdiği gerçek bir ek
+  /// DEĞİLDİR (bkz. `ImapService.fetchBody`'deki `isInline: true` işaretli
+  /// ikinci `findContentInfo` taraması) — ileti detay ekranındaki ek
+  /// şeridiyle aynı kural (`_AttachmentStrip`, `!a.isInline`). [accountId]
+  /// `null` ise tüm hesaplarda arar.
   ///
   /// [query] boşsa (Outlook'un Dosyalar sekmesindeki gibi) hiç yazı
   /// yazılmadan en son eklenen [limit] ek, tarihe göre yeniden eskiye
@@ -1367,16 +1477,23 @@ class AppDatabase extends _$AppDatabase {
   }) async {
     final needle = trLower(query.trim());
     // Türkçe-duyarlı eşleme (`trLower`) SQL `LIKE` ile yapılamaz; bu yüzden
-    // önce yalnızca (id, dosya adı) çiftleri okunup Dart'ta süzülür, tam
-    // ileti/ek satırları ise yalnızca eşleşenler için ikinci sorguda yüklenir.
+    // önce yalnızca (id, dosya adı, gönderen) alanları okunup Dart'ta
+    // süzülür, tam ileti/ek satırları ise yalnızca eşleşenler için ikinci
+    // sorguda yüklenir.
     final q =
         selectOnly(attachments).join([
             innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
             innerJoin(mailboxes, mailboxes.id.equalsExp(messages.mailboxId)),
           ])
-          ..addColumns([attachments.id, attachments.fileName])
+          ..addColumns([
+            attachments.id,
+            attachments.fileName,
+            messages.fromName,
+            messages.fromEmail,
+          ])
           ..where(
             attachments.isOutgoing.equals(false) &
+                attachments.isInline.equals(false) &
                 messages.isDeleted.equals(false),
           )
           ..orderBy([
@@ -1395,7 +1512,7 @@ class AppDatabase extends _$AppDatabase {
       final name = folder.customName;
       if (name != null) q.where(mailboxes.name.equals(name));
     }
-    // Gözat modunda dosya adı süzülmeyeceği için `limit` doğrudan SQL'de
+    // Gözat modunda hiçbir alan süzülmeyeceği için `limit` doğrudan SQL'de
     // uygulanır — aksi hâlde hesaptaki tüm ekler belleğe okunurdu.
     if (needle.isEmpty) q.limit(limit);
 
@@ -1405,7 +1522,13 @@ class AppDatabase extends _$AppDatabase {
       final id = row.read(attachments.id)!;
       if (needle.isNotEmpty) {
         final fileName = row.read(attachments.fileName) ?? '';
-        if (!trLower(fileName).contains(needle)) continue;
+        final fromName = row.read(messages.fromName) ?? '';
+        final fromEmail = row.read(messages.fromEmail) ?? '';
+        final matches =
+            trLower(fileName).contains(needle) ||
+            trLower(fromName).contains(needle) ||
+            trLower(fromEmail).contains(needle);
+        if (!matches) continue;
       }
       matchedIds.add(id);
       if (matchedIds.length >= limit) break;

@@ -591,7 +591,7 @@ class _SearchResultsView extends ConsumerWidget {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: [
           ?filterBar,
-          const SectionHeader('TÜM SONUÇLAR'),
+          SectionHeader('TÜM SONUÇLAR (${mailRows.length})'),
           ...mailTiles(mailRows),
         ],
       );
@@ -600,7 +600,7 @@ class _SearchResultsView extends ConsumerWidget {
       return ListView(
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: [
-          const SectionHeader('TÜM SONUÇLAR'),
+          SectionHeader('TÜM SONUÇLAR (${contactRows.length})'),
           ...contactTiles(contactRows),
         ],
       );
@@ -610,7 +610,7 @@ class _SearchResultsView extends ConsumerWidget {
         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         children: [
           ?filterBar,
-          const SectionHeader('TÜM SONUÇLAR'),
+          SectionHeader('TÜM SONUÇLAR (${attachmentRows.length})'),
           ...attachmentTiles(attachmentRows),
         ],
       );
@@ -619,21 +619,23 @@ class _SearchResultsView extends ConsumerWidget {
     // Tümü: posta sonuçları tarihe göre yeniden eskiye tek bir listede
     // (Outlook'taki gibi — alaka sırasıyla bir "en iyi sonuçlar" bölümü
     // ayrılmaz, aksi hâlde liste tarih sırasını bozardı); ardından kişiler
-    // ve dosyalar kendi başlıklarıyla.
+    // ve dosyalar kendi başlıklarıyla. Her başlığın yanında o bölümün sonuç
+    // sayısı gösterilir (ör. "TÜM SONUÇLAR (10)") — kullanıcı kaç eşleşme
+    // olduğunu saymadan görsün.
     return ListView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
         ?filterBar,
         if (mailRows.isNotEmpty) ...[
-          const SectionHeader('TÜM SONUÇLAR'),
+          SectionHeader('TÜM SONUÇLAR (${mailRows.length})'),
           ...mailTiles(mailRows),
         ],
         if (contactRows.isNotEmpty) ...[
-          const SectionHeader('KİŞİLER'),
+          SectionHeader('KİŞİLER (${contactRows.length})'),
           ...contactTiles(contactRows),
         ],
         if (attachmentRows.isNotEmpty) ...[
-          const SectionHeader('DOSYALAR'),
+          SectionHeader('DOSYALAR (${attachmentRows.length})'),
           ...attachmentTiles(attachmentRows),
         ],
       ],

@@ -40,23 +40,6 @@
 	<string>Sesli yazma için mikrofona erişim gerekir.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Söylediklerinizi metne çevirmek için konuşma tanımaya erişim gerekir.</string>
-	<!-- Gmail OAuth geri dönüşü (flutter_appauth) — google_oauth_service.dart
-	     içindeki `_iosRedirectUrl` ile birebir aynı olmalı. Google Cloud
-	     Console'da AYRI bir "iOS" türü istemci kaydedilmeden bu değer
-	     çalışmaz; bkz. google_oauth_service.dart üzerindeki TODO. -->
-	<key>CFBundleURLTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLName</key>
-			<string>google_oauth_redirect</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.REPLACE_WITH_IOS_CLIENT_ID</string>
-			</array>
-		</dict>
-	</array>
 	<!-- Arka plan eşitleme (workmanager → BGTaskScheduler). `processing` App
 	     Store incelemesinde gerekçelendirilmesi gerekebilir; yalnızca
 	     bağlantı varken çalışacak şekilde kısıtlıdır (bkz. background_sync.dart). -->

@@ -381,10 +381,18 @@ class SyncEngine {
             )
             .toList(),
       );
-      if (!row.hasAttachments) {
+      // İmza/logo gibi HTML gövdesine `cid:` ile gömülü inline parçalar
+      // gerçek ek sayılmaz (bkz. `_AttachmentStrip`teki `!a.isInline`
+      // süzgeci) — yoksa yalnızca gömülü görseli olan iletiler de "Ekleri
+      // Var" filtresine ve ataç ikonuna yanlışlıkla girer. Bayrak gövdenin
+      // gerçek içeriğiyle her zaman eşitlenir, böylece envelope aşamasında
+      // önceden yanlış "true" yazılmış iletiler de gövde çekildiğinde
+      // kendiliğinden düzelir.
+      final hasRealAttachments = body.attachments.any((a) => !a.isInline);
+      if (hasRealAttachments != row.hasAttachments) {
         await _db.updateMessage(
           row.id,
-          const MessagesCompanion(hasAttachments: Value(true)),
+          MessagesCompanion(hasAttachments: Value(hasRealAttachments)),
         );
       }
     }
@@ -456,6 +464,7 @@ class SyncEngine {
     // Eski → yeni sırala: ata iletiler çocuklarından önce işlensin.
     final sorted = [...envelopes]..sort((a, b) => a.date.compareTo(b.date));
     final threadIds = await _resolveThreadIds(accountId, sorted);
+    final labelNamesByKeyword = await _labelNamesByKeyword(accountId);
 
     final companions = <MessagesCompanion>[];
     for (final envelope in sorted) {
@@ -485,7 +494,9 @@ class SyncEngine {
           isDeleted: Value(envelope.isDeleted),
           hasAttachments: Value(envelope.hasAttachments),
           sizeBytes: Value(envelope.sizeBytes),
-          labelsJson: Value(jsonEncode(envelope.keywords)),
+          labelsJson: Value(
+            jsonEncode(_namesForKeywords(envelope.keywords, labelNamesByKeyword)),
+          ),
         ),
       );
     }
@@ -566,6 +577,32 @@ class SyncEngine {
     return result;
   }
 
+  /// Hesabın etiketlerini IMAP anahtar kelimesi → görünen ad eşlemesine
+  /// çevirir (bkz. `AccountRepository.createLabel`, `MailRepository.setLabel`
+  /// — anahtar kelime `Labels.imapKeyword`'de saklanır).
+  ///
+  /// Sunucudan gelen FLAGS/keywords listesi her zaman ham IMAP anahtar
+  /// kelimesidir (örn. `kaydet_kisisel`); bu eşleme uygulanmazsa
+  /// `messages.labelsJson`'a doğrudan yazılır ve arayüzde "Kişisel" yerine
+  /// ham anahtar kelime görünür, etikete göre filtreleme de (adla
+  /// karşılaştırdığı için) hiçbir sonuç bulamaz.
+  Future<Map<String, String>> _labelNamesByKeyword(int accountId) async {
+    final labels = await _db.labelsOf(accountId);
+    return {
+      for (final label in labels)
+        if (label.imapKeyword != null) label.imapKeyword!: label.name,
+    };
+  }
+
+  /// Bilinen anahtar kelimeleri görünen ada çevirir; bu hesaba ait hiçbir
+  /// etiketle eşleşmeyen anahtar kelimeler (ör. henüz yerelde oluşturulmamış
+  /// ya da başka bir istemciden gelen) sessizce elenir — ham hâliyle
+  /// gösterilmeleri kullanıcıya anlamsız gelir.
+  static List<String> _namesForKeywords(
+    List<String> keywords,
+    Map<String, String> namesByKeyword,
+  ) => keywords.map((k) => namesByKeyword[k]).whereType<String>().toList();
+
   /// Sunucuda artık olmayan iletileri yerelden siler.
   Future<int> _syncDeletions(MailboxRow mailbox) async {
     final all = await _connection.imap.searchAllUids();
@@ -615,6 +652,7 @@ class SyncEngine {
     if (states.isEmpty) return 0;
 
     final locked = await _lockedUids(accountId, mailbox.id);
+    final labelNamesByKeyword = await _labelNamesByKeyword(accountId);
 
     var changed = 0;
     for (final remote in states) {
@@ -631,7 +669,9 @@ class SyncEngine {
       final keywords = remote.flags
           .where((f) => !f.startsWith(r'\') && f.toLowerCase() != r'$forwarded')
           .toList();
-      final labelsJson = jsonEncode(keywords);
+      final labelsJson = jsonEncode(
+        _namesForKeywords(keywords, labelNamesByKeyword),
+      );
 
       if (row.isSeen == isSeen &&
           row.isFlagged == isFlagged &&

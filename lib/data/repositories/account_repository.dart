@@ -7,6 +7,7 @@ import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/use_cases/folder_mapping.dart';
+import '../../domain/use_cases/label_keywords.dart';
 import '../database/app_database.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
@@ -250,12 +251,17 @@ class AccountRepository {
           accountId: accountId,
           name: name,
           toneIndex: Value(tone),
+          imapKeyword: Value(labelImapKeyword(name)),
         ),
       );
     }
   }
 
   /// Yeni etiket oluşturur (ad zaten varsa tonunu günceller).
+  ///
+  /// `imapKeyword` burada üretilip saklanır; [SyncEngine] sunucudan gelen
+  /// ham IMAP anahtar kelimesini bu değerle eşleştirip tekrar görünen ada
+  /// çevirir — aksi hâlde arayüzde "kaydet_..." gibi ham değer görünür.
   Future<void> createLabel({
     required int accountId,
     required String name,
@@ -265,6 +271,7 @@ class AccountRepository {
       accountId: accountId,
       name: name,
       toneIndex: Value(toneIndex),
+      imapKeyword: Value(labelImapKeyword(name)),
     ),
   );
 

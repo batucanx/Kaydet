@@ -372,7 +372,14 @@ class EnoughMailImapService implements ImapService {
 
     var hasAttachments = false;
     try {
-      hasAttachments = message.hasAttachmentsOrInlineNonTextualParts();
+      // `hasAttachmentsOrInlineNonTextualParts` gömülü (inline) imzalar/logolar
+      // gibi HTML gövdesi içinde `cid:` ile referanslanan, kullanıcının
+      // "ek" olarak görmeyeceği parçaları da sayar — bu da listede/arama
+      // filtresinde gerçekte eki olmayan iletilerin ek ikonuyla görünmesine
+      // yol açar. `findContentInfo()` varsayılan olarak yalnızca gerçek
+      // (attachment disposition'lı) parçaları döner; gövde ekran şeridinde
+      // gösterilen ("Ekleri Var" filtresiyle tutarlı) küme de tam olarak bu.
+      hasAttachments = message.findContentInfo().isNotEmpty;
     } catch (_) {
       // Bozuk BODYSTRUCTURE bütün senkronizasyonu durdurmamalı.
       hasAttachments = false;
