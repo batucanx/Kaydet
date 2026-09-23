@@ -276,7 +276,7 @@
 
   // ── Akışkanlaştırma ───────────────────────────────────────────────────
 
-  var FLUID_PROPS = ['width', 'max-width', 'min-width', 'box-sizing'];
+  var FLUID_PROPS = ['width', 'max-width', 'min-width', 'box-sizing', 'margin-left'];
   var BLOCKY = /^(block|table|flex|grid|list-item|inline-block|inline-table|flow-root)$/;
   var patched = [];
   var fluidWidth = -1;
@@ -313,10 +313,11 @@
     var bs = getComputedStyle(body);
     var avail = body.clientWidth - (parseFloat(bs.paddingLeft) || 0) - (parseFloat(bs.paddingRight) || 0);
 
-    var all = body.getElementsByTagName('*'), plans = [], cells = [], i, w, cs;
+    var all = body.getElementsByTagName('*'), plans = [], cells = [], i, w, cs, rect;
     for (i = 0; i < all.length; i++) {
       var el = all[i], tag = el.tagName;
-      w = el.getBoundingClientRect().width;
+      rect = el.getBoundingClientRect();
+      w = rect.width;
       if (tag === 'TD' || tag === 'TH') {
         if (w >= 60 && /\S{4}/.test(el.textContent || '')) cells.push([el, w]);
         // Mobil CSS'te `display:block; width:100%` yapılan hücre, padding yüzünden
@@ -324,15 +325,32 @@
         if (w > avail + 1 && getComputedStyle(el).display === 'block') {
           plans.push([el, [['box-sizing', 'border-box'], ['max-width', '100%']]]);
         }
-      } else if (w > avail + 1 && tag !== 'IMG' && el instanceof HTMLElement) {
-        cs = getComputedStyle(el);
-        if (BLOCKY.test(cs.display) && cs.position !== 'absolute' && cs.position !== 'fixed') {
-          var isTable = cs.display === 'table' || cs.display === 'inline-table';
-          var decls = [['width', '100%'], ['max-width', Math.round(w) + 'px'], ['min-width', '0']];
-          if (!isTable) decls.push(['box-sizing', 'border-box']);
-          plans.push([el, decls]);
-        }
+        continue;
       }
+      if (tag === 'IMG' || !(el instanceof HTMLElement)) continue;
+      // Öğenin KENDİ genişliği sığsa bile SOL KENAR BOŞLUĞU onu viewport'un
+      // sağından taşırabilir — uzun Outlook/Exchange ileti zincirlerinde her
+      // "Ynt:/Fwd:" katmanı alıntılanan gövdeye kümülatif bir `margin-left`
+      // ekler (iç içe alıntı girintisi); 3-4 katman telefon ekranında
+      // yüzlerce piksel tutabilir. Önceki kontrol yalnızca `w > avail`e
+      // (öğenin KENDİ genişliği) bakıyordu, bu yüzden dar ama SAĞA KAYMIŞ bir
+      // paragrafı hiç yakalamıyordu — sonuç: solda boşluk, sağda
+      // `overflow-x:hidden`in kırptığı metin.
+      var overWidth = w > avail + 1;
+      var overRight = rect.right > vw + 1;
+      if (!overWidth && !overRight) continue;
+      cs = getComputedStyle(el);
+      if (!BLOCKY.test(cs.display) || cs.position === 'absolute' || cs.position === 'fixed') continue;
+      var decls = [];
+      if (overWidth) {
+        var isTable = cs.display === 'table' || cs.display === 'inline-table';
+        decls.push(['width', '100%'], ['max-width', Math.round(w) + 'px'], ['min-width', '0']);
+        if (!isTable) decls.push(['box-sizing', 'border-box']);
+      }
+      if (overRight && (parseFloat(cs.marginLeft) || 0) > 0) {
+        decls.push(['margin-left', '0px']);
+      }
+      if (decls.length) plans.push([el, decls]);
     }
     if (!plans.length) return;
 
@@ -380,11 +398,21 @@
       put(shrinkWrap, 'width', 'auto');
       shrinkScale = 1;
     }
-    var vw = root.clientWidth;
-    if (!vw) return;
+    // `<kd-root>` gövdenin İÇİNDE, `body`nin (16px) yatay dolgusuyla
+    // daraltılmış alanda oturur. Ölçek daha önce tüm viewport genişliğine
+    // (`root.clientWidth`) göre hesaplanıyordu — `<kd-root>`a asıl ayrılan
+    // alan (`avail`, dolgular düşülmüş) DEĞİL. Sonuç: küçültme her zaman
+    // tam dolgu kadar (~32px) YETERSİZ kalıyordu; sığmayan her e-posta
+    // ekranın SAĞINDAN, dolgu kadar kırpılmış görünüyordu (solda normal
+    // gövde dolgusu dururken sağda metin kesiliyordu) — uzun Outlook/Exchange
+    // zincirlerinde sık görülen sabit genişlikli bölümlerde bu her zaman
+    // tetikleniyordu. `applyFluid`deki `avail` hesabıyla aynı formül kullanılır.
+    var bs = getComputedStyle(body);
+    var avail = body.clientWidth - (parseFloat(bs.paddingLeft) || 0) - (parseFloat(bs.paddingRight) || 0);
+    if (!avail) return;
     var natural = shrinkWrap.scrollWidth;
-    if (natural <= vw + 1) return; // sığıyor: dokunma
-    var scale = vw / natural;
+    if (natural <= avail + 1) return; // sığıyor: dokunma
+    var scale = avail / natural;
     put(shrinkWrap, 'transform-origin', 'top left');
     // Genişlik doğal (küçültülmemiş) değere sabitlenir ki içerideki tablo/
     // sütunlar kendi düzenine göre yerleşsin; küçültme yalnızca boyama

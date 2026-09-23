@@ -24,30 +24,25 @@ enum SyncFrequency {
   bool get isBackgroundEnabled => this != SyncFrequency.manual;
 }
 
-/// Uygulamanın tema tercihi. Flutter'ın kendi `ThemeMode`ı yalnızca
-/// sistem/açık/koyu bilir; burada Outlook Koyu gibi ekstra, isteğe bağlı
-/// temalar da bir seçenek olarak eklenebilsin diye kendi enum'umuz var.
+/// Uygulamanın tema tercihi. Flutter'ın kendi `ThemeMode`ıyla birebir
+/// eşlenir (system/light/dark); ayrı bir enum olmasının nedeni yalnızca
+/// Türkçe etiket (`label`) taşıması.
 ///
-/// SIRALAMA ÖNEMLİ: ilk üç değer bilerek Flutter'ın `ThemeMode`ıyla aynı
-/// sırada (system, light, dark) — `AppSettingsStore` tercihi `index` olarak
-/// sakladığından, önceden kaydedilmiş bir tercih bu sıralama bozulursa yanlış
-/// temaya karşılık gelir. Yeni temalar her zaman SONA eklenir.
+/// SIRALAMA ÖNEMLİ: `AppSettingsStore` tercihi `index` olarak sakladığından,
+/// sıralama bozulursa önceden kaydedilmiş bir tercih yanlış temaya karşılık
+/// gelir. Yeni değerler her zaman SONA eklenir.
 enum AppThemeMode {
   system('Sistem ayarını izle'),
   light('Açık'),
-  dark('Koyu'),
-  outlookDark('Outlook Koyu');
+  dark('Koyu');
 
   const AppThemeMode(this.label);
   final String label;
 
-  /// `MaterialApp.themeMode` karşılığı — `outlookDark` her zaman koyu
-  /// tarafı kullanır (`KaydetApp` bu durumda `theme`/`darkTheme`nin ikisini
-  /// de `AppTheme.outlookDark()` yapar, bkz. `app.dart`).
   ThemeMode get flutterThemeMode => switch (this) {
     AppThemeMode.system => ThemeMode.system,
     AppThemeMode.light => ThemeMode.light,
-    AppThemeMode.dark || AppThemeMode.outlookDark => ThemeMode.dark,
+    AppThemeMode.dark => ThemeMode.dark,
   };
 }
 

@@ -219,6 +219,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       // geçer, "bulunamadı" yalnızca ileti gerçekten yoksa gösterilir.
       final loading = messageAsync.isLoading;
       return Scaffold(
+        backgroundColor: t.readingBg,
         appBar: AppBar(
           leading: const _BackButton(),
           title: loading ? null : const Text('İleti'),
@@ -255,6 +256,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
               controller: _scrollController,
               automaticallyInheritForPlatforms: const <TargetPlatform>{},
               child: Scaffold(
+                backgroundColor: t.readingBg,
                 body: ScrollConfiguration(
                   // Android'in esneme (stretch) efekti tüm görünüm alanını ölçekler:
                   // sabitlenmiş app bar da esner, WebView (platform görünümü) ise bu
@@ -765,7 +767,9 @@ class _BodyShimmer extends StatelessWidget {
 }
 
 /// Gövdeye iki parmakla yakınlaştırma ekler — bazı bültenler/faturalar çok
-/// küçük punto ile geliyor.
+/// küçük punto ile geliyor. Referans, Outlook mobilin mail okuma
+/// deneyimidir: doğal, parmağa yapışık bir pinch, sıçramasız yakınlaştırma
+/// ve parmak kalktıktan sonra akıcı bir toparlanma.
 ///
 /// `_HtmlWebView`'ın kendi (native) yakınlaştırması bilinçli olarak kapalı
 /// (bkz. o widget'ın belgesi): içerik boyuna uzatılmış bir WebView'da
@@ -779,6 +783,19 @@ class _BodyShimmer extends StatelessWidget {
 /// eklendiğinde yakınlaştırma devreye girer. Büyütülen alan kendi kutusunun
 /// sınırlarıyla kırpılır (`ClipRect`) — komşu widget'ların (konu başlığı,
 /// ekler) üstüne taşmaz.
+///
+/// BİLİNÇLİ SINIRLAMA: yakınlaştırılmışken TEK parmakla sürükleme, dıştaki
+/// `CustomScrollView`ı kaydırmaya devam eder (büyütülmüş alanı olduğu gibi
+/// yukarı/aşağı kaydırır); yakınlaştırılmış görünüm İÇİNDE gezinmek pinch'i
+/// sürdürerek İKİ parmakla yapılır (native fotoğraf görüntüleyicilerdeki
+/// gibi — ölçek sabit tutulup yalnızca iki parmak birlikte kaydırılabilir).
+/// Gerçek bir tarayıcıdaki "yakınlaştır, sonra tek parmakla gez" hissinin
+/// tam eşleniği değil, ama bunun bedeli ağır: tek parmağı yakınlaştırılmışken
+/// ele geçirip ölçek 1'e dönünce dıştaki kaydırmaya geri bırakmak,
+/// `Scrollable`ın kendi tanıyıcısıyla jest arenasında rekabete giren özel bir
+/// `GestureRecognizer` gerektirir — bu da yukarıdaki "arenaya hiç girilmez"
+/// ilkesini bozup bağlantı dokunuşu/metin seçimi/yatay kaydırmayı regresyona
+/// sokma riski taşır.
 class _PinchZoomableBody extends StatefulWidget {
   const _PinchZoomableBody({required this.contentKey, required this.child});
 
@@ -807,36 +824,53 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   /// aralığa geri toplar.
   static const double _overscrollFriction = 0.4;
 
-  /// Render edilen değerin hedefe her karede ne hızda yaklaşacağı (1/sn).
-  /// Büyüdükçe daha "sıkı" (parmağa daha yapışık) takip eder.
-  static const double _trackResponse = 24;
+  /// Parmak(lar) kalktıktan sonra sınıra/kimliğe toparlanırken kullanılan
+  /// yanıt hızı (1/sn) — yalnızca BU geçiş animasyonludur. Parmaklar
+  /// ekrandayken ölçek/kaydırma parmaklara BİREBİR (gecikmesiz) uyar (bkz.
+  /// `_onPointerMove`): gerçek cihazların (iOS/Android) yerel pinch-zoom'unda
+  /// hissedilen bir gecikme yoktur. Önceki sürümde bu yumuşatma aktif pinch
+  /// sırasında da uygulanıyordu; bu da parmağın birkaç kare gerisinde kalan,
+  /// "lastik gibi" amatör bir his veriyordu.
+  static const double _snapResponse = 12;
 
-  /// Parmak(lar) kalktıktan sonra sınıra/kimliğe toparlanırken kullanılan,
-  /// daha yumuşak yanıt hızı — ani bir sıçrama yerine akıcı bir toparlanma.
-  static const double _snapResponse = 10;
-
-  /// O anda ekranda olan parmaklar (pointer id → son konum).
+  /// O anda ekranda olan parmaklar (pointer id → son konum) — `Listener`in
+  /// kendi kutusuna göre, yani DÖNÜŞÜMDEN ÖNCEKİ ham koordinatlarla.
   final Map<int, Offset> _pointers = {};
 
   // Parmakların o an hedeflediği (ham, kauçuk bantlı olabilen) değer.
   double _targetScale = 1;
   Offset _targetOffset = Offset.zero;
 
-  // Ekrana çizilen, yumuşatılmış değer — `_targetScale/_targetOffset`i her
-  // karede biraz daha yakalar (bkz. `_onTick`). Ham parmak deltasının
-  // doğrudan uygulanması ("sert" hissettiren asıl sebep) yerine bu iki
-  // katmanlı yaklaşım, gerek yakınlaştırma başlangıcındaki gerekse sınıra
-  // çarpma anındaki ani sıçramaları yumuşatır.
+  // Ekrana çizilen değer. Parmaklar ekrandayken `_targetScale`/`_targetOffset`
+  // ile birebir aynıdır; yalnızca son parmak kalktıktan sonraki toparlanma
+  // sırasında bundan ayrılıp `_onTick` ile hedefe yumuşakça yaklaşır.
   double _scale = 1;
   Offset _offset = Offset.zero;
 
+  /// `_boundsKey`in gerçek (yerleşmiş) kutu boyu — bkz. `_measureSize`.
+  /// `LayoutBuilder`+`constraints.biggest` KASITLI olarak kullanılmaz: bu
+  /// widget bir `SliverToBoxAdapter` içinde, kaydırma ekseninde SINIRSIZ bir
+  /// üst kısıtla (`maxHeight: double.infinity`) düzenlenir — slivers,
+  /// içeriğin kendi boyuna göre uzasın diye kısıtı böyle verir. Önceki sürüm
+  /// tam da bu kısıtı (`constraints.biggest`) boy olarak kullanıyordu; sonuç
+  /// `Size(genişlik, double.infinity)` idi ve dikey kaydırma sınırlaması
+  /// (`_clamp`) etkisiz kalıyordu — yakınlaştırılmış içerik dikeyde SINIRSIZ
+  /// sürüklenebiliyor, parmak kalkınca da (sınır zaten "yok" sayıldığından)
+  /// asla geri toplanmıyordu. Burada bunun yerine gerçek, ÇÖZÜLMÜŞ yerleşim
+  /// boyu bir `GlobalKey` üzerinden doğrudan `RenderBox`tan okunur.
+  final GlobalKey _boundsKey = GlobalKey();
   Size _size = Size.zero;
+
   late final Ticker _ticker;
   Duration _lastTick = Duration.zero;
-  bool _snapping = false;
 
-  // İki parmaklı hareketin başladığı andaki anlık görüntü — sonraki her
-  // `onPointerMove` bu referansa göre delta hesaplar.
+  // İki parmaklı hareketin başladığı (ya da parmak sayısı değiştiği) andaki
+  // anlık görüntü — sonraki her `onPointerMove` bu referansa göre yeni ölçek/
+  // odak noktasını hesaplar. `_startScale`/`_startOffset` EKRANDA O AN
+  // GÖRÜNEN (`_scale`/`_offset`) değerden alınır, `_targetScale`/
+  // `_targetOffset`den DEĞİL — parmak tam da bir toparlanma animasyonunun
+  // ortasında ekrana değerse (nadir ama mümkün) yeni pinch'in aniden
+  // animasyonun BİTİŞ değerine sıçramasını önler.
   double _startSpan = 0;
   double _startScale = 1;
   Offset _startFocal = Offset.zero;
@@ -845,9 +879,10 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   @override
   void initState() {
     super.initState();
-    // Boşta (parmak yokken) kare tüketmemesi için yalnızca bir hareket
-    // hedefi değiştirdiğinde (`_startTicking`) başlatılır.
+    // Boşta (parmak yokken) kare tüketmemesi için yalnızca toparlanma
+    // gerektiğinde (`_snapToBounds`) başlatılır.
     _ticker = createTicker(_onTick);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
   }
 
   @override
@@ -865,13 +900,24 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
     // yeni iletiye taşınmasın diye elle sıfırlanır.
     if (oldWidget.contentKey != widget.contentKey) {
       _pointers.clear();
-      _snapping = false;
       _ticker.stop();
       _targetScale = _minScale;
       _targetOffset = Offset.zero;
       _scale = _minScale;
       _offset = Offset.zero;
+      // Yeni iletinin gövdesi farklı yükseklikte olabilir.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
     }
+  }
+
+  /// `_boundsKey`in gerçek yerleşim boyunu okur. Yalnızca boy GERÇEKTEN
+  /// değiştiyse `setState` tetikler.
+  void _measureSize() {
+    if (!mounted) return;
+    final box = _boundsKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final size = box.size;
+    if (size != _size) setState(() => _size = size);
   }
 
   void _startTicking() {
@@ -882,18 +928,18 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   }
 
   /// Render edilen `_scale`/`_offset`i hedefe üstel biçimde yaklaştırır.
-  /// Kare süresinden bağımsızdır (`dtSeconds` ile ölçeklenir) — cihazın
-  /// tazeleme hızı 60/90/120 Hz farketmeksizin aynı hissi verir.
+  /// Yalnızca son parmak kalktıktan sonraki toparlanma sırasında çalışır —
+  /// parmaklar ekrandayken hiç çağrılmaz (bkz.
+  /// `_onPointerMove`, orada değerler doğrudan atanır). Kare süresinden
+  /// bağımsızdır (`dtSeconds` ile ölçeklenir) — cihazın tazeleme hızı
+  /// 60/90/120 Hz farketmeksizin aynı hissi verir.
   void _onTick(Duration elapsed) {
-    final rawDt = _lastTick == Duration.zero
-        ? elapsed
-        : elapsed - _lastTick;
+    final rawDt = _lastTick == Duration.zero ? elapsed : elapsed - _lastTick;
     _lastTick = elapsed;
     final dtSeconds = (rawDt.inMicroseconds / Duration.microsecondsPerSecond)
         .clamp(0.0, 1 / 30);
 
-    final response = _snapping ? _snapResponse : _trackResponse;
-    final t = 1 - math.exp(-response * dtSeconds);
+    final t = 1 - math.exp(-_snapResponse * dtSeconds);
     final nextScale = _scale + (_targetScale - _scale) * t;
     final nextOffset = _offset + (_targetOffset - _offset) * t;
 
@@ -910,7 +956,10 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   void _onPointerDown(PointerDownEvent event) {
     _pointers[event.pointer] = event.localPosition;
     if (_pointers.length == 2) {
-      _snapping = false;
+      // Yeni pinch: olası bir toparlanma animasyonunun ortasındaysak onu
+      // kesip parmaklar O ANKİ render edilen değeri devralır (bkz.
+      // `_startScale`/`_startOffset` alan belgesi).
+      _ticker.stop();
       _armGesture();
     }
   }
@@ -918,24 +967,43 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   void _armGesture() {
     final points = _pointers.values.toList(growable: false);
     _startSpan = (points[0] - points[1]).distance;
-    _startScale = _targetScale;
+    _startScale = _scale;
     _startFocal = (points[0] + points[1]) / 2;
-    _startOffset = _targetOffset;
+    _startOffset = _offset;
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (!_pointers.containsKey(event.pointer)) return;
     _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length < 2 || _startSpan < 1) return;
+    if (_pointers.length < 2 || _startSpan < 1 || _size == Size.zero) return;
 
     final points = _pointers.values.toList(growable: false);
     final span = (points[0] - points[1]).distance;
     final focal = (points[0] + points[1]) / 2;
     final rawScale = _startScale * span / _startSpan;
     final scale = _softClamp(rawScale, _minScale, _maxScale);
-    _targetScale = scale;
-    _targetOffset = _clamp(_startOffset + (focal - _startFocal), scale);
-    _startTicking();
+
+    // `Transform`ın `alignment: Alignment.center`i yüzünden bir içerik
+    // noktası `p` ekranda `center + offset + ölçek*(p - center)`e düşer.
+    // Pinch'in başladığı andaki bu denklemden, parmakların o an TAM ÜSTÜNDE
+    // durduğu içerik noktası (`anchor`) geriye çözülür; sonra AYNI nokta
+    // yeni ölçekte parmakların GÜNCEL orta noktasına (`focal`) denk
+    // düşecek şekilde `rawOffset` ileri hesaplanır — bu da parmakların
+    // altındaki içeriği pinch boyunca tam parmakların altında tutar. ÖNCEKİ
+    // sürüm burada yalnızca odak noktasının HAM hareketini offsete
+    // ekliyordu (`_startOffset + (focal - _startFocal)`); bu yalnızca odak
+    // tam merkezdeyken doğruydu — merkez dışı bir noktada (ör. bir görselin
+    // üstünde) pinch yapılınca ölçek büyüdükçe içerik parmaklardan kayardı.
+    final center = _size.center(Offset.zero);
+    final anchor = center + (_startFocal - center - _startOffset) / _startScale;
+    final rawOffset = focal - center - (anchor - center) * scale;
+
+    setState(() {
+      _targetScale = scale;
+      _targetOffset = _clamp(rawOffset, scale);
+      _scale = _targetScale;
+      _offset = _targetOffset;
+    });
   }
 
   void _onPointerGone(int pointer) {
@@ -953,12 +1021,12 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
   /// (anlık `setState`) tam da şikayet edilen "sınırda kaybolma" sıçraması
   /// oluşurdu.
   void _snapToBounds() {
-    _snapping = true;
     final clamped = _targetScale.clamp(_minScale, _maxScale);
     _targetScale = clamped <= _minScale + 0.05 ? _minScale : clamped;
     _targetOffset = _targetScale <= _minScale
         ? Offset.zero
         : _clamp(_targetOffset, _targetScale);
+    if (_targetScale == _scale && _targetOffset == _offset) return;
     _startTicking();
   }
 
@@ -999,10 +1067,18 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        _size = constraints.biggest;
-        return ClipRect(
+    // `SizeChangedLayoutNotifier`, `_boundsKey`in gerçek kutusu her yeniden
+    // yerleşimde ÖLÇÜSÜ değiştiğinde (içerik yüklendikçe, ekran döndükçe)
+    // bunu yukarı bildirir; boy bir sonraki karede (yerleşim kesinleştikten
+    // sonra) `_measureSize` ile yeniden okunur (bkz. `_size` alan belgesi).
+    return NotificationListener<SizeChangedLayoutNotification>(
+      onNotification: (_) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
+        return false;
+      },
+      child: SizeChangedLayoutNotifier(
+        child: ClipRect(
+          key: _boundsKey,
           child: Listener(
             behavior: HitTestBehavior.translucent,
             onPointerDown: _onPointerDown,
@@ -1017,8 +1093,8 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
               child: widget.child,
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -1163,12 +1239,12 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     _tokens = tokens;
     // WebView'ın kendi zemini sayfa yüklenmeden önce ve kaydırma taşmasında
     // görünür; beyaz kalırsa koyu temada göz yakan bir flaş olur.
-    unawaited(_controller.setBackgroundColor(tokens.bg));
+    unawaited(_controller.setBackgroundColor(tokens.readingBg));
 
     if (previous == null) {
       _scheduleInitialLoad();
     } else if (previous.isDark != tokens.isDark ||
-        previous.bg != tokens.bg ||
+        previous.readingBg != tokens.readingBg ||
         previous.textPrimary != tokens.textPrimary) {
       // Tema geçişi animasyonludur: ara her karede `didChangeDependencies`
       // tetiklenir. Belgeyi her karede yeniden kurmak yerine geçiş durulunca
@@ -1401,7 +1477,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
                 ),
                 child: _height == null
                     ? ColoredBox(
-                        color: t.bg,
+                        color: t.readingBg,
                         // Sönerken gövde iskeletten kısa olabilir: iskelet
                         // kendi boyunda çizilip kırpılır, taşma olmaz.
                         child: const ClipRect(

@@ -69,7 +69,7 @@ abstract final class MailHtmlDocument {
     final config = jsonEncode({
       'dark': dark,
       'transform': dark && !emailSupportsDark,
-      'bg': _rgb(tokens.bg),
+      'bg': _rgb(tokens.readingBg),
       'text': _rgb(tokens.textPrimary),
       'minFont': minFontPx,
       'channel': layoutChannel,
@@ -85,7 +85,7 @@ abstract final class MailHtmlDocument {
 <meta name="viewport" content="width=device-width">
 <style>
 :root { color-scheme: ${dark ? 'dark' : 'light'}; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-html { background: ${_hex(tokens.bg)}; overflow-x: hidden; }
+html { background: ${_hex(tokens.readingBg)}; overflow-x: hidden; }
 body { margin: 0; padding: 16px; color: ${_hex(tokens.textPrimary)}; font-family: -apple-system, Roboto, sans-serif; overflow-wrap: break-word; overflow-x: hidden; }
 a { overflow-wrap: anywhere; }
 img { max-width: 100%; }
