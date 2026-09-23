@@ -639,7 +639,7 @@ final isSelectionModeProvider = Provider<bool>(
 
 // ------------------------------------------------------------------ kabuk
 
-/// Etkin modül: 0 İletiler, 1 Takvim, 2 Kişiler, 3 Ayarlar.
+/// Etkin modül: 0 İletiler, 1 Kişiler, 2 Ayarlar.
 ///
 /// eM Client'ta olduğu gibi bu geçiş alt gezinme çubuğunda değil, hamburger
 /// menünün altındaki modül listesinde yapılır (bkz. `FolderDrawer` içindeki

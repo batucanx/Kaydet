@@ -58,7 +58,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final query = ref.watch(searchQueryProvider);
-    final isActive = query.trim().isNotEmpty;
+    final category = ref.watch(searchCategoryProvider);
+    // Dosyalar sekmesi Outlook'taki gibi hiç yazı yazılmadan da sonuç
+    // görünümünü açar: sorgu boşken en son ekleri gözat modunda listeler
+    // (bkz. `attachmentSearchResultsProvider`). Diğer kategoriler yalnızca
+    // bir sorgu yazılınca aktifleşir.
+    final isActive =
+        query.trim().isNotEmpty || category == SearchCategory.files;
     // Filtreleri yalnızca sonuç görünümü izler; sorgu tamamen silinip boş
     // görünüme dönüldüğünde `autoDispose` onları sıfırlardı. Kategori ve hesap
     // kapsamı gibi (bunları hep bağlı widget'lar izler) ekran açıkken korunsun.
@@ -182,9 +188,7 @@ class _AccountSelectorButton extends ConsumerWidget {
                 if (account.displayName.trim().isNotEmpty)
                   Text(
                     account.displayName,
-                    style: AppText.labelSmall.copyWith(
-                      color: t.textTertiary,
-                    ),
+                    style: AppText.labelSmall.copyWith(color: t.textTertiary),
                   ),
               ],
             ),
@@ -210,7 +214,6 @@ class _CategoryChipRow extends ConsumerWidget {
     SearchCategory.mail: 'Posta',
     SearchCategory.contacts: 'Kişiler',
     SearchCategory.files: 'Dosyalar',
-    SearchCategory.events: 'Etkinlikler',
   };
 
   @override
@@ -290,8 +293,7 @@ class _SearchIdleView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final recentContacts = ref.watch(recentContactsProvider);
-    final history =
-        ref.watch(searchHistoryProvider).value ?? const <String>[];
+    final history = ref.watch(searchHistoryProvider).value ?? const <String>[];
 
     if (recentContacts.isEmpty && history.isEmpty) {
       return const EmptyState(
@@ -410,8 +412,8 @@ class _RecentContactAvatar extends StatelessWidget {
 // ------------------------------------------------------------- sonuçlar
 
 /// Filtreler (bkz. [SearchFiltersScreen]) posta kaynaklı sonuçlara uygulanır:
-/// posta, dosyalar ve ikisini de içeren Tümü. Kişiler ve etkinlikler
-/// filtrelenmez, bu sekmelerde "Filtrele" düğmesi de gösterilmez.
+/// posta, dosyalar ve ikisini de içeren Tümü. Kişiler filtrelenmez, bu
+/// sekmede "Filtrele" düğmesi de gösterilmez.
 bool _filtersApplyTo(SearchCategory category) =>
     category == SearchCategory.all ||
     category == SearchCategory.mail ||
@@ -429,9 +431,7 @@ class _FilterBar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
-    final count = ref.watch(
-      searchFiltersProvider.select((f) => f.activeCount),
-    );
+    final count = ref.watch(searchFiltersProvider.select((f) => f.activeCount));
     final isActive = count > 0;
 
     // Açık temada `surfaceElevated` zeminle aynı beyazdır; dolgu tek başına
@@ -492,21 +492,17 @@ class _SearchResultsView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final category = ref.watch(searchCategoryProvider);
 
-    if (category == SearchCategory.events) {
-      return const EmptyState(
-        icon: LucideIcons.calendarDays,
-        title: 'Takvim yakında',
-        description: 'Etkinlik araması bir sonraki sürümde eklenecek.',
-      );
-    }
-
     // "Filtrele" çubuğu (yalnızca posta kaynaklı sekmelerde) sonuç
     // listelerinde listenin ilk öğesidir ve içerikle birlikte kayar. Yükleniyor
     // ve boş durumlarında kaydırılacak bir şey yoktur; çubuk içeriğin üstünde
     // durur — sonuç boşken de filtreler değiştirilebilmeli.
     final filterBar = _filtersApplyTo(category) ? const _FilterBar() : null;
-    Widget stateView(Widget content) =>
-        Column(children: [?filterBar, Expanded(child: content)]);
+    Widget stateView(Widget content) => Column(
+      children: [
+        ?filterBar,
+        Expanded(child: content),
+      ],
+    );
 
     final mail = ref.watch(mailSearchResultsProvider);
     final contacts = ref.watch(contactSearchResultsProvider);
@@ -518,7 +514,6 @@ class _SearchResultsView extends ConsumerWidget {
       SearchCategory.files => attachments.isLoading,
       SearchCategory.all =>
         mail.isLoading || contacts.isLoading || attachments.isLoading,
-      SearchCategory.events => false,
     };
     if (loading) {
       return stateView(const Center(child: CircularProgressIndicator()));
@@ -538,19 +533,25 @@ class _SearchResultsView extends ConsumerWidget {
       SearchCategory.files => attachmentRows.length,
       SearchCategory.all =>
         mailRows.length + contactRows.length + attachmentRows.length,
-      SearchCategory.events => 0,
     };
     if (totalCount == 0) {
       // Boşluğun nedeni filtreler olabilir: bunu söyle ve tek dokunuşla temizlet.
       final filtered =
           _filtersApplyTo(category) &&
           ref.watch(searchFiltersProvider).isActive;
+      // Dosyalar gözat modundaysa (sorgu boş) "farklı bir arama dene" yanlış
+      // izlenim verir — henüz hiçbir şey aranmadı, ek senkronize edilmemiş.
+      final browsingEmptyFiles =
+          category == SearchCategory.files &&
+          ref.watch(searchQueryProvider).trim().isEmpty;
       return stateView(
         EmptyState(
           icon: LucideIcons.searchX,
-          title: 'Sonuç bulunamadı',
+          title: browsingEmptyFiles ? 'Ek yok' : 'Sonuç bulunamadı',
           description: filtered
               ? 'Seçili filtrelerle eşleşen sonuç yok.'
+              : browsingEmptyFiles
+              ? 'Bu hesapta senkronize edilmiş bir ek bulunmuyor.'
               : 'Farklı bir arama deneyin.',
           action: filtered
               ? TextButton(
@@ -652,9 +653,7 @@ Future<void> _openMessageResult(
 ) async {
   FocusScope.of(context).unfocus();
   if (message.accountId != ref.read(accountIdProvider)) {
-    await ref
-        .read(accountRepositoryProvider)
-        .switchAccount(message.accountId);
+    await ref.read(accountRepositoryProvider).switchAccount(message.accountId);
   }
   if (!context.mounted) return;
 

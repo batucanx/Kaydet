@@ -7,11 +7,13 @@ void main() {
     KaydetTokens tokens = KaydetTokens.dark,
     bool emailSupportsDark = false,
     String body = '<p>Merhaba</p>',
+    int documentId = 1,
   }) => MailHtmlDocument.build(
     body: body,
     tokens: tokens,
     emailSupportsDark: emailSupportsDark,
     script: '/*render*/',
+    documentId: documentId,
   );
 
   group('MailHtmlDocument', () {
@@ -59,7 +61,20 @@ void main() {
       );
       expect(html, contains('html { background: #000000; }'));
       expect(html, contains('"bg":[0,0,0]'));
-      expect(html, contains('<body><p id="x">Selam</p></body>'));
+      expect(
+        html,
+        contains('<body><kd-root><p id="x">Selam</p></kd-root></body>'),
+      );
     });
+
+    test(
+      'gövde ölçü sarmalayıcısında; kanal ve belge kimliği betiğe geçer',
+      () {
+        final html = doc(documentId: 7);
+        expect(html, contains('kd-root { display: flow-root; }'));
+        expect(html, contains('"channel":"${MailHtmlDocument.layoutChannel}"'));
+        expect(html, contains('"doc":7'));
+      },
+    );
   });
 }
