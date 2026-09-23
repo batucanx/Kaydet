@@ -595,7 +595,7 @@ class _PinnedSection extends ConsumerStatefulWidget {
 }
 
 class _PinnedSectionState extends ConsumerState<_PinnedSection> {
-  static const _collapseThreshold = 3;
+  static const _collapseThreshold = 2;
 
   bool? _userExpanded;
 

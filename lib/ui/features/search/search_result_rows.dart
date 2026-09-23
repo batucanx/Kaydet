@@ -70,6 +70,15 @@ class MailResultRow extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: Space.sm),
+                      if (message.hasAttachments)
+                        Padding(
+                          padding: const EdgeInsets.only(right: Space.xs),
+                          child: Icon(
+                            LucideIcons.paperclip,
+                            size: 13,
+                            color: t.textTertiary,
+                          ),
+                        ),
                       Text(
                         formatListDate(message.dateUtc),
                         style: AppText.labelSmall.copyWith(

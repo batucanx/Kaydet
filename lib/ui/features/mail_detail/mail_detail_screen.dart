@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:open_filex/open_filex.dart';
@@ -690,8 +692,12 @@ class _BodyView extends StatelessWidget {
 
     if (html != null && html.trim().isNotEmpty) {
       // İçeriğinin boyuna uzar; dikey kaydırmayı ekranın tek kaydırma alanı
-      // yapar (bkz. `_HtmlWebView`).
-      return _HtmlWebView(html: html);
+      // yapar (bkz. `_HtmlWebView`). İki parmakla yakınlaştırma bunun
+      // üstüne ayrı bir katman olarak eklenir (bkz. `_PinchZoomableBody`).
+      return _PinchZoomableBody(
+        contentKey: body!.messageId,
+        child: _HtmlWebView(html: html),
+      );
     }
 
     if (plain != null && plain.trim().isNotEmpty) {
@@ -754,6 +760,265 @@ class _BodyShimmer extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Gövdeye iki parmakla yakınlaştırma ekler — bazı bültenler/faturalar çok
+/// küçük punto ile geliyor.
+///
+/// `_HtmlWebView`'ın kendi (native) yakınlaştırması bilinçli olarak kapalı
+/// (bkz. o widget'ın belgesi): içerik boyuna uzatılmış bir WebView'da
+/// büyütülen içerik dikeyde kaydırılamaz. Bunun yerine burada saf `Listener`
+/// ile İKİ (veya daha fazla) parmağın konumu izlenir ve ölçek/kaydırma elle
+/// hesaplanıp bir `Transform` ile uygulanır — jest arenasına HİÇ girilmez
+/// (`Listener`, `GestureRecognizer` gibi bir hareketi tekeline almaz, sadece
+/// izler). Böylece tek parmakla kaydırma, bağlantı dokunuşu, uzun basmayla
+/// metin seçme ve yatay sürükleme (`_HtmlWebView`nin kendi tanıyıcıları)
+/// aynen öncekiler gibi çalışmaya devam eder; yalnızca ikinci parmak
+/// eklendiğinde yakınlaştırma devreye girer. Büyütülen alan kendi kutusunun
+/// sınırlarıyla kırpılır (`ClipRect`) — komşu widget'ların (konu başlığı,
+/// ekler) üstüne taşmaz.
+class _PinchZoomableBody extends StatefulWidget {
+  const _PinchZoomableBody({required this.contentKey, required this.child});
+
+  /// İçerik değişince (başka bir iletiye geçilince) yakınlaştırmayı
+  /// sıfırlamak için kullanılan kimlik — pratikte ileti id'si.
+  /// `_HtmlWebView`, önceki/sonraki iletiye akıcı geçiş için bilerek AYNI
+  /// örnekte kalır (bkz. o widget'ın belgesi); bu widget da bu yüzden aynı
+  /// `State`i korur ve zum durumu kendiliğinden sıfırlanmaz — dışarıdan bu
+  /// sinyal olmasa yeni bir iletiye önceki iletinin yakınlaştırmasıyla
+  /// girilirdi.
+  final Object contentKey;
+
+  final Widget child;
+
+  @override
+  State<_PinchZoomableBody> createState() => _PinchZoomableBodyState();
+}
+
+class _PinchZoomableBodyState extends State<_PinchZoomableBody>
+    with SingleTickerProviderStateMixin {
+  static const double _minScale = 1;
+  static const double _maxScale = 4;
+
+  /// Sınırın (`_minScale`/`_maxScale`) ötesine ne kadar esneyebileceği —
+  /// kauçuk bant hissi. Parmak bırakılınca `_snapToBounds` bunu geçerli
+  /// aralığa geri toplar.
+  static const double _overscrollFriction = 0.4;
+
+  /// Render edilen değerin hedefe her karede ne hızda yaklaşacağı (1/sn).
+  /// Büyüdükçe daha "sıkı" (parmağa daha yapışık) takip eder.
+  static const double _trackResponse = 24;
+
+  /// Parmak(lar) kalktıktan sonra sınıra/kimliğe toparlanırken kullanılan,
+  /// daha yumuşak yanıt hızı — ani bir sıçrama yerine akıcı bir toparlanma.
+  static const double _snapResponse = 10;
+
+  /// O anda ekranda olan parmaklar (pointer id → son konum).
+  final Map<int, Offset> _pointers = {};
+
+  // Parmakların o an hedeflediği (ham, kauçuk bantlı olabilen) değer.
+  double _targetScale = 1;
+  Offset _targetOffset = Offset.zero;
+
+  // Ekrana çizilen, yumuşatılmış değer — `_targetScale/_targetOffset`i her
+  // karede biraz daha yakalar (bkz. `_onTick`). Ham parmak deltasının
+  // doğrudan uygulanması ("sert" hissettiren asıl sebep) yerine bu iki
+  // katmanlı yaklaşım, gerek yakınlaştırma başlangıcındaki gerekse sınıra
+  // çarpma anındaki ani sıçramaları yumuşatır.
+  double _scale = 1;
+  Offset _offset = Offset.zero;
+
+  Size _size = Size.zero;
+  late final Ticker _ticker;
+  Duration _lastTick = Duration.zero;
+  bool _snapping = false;
+
+  // İki parmaklı hareketin başladığı andaki anlık görüntü — sonraki her
+  // `onPointerMove` bu referansa göre delta hesaplar.
+  double _startSpan = 0;
+  double _startScale = 1;
+  Offset _startFocal = Offset.zero;
+  Offset _startOffset = Offset.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    // Boşta (parmak yokken) kare tüketmemesi için yalnızca bir hareket
+    // hedefi değiştirdiğinde (`_startTicking`) başlatılır.
+    _ticker = createTicker(_onTick);
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PinchZoomableBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Başka bir iletiye geçildi: `_HtmlWebView` aynı örnekte kalıp içeriği
+    // yerinde değiştirdiği için (akıcı geçiş, bkz. o widget'ın belgesi) bu
+    // State de kendiliğinden sıfırlanmaz — önceki iletinin yakınlaştırması
+    // yeni iletiye taşınmasın diye elle sıfırlanır.
+    if (oldWidget.contentKey != widget.contentKey) {
+      _pointers.clear();
+      _snapping = false;
+      _ticker.stop();
+      _targetScale = _minScale;
+      _targetOffset = Offset.zero;
+      _scale = _minScale;
+      _offset = Offset.zero;
+    }
+  }
+
+  void _startTicking() {
+    if (!_ticker.isTicking) {
+      _lastTick = Duration.zero;
+      _ticker.start();
+    }
+  }
+
+  /// Render edilen `_scale`/`_offset`i hedefe üstel biçimde yaklaştırır.
+  /// Kare süresinden bağımsızdır (`dtSeconds` ile ölçeklenir) — cihazın
+  /// tazeleme hızı 60/90/120 Hz farketmeksizin aynı hissi verir.
+  void _onTick(Duration elapsed) {
+    final rawDt = _lastTick == Duration.zero
+        ? elapsed
+        : elapsed - _lastTick;
+    _lastTick = elapsed;
+    final dtSeconds = (rawDt.inMicroseconds / Duration.microsecondsPerSecond)
+        .clamp(0.0, 1 / 30);
+
+    final response = _snapping ? _snapResponse : _trackResponse;
+    final t = 1 - math.exp(-response * dtSeconds);
+    final nextScale = _scale + (_targetScale - _scale) * t;
+    final nextOffset = _offset + (_targetOffset - _offset) * t;
+
+    final settled =
+        (nextScale - _targetScale).abs() < 0.002 &&
+        (nextOffset - _targetOffset).distance < 0.1;
+    setState(() {
+      _scale = settled ? _targetScale : nextScale;
+      _offset = settled ? _targetOffset : nextOffset;
+    });
+    if (settled) _ticker.stop();
+  }
+
+  void _onPointerDown(PointerDownEvent event) {
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length == 2) {
+      _snapping = false;
+      _armGesture();
+    }
+  }
+
+  void _armGesture() {
+    final points = _pointers.values.toList(growable: false);
+    _startSpan = (points[0] - points[1]).distance;
+    _startScale = _targetScale;
+    _startFocal = (points[0] + points[1]) / 2;
+    _startOffset = _targetOffset;
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (!_pointers.containsKey(event.pointer)) return;
+    _pointers[event.pointer] = event.localPosition;
+    if (_pointers.length < 2 || _startSpan < 1) return;
+
+    final points = _pointers.values.toList(growable: false);
+    final span = (points[0] - points[1]).distance;
+    final focal = (points[0] + points[1]) / 2;
+    final rawScale = _startScale * span / _startSpan;
+    final scale = _softClamp(rawScale, _minScale, _maxScale);
+    _targetScale = scale;
+    _targetOffset = _clamp(_startOffset + (focal - _startFocal), scale);
+    _startTicking();
+  }
+
+  void _onPointerGone(int pointer) {
+    _pointers.remove(pointer);
+    if (_pointers.length >= 2) {
+      _armGesture();
+    } else if (_pointers.isEmpty) {
+      _snapToBounds();
+    }
+  }
+
+  /// Son parmak da kalkınca: kauçuk bantla sınırın az ötesindeyse geçerli
+  /// aralığa, 1'e yakınsa tam kimliğe (`scale=1, offset=0`) yumuşakça
+  /// toparlar — `_onTick` bunu akıcı bir animasyona çevirir, aksi halde
+  /// (anlık `setState`) tam da şikayet edilen "sınırda kaybolma" sıçraması
+  /// oluşurdu.
+  void _snapToBounds() {
+    _snapping = true;
+    final clamped = _targetScale.clamp(_minScale, _maxScale);
+    _targetScale = clamped <= _minScale + 0.05 ? _minScale : clamped;
+    _targetOffset = _targetScale <= _minScale
+        ? Offset.zero
+        : _clamp(_targetOffset, _targetScale);
+    _startTicking();
+  }
+
+  /// Üst sınırın ötesine sert bir duvara çarpmış gibi değil, esneyerek gider
+  /// (kauçuk bant) — parmak bırakılınca `_snapToBounds` bunu geri toplar.
+  /// Ne kadar hızlı/geniş bir jestte bile mantıksız büyüklüklere gitmesin
+  /// diye esneme payının kendi de bir tavanla (`max * 1.5`) sınırlanır.
+  ///
+  /// Alt sınırın (1x, "normal boy") ASLA altına inmez — kasıtlı: içeriği
+  /// normal boyutundan küçültmenin okumada bir faydası yok, ÜSTELİK önceki
+  /// sürümde burada da esneme uygulanınca `scale < 1` oluyor, bu da
+  /// `_clamp`teki `(scale - 1)` ifadesini negatife düşürüp `offset.dx.clamp`
+  /// çağrısını `min > max` haliyle çöktürüyordu — kullanıcının "aşırı
+  /// uzaklaştırınca mail kayboluyor" diye bildirdiği hata tam buydu.
+  double _softClamp(double value, double min, double max) {
+    if (value <= min) return min;
+    if (value > max) {
+      final capped = math.min(value, max * 1.5);
+      return max + (capped - max) * _overscrollFriction;
+    }
+    return value;
+  }
+
+  Offset _clamp(Offset offset, double scale) {
+    // `scale <= 1` iken kaydırılacak bir şey yoktur (içerik viewport'u
+    // taşmaz) — bunu erken döndürmek hem doğru davranış hem de aşağıdaki
+    // `(scale - 1)` negatif olup `min > max` ile çökmesini YAPISAL olarak
+    // imkânsız kılar (bkz. `_softClamp` notu).
+    if (scale <= 1) return Offset.zero;
+    if (_size == Size.zero) return offset;
+    final maxDx = _size.width * (scale - 1) / 2;
+    final maxDy = _size.height * (scale - 1) / 2;
+    return Offset(
+      offset.dx.clamp(-maxDx, maxDx),
+      offset.dy.clamp(-maxDy, maxDy),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _size = constraints.biggest;
+        return ClipRect(
+          child: Listener(
+            behavior: HitTestBehavior.translucent,
+            onPointerDown: _onPointerDown,
+            onPointerMove: _onPointerMove,
+            onPointerUp: (e) => _onPointerGone(e.pointer),
+            onPointerCancel: (e) => _onPointerGone(e.pointer),
+            child: Transform(
+              alignment: Alignment.center,
+              transform: Matrix4.identity()
+                ..translate(_offset.dx, _offset.dy)
+                ..scale(_scale),
+              child: widget.child,
+            ),
+          ),
+        );
+      },
     );
   }
 }

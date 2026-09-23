@@ -10,6 +10,7 @@ import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/use_cases/folder_mapping.dart';
+import '../../domain/use_cases/label_keywords.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../database/app_database.dart';
 import '../services/smtp_service.dart';
@@ -307,16 +308,13 @@ class MailRepository {
         await _enqueueByMailbox(
           rows.where((r) => r.uid != null).toList(),
           add ? PendingOpType.addKeyword : PendingOpType.removeKeyword,
-          extra: {'keyword': _keywordFor(labelName)},
+          extra: {'keyword': labelImapKeyword(labelName)},
         );
       }
     });
 
     if (shouldEnqueue) kickQueue(rows.first.accountId);
   }
-
-  static String _keywordFor(String labelName) =>
-      'kaydet_${foldForSearch(labelName).replaceAll(RegExp(r'[^a-z0-9]'), '_')}';
 
   static List<String> _decodeLabels(String json) {
     try {
