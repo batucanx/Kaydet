@@ -18,6 +18,7 @@ import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
 import '../data/services/smtp_service.dart';
+import 'sync_controller.dart';
 
 /// Uygulama genelindeki bağımlılık grafiği.
 ///
@@ -497,6 +498,26 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final filterActive = ref.watch(
     messageFilterProvider.select((f) => f.isActive),
   );
+  // Bu klasör DAHA ÖNCE HİÇ eşitlenmedi (bkz. `SyncEngine.syncMailbox`
+  // içindeki `neverSynced = mailbox.uidNext == null` — ilk indirme
+  // tamamlanana kadar `uidNext` yerelde yazılmaz) VE tam da şu an bir
+  // eşitleme sürüyor mu? Klasöre ilk kez girildiğinde (ör. daha önce hiç
+  // açılmamış bir Çöp Kutusu) yerel veritabanında GERÇEKTEN sıfır satır
+  // vardır — `visible.isEmpty` burada YALAN söylemiyor, henüz IMAP'tan
+  // hiçbir şey inmedi. Bu yüzden `rowsMatchFolder` (yukarıdaki, farklı
+  // klasörün BAYAT verisini yakalayan kontrol) bunu YAKALAMAZ: `messages`
+  // zaten kendi (doğru, boş) klasörü için `AsyncData([])`e ulaşmıştır.
+  // Sonuç: kullanıcı IMAP indirmesi bitene kadar (birkaç yüz ms - birkaç
+  // saniye) "Bu klasör boş" görür, sonra gerçek iletiler görünür. Bu kontrol
+  // olmadan o an için `AsyncData` doğru ama YANILTICI. `uidNext == null` +
+  // `isSyncing` ikisi birden doğruyken bu "boş" henüz KESİNLEŞMEMİŞ sayılır
+  // ve iskelet gösterilir; eşitleme bitince (mesaj bulunsa da bulunmasa da)
+  // iskelet kalkar.
+  final neverSyncedFolder = mailbox != null && mailbox.uidNext == null;
+  final syncInFlight = ref.watch(
+    syncControllerProvider.select((s) => s.isSyncing),
+  );
+  final coldFolderStillLoading = neverSyncedFolder && syncInFlight;
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
     // Sabitlenenler bölümü yalnızca Gelen Kutusu'nda gösterilir — diğer
@@ -579,11 +600,19 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   }
 
   return messages.map(
-    data: (d) => AsyncData(buildItems(d.value)),
+    data: (d) {
+      if (coldFolderStillLoading && d.value.isEmpty) {
+        return AsyncLoading<List<MailListItem>>();
+      }
+      return AsyncData(buildItems(d.value));
+    },
     error: (e) => AsyncError(e.error, e.stackTrace),
     loading: (l) {
       final previousRows = l.value;
       if (previousRows != null && rowsMatchFolder(previousRows)) {
+        if (coldFolderStillLoading && previousRows.isEmpty) {
+          return AsyncLoading<List<MailListItem>>(progress: l.progress);
+        }
         return AsyncData(buildItems(previousRows));
       }
       return AsyncLoading<List<MailListItem>>(progress: l.progress);
