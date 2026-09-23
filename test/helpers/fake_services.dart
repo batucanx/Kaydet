@@ -286,6 +286,48 @@ class FakeImapService implements ImapService {
   }
 
   @override
+  Future<Result<void>> deleteMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+  }) async {
+    commandLog.add('delete:$path');
+    mailboxes.removeWhere((m) => m.path == path);
+    store.remove(path);
+    bodies.remove(path);
+    return okVoid;
+  }
+
+  @override
+  Future<Result<void>> renameMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+    required String newPath,
+  }) async {
+    commandLog.add('rename:$path->$newPath');
+    final index = mailboxes.indexWhere((m) => m.path == path);
+    if (index != -1) {
+      final old = mailboxes[index];
+      mailboxes[index] = RemoteMailbox(
+        path: newPath,
+        name: newPath.split(delimiter).last,
+        delimiter: delimiter,
+        specialUse: old.specialUse,
+        encodedPath: old.encodedPath,
+        isSelectable: old.isSelectable,
+        isSubscribed: old.isSubscribed,
+      );
+    }
+    final movedMessages = store.remove(path);
+    if (movedMessages != null) store[newPath] = movedMessages;
+    final movedBodies = bodies.remove(path);
+    if (movedBodies != null) bodies[newPath] = movedBodies;
+    if (selectedPath == path) selectedPath = newPath;
+    return okVoid;
+  }
+
+  @override
   Future<Result<void>> noop() async {
     commandLog.add('noop');
     return okVoid;

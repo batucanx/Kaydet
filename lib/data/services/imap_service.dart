@@ -79,6 +79,25 @@ abstract class ImapService {
   /// Klasör oluşturur.
   Future<Result<void>> createMailbox(String path);
 
+  /// Klasörü siler.
+  Future<Result<void>> deleteMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+  });
+
+  /// Klasörü yeniden adlandırır/taşır.
+  ///
+  /// IMAP'te "taşıma" ayrı bir komut değildir: hem ad değişimi (aynı üst
+  /// önek + yeni son bileşen) hem üst değişimi (farklı üst önek + aynı son
+  /// bileşen) tek bir RENAME komutuyla yapılır. [newPath] hedef TAM yoldur.
+  Future<Result<void>> renameMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+    required String newPath,
+  });
+
   /// Bağlantıyı canlı tutar.
   Future<Result<void>> noop();
 
@@ -578,6 +597,64 @@ class EnoughMailImapService implements ImapService {
   Future<Result<void>> createMailbox(String path) => _guard(() async {
     await _requireClient.createMailbox(path);
   });
+
+  @override
+  Future<Result<void>> deleteMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+  }) => _guard(() async {
+    await _requireClient.deleteMailbox(
+      _syntheticMailbox(
+        path: path,
+        encodedPath: encodedPath,
+        delimiter: delimiter,
+      ),
+    );
+  });
+
+  @override
+  Future<Result<void>> renameMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+    required String newPath,
+  }) => _guard(() async {
+    await _requireClient.renameMailbox(
+      _syntheticMailbox(
+        path: path,
+        encodedPath: encodedPath,
+        delimiter: delimiter,
+      ),
+      newPath,
+    );
+  });
+
+  /// [em.ImapClient]'ın `RENAME`/`DELETE` gibi komutları yalnızca bir
+  /// [em.Mailbox] nesnesi kabul eder, ham bir yol (path) değil — ama tek
+  /// ihtiyacımız olan bilgi yoldur (yerelde de sadece onu tutuyoruz, bkz.
+  /// `MailboxRow`). Paketin kendisi de tam bu deseni kullanır (bkz.
+  /// `ImapClient.selectMailboxByPath`): eldeki yol bilgisinden minimal,
+  /// sahte bir [em.Mailbox] üretilir — sunucuya yalnızca `encodedPath`
+  /// gider, diğer alanlar (bayraklar, mesaj sayıları) bu komutlarda
+  /// okunmaz.
+  em.Mailbox _syntheticMailbox({
+    required String path,
+    required String encodedPath,
+    required String delimiter,
+  }) {
+    final effectivePath = encodedPath.isEmpty ? path : encodedPath;
+    final splitIndex = effectivePath.lastIndexOf(delimiter);
+    final name = splitIndex == -1
+        ? effectivePath
+        : effectivePath.substring(splitIndex + delimiter.length);
+    return em.Mailbox(
+      encodedName: name,
+      encodedPath: effectivePath,
+      pathSeparator: delimiter,
+      flags: const [],
+    );
+  }
 
   @override
   Future<Result<void>> noop() => _guard(() async {

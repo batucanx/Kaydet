@@ -63,6 +63,47 @@ final class MailboxNotFoundFailure extends AppFailure {
   String get userMessage => 'Klasör bulunamadı${path != null ? ': $path' : ''}.';
 }
 
+/// Aynı isimde klasör zaten var.
+final class DuplicateFolderFailure extends AppFailure {
+  const DuplicateFolderFailure({super.detail});
+
+  @override
+  String get userMessage => 'Bu adda bir klasör zaten var.';
+
+  @override
+  bool get isActionable => true;
+}
+
+/// Sistem klasörü (Gelen Kutusu, Gönderilenler, Taslaklar, Çöp Kutusu,
+/// İstenmeyen, Arşiv) üzerinde yeniden adlandırma/silme/taşıma denendi.
+final class SystemFolderProtectedFailure extends AppFailure {
+  const SystemFolderProtectedFailure({super.detail});
+
+  @override
+  String get userMessage => 'Sistem klasörleri üzerinde bu işlem yapılamaz.';
+}
+
+/// Alt klasörleri olan bir klasör silinmeye çalışıldı.
+final class FolderHasChildrenFailure extends AppFailure {
+  const FolderHasChildrenFailure({super.detail});
+
+  @override
+  String get userMessage =>
+      'Alt klasörleri olan bir klasör silinemez. Önce alt klasörleri '
+      'taşıyın veya silin.';
+
+  @override
+  bool get isActionable => true;
+}
+
+/// Klasör kendi içine ya da kendi alt klasörüne taşınmaya çalışıldı.
+final class InvalidFolderMoveFailure extends AppFailure {
+  const InvalidFolderMoveFailure({super.detail});
+
+  @override
+  String get userMessage => 'Klasör kendi alt klasörüne taşınamaz.';
+}
+
 /// UIDVALIDITY değişti — yerel önbellek geçersiz.
 ///
 /// Bu hata kullanıcıya gösterilmez; senkronizasyon katmanı yakalayıp

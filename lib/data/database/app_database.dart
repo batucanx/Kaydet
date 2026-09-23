@@ -72,7 +72,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -124,6 +124,22 @@ class AppDatabase extends _$AppDatabase {
       // ile v6 arasındaki şemalarda vardır (v1'de hiç eklenmemişti).
       if (from >= 2 && from < 7) {
         await m.dropColumn(accounts, 'auth_method');
+      }
+      // v7 → v8: Gelen kutusundan otomatik kişi toplama
+      // (`SyncEngine._captureContactsFromInbox`) bu sürümle eklendi ve
+      // yalnızca YENİ indirilen iletilerde çalışır. Bu göçten önce zaten
+      // senkronize edilmiş gelen kutuları hiç işlenmemişti — dolu bir gelen
+      // kutusunda bile arama ekranının "Hızlı Kişiler" şeridi boş kalıyordu.
+      // Var olan gelen kutusu iletilerinden bir kerelik geriye dönük
+      // doldurma yapılır.
+      if (from < 8) {
+        await _backfillContactsFromInbox();
+      }
+      // v8 → v9: Klasör Yönetimi ekranı — kullanıcının "Sık Kullanılanlar"a
+      // yıldızladığı klasörler (bkz. `FolderManagementScreen`). Sunucuda
+      // karşılığı yoktur, salt yerel bir tercihtir.
+      if (from < 9) {
+        await m.addColumn(mailboxes, mailboxes.isFavorite);
       }
     },
     beforeOpen: (details) async {
@@ -300,10 +316,104 @@ class AppDatabase extends _$AppDatabase {
     if (existing == null) {
       return into(mailboxes).insert(row);
     }
+    // `sortOrder`/`isFavorite` Klasör Yönetimi ekranının salt yerel
+    // kullanıcı tercihleridir (bkz. `Mailboxes.isFavorite`, `FolderManagement
+    // Screen`) — her klasör senkronizasyonunda (bkz. `SyncEngine.
+    // syncMailboxes`) bu sütunlar `row` içinde de gelse, var olan bir
+    // klasörde asla ezilmemeli. `Value.absent()` bu iki alanı `write`den
+    // tamamen çıkarır.
     await (update(mailboxes)..where((m) => m.id.equals(existing.id))).write(
-      row.copyWith(id: const Value.absent()),
+      row.copyWith(
+        id: const Value.absent(),
+        sortOrder: const Value.absent(),
+        isFavorite: const Value.absent(),
+      ),
     );
     return existing.id;
+  }
+
+  /// Klasörü Sık Kullanılanlar'a ekler/çıkarır (bkz. `Mailboxes.isFavorite`).
+  Future<void> setMailboxFavorite(int mailboxId, bool value) =>
+      (update(mailboxes)..where((m) => m.id.equals(mailboxId))).write(
+        MailboxesCompanion(isFavorite: Value(value)),
+      );
+
+  /// Klasörleri [orderedIds] sırasına göre kalıcı olarak yeniden numaralandırır.
+  ///
+  /// [orderedIds] EKSİKSİZ bir hesabın tüm yönetilebilir klasör kimlikleri
+  /// olmalıdır — birleştirme (Sık Kullanılanlar'ın alt kümesini tam listeye
+  /// geri serpiştirme) çağıran tarafta yapılır (bkz.
+  /// `AccountRepository.reorderFolders`, `FolderManagementScreen`). Burada
+  /// yalnızca mekanik sıra ataması yapılır.
+  Future<void> reorderMailboxes(List<int> orderedIds) async {
+    if (orderedIds.isEmpty) return;
+    await transaction(() async {
+      for (var i = 0; i < orderedIds.length; i++) {
+        await (update(mailboxes)..where((m) => m.id.equals(orderedIds[i])))
+            .write(MailboxesCompanion(sortOrder: Value(i)));
+      }
+    });
+  }
+
+  /// [mailboxId] klasörünün yolunu/adını günceller ve TÜM alt klasörlerini
+  /// (IMAP `RENAME` sunucuda hepsini birlikte taşır, bkz.
+  /// `AccountRepository.renameFolder`/`moveFolder`) aynı önekle birlikte
+  /// yeniden yazar.
+  ///
+  /// Satır kimlikleri (id) KORUNUR — bu yüzden iletiler, favori durumu ve
+  /// sıra kaybolmaz. `SQL LIKE` yerine Dart'ta `startsWith` kullanılır:
+  /// klasör adları `%`/`_` gibi LIKE özel karakterleri içerebilir, bunları
+  /// kaçırmak (escape) yerine düz metin karşılaştırması daha güvenli.
+  Future<void> renameMailboxTree({
+    required int mailboxId,
+    required String oldPath,
+    required String newPath,
+    required String newName,
+    required String delimiter,
+  }) async {
+    final mailbox = await mailboxById(mailboxId);
+    if (mailbox == null) return;
+
+    await transaction(() async {
+      await (update(mailboxes)..where((m) => m.id.equals(mailboxId))).write(
+        MailboxesCompanion(path: Value(newPath), name: Value(newName)),
+      );
+
+      final oldPrefix = '$oldPath$delimiter';
+      final siblings = await (select(
+        mailboxes,
+      )..where((m) => m.accountId.equals(mailbox.accountId))).get();
+      for (final child in siblings) {
+        if (child.id == mailboxId || !child.path.startsWith(oldPrefix)) {
+          continue;
+        }
+        final rewritten =
+            '$newPath$delimiter${child.path.substring(oldPrefix.length)}';
+        await (update(mailboxes)..where((m) => m.id.equals(child.id))).write(
+          MailboxesCompanion(path: Value(rewritten)),
+        );
+      }
+    });
+  }
+
+  /// Klasörü ve içindeki TÜM iletileri (FTS dahil) kalıcı olarak siler —
+  /// yalnızca sunucu tarafında zaten silinmiş bir klasör için çağrılır
+  /// (bkz. `AccountRepository.deleteFolder`). [purgeMailboxMessages]'ın
+  /// aksine yerel-taslak/giden kutusu iletileri de dahil TÜMÜNÜ siler:
+  /// klasörün kendisi artık yok, geride bırakılacak bir sunucu karşılığı
+  /// da yok.
+  Future<void> deleteMailboxWithMessages(int mailboxId) async {
+    final ids =
+        await (select(
+          messages,
+        )..where((m) => m.mailboxId.equals(mailboxId))).map((m) => m.id).get();
+    await transaction(() async {
+      if (ids.isNotEmpty) {
+        await _deleteFtsFor(ids);
+        await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+      }
+      await (delete(mailboxes)..where((m) => m.id.equals(mailboxId))).go();
+    });
   }
 
   Future<void> updateMailboxSync(
@@ -769,9 +879,9 @@ class AppDatabase extends _$AppDatabase {
     List<int> messageIds,
   ) async {
     if (messageIds.isEmpty) return const [];
-    return (select(attachments)..where(
-          (a) => a.messageId.isIn(messageIds) & a.localPath.isNotNull(),
-        ))
+    return (select(
+          attachments,
+        )..where((a) => a.messageId.isIn(messageIds) & a.localPath.isNotNull()))
         .get();
   }
 
@@ -779,9 +889,7 @@ class AppDatabase extends _$AppDatabase {
   /// döndürür — mesaj/ek metadatası kalır, yalnızca yerel yol temizlenir.
   Future<void> clearAttachmentPaths(List<int> attachmentIds) async {
     if (attachmentIds.isEmpty) return;
-    await (update(
-      attachments,
-    )..where((a) => a.id.isIn(attachmentIds))).write(
+    await (update(attachments)..where((a) => a.id.isIn(attachmentIds))).write(
       const AttachmentsCompanion(localPath: Value(null)),
     );
   }
@@ -861,8 +969,7 @@ class AppDatabase extends _$AppDatabase {
   }) {
     final q = select(contacts)
       ..orderBy([
-        (c) =>
-            OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
+        (c) => OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
       ])
       ..limit(limit);
     if (accountId != null) {
@@ -911,6 +1018,43 @@ class AppDatabase extends _$AppDatabase {
       ),
     );
   });
+
+  /// v7 → v8 göçü: bkz. `migration.onUpgrade` üzerindeki yorum.
+  ///
+  /// Bu veritabanı dosyası aynı anda birden fazla isolate'ten açılabildiği
+  /// için (bkz. dosya başındaki not: arayüz, ön plan servisi, periyodik
+  /// görev, bildirim eylemleri) göç de birden fazla isolate'te eşzamanlı
+  /// tetiklenebilir. `INSERT OR IGNORE` kullanılır — önce var mı diye
+  /// SELECT ile bakmak (TOCTOU) iki isolate aynı adresi aynı anda ilk kez
+  /// görürse `UNIQUE constraint failed` ile çöker.
+  Future<void> _backfillContactsFromInbox() async {
+    final inboxIds =
+        await (select(mailboxes)
+              ..where((m) => m.specialUse.equalsValue(SpecialUse.inbox)))
+            .map((m) => m.id)
+            .get();
+    if (inboxIds.isEmpty) return;
+
+    final rows =
+        await (select(messages)..where(
+              (m) => m.mailboxId.isIn(inboxIds) & m.fromEmail.equals('').not(),
+            ))
+            .get();
+
+    final seen = <String>{};
+    for (final row in rows) {
+      final email = row.fromEmail.trim().toLowerCase();
+      if (email.isEmpty || !seen.add('${row.accountId}:$email')) continue;
+      await into(contacts).insert(
+        ContactsCompanion.insert(
+          accountId: row.accountId,
+          email: email,
+          name: Value(row.fromName.trim()),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+    }
+  }
 
   Future<void> deleteContact(int id) =>
       (delete(contacts)..where((c) => c.id.equals(id))).go();
@@ -1002,8 +1146,7 @@ class AppDatabase extends _$AppDatabase {
     final candidates =
         await (select(pendingOperations)
               ..where(
-                (p) =>
-                    p.accountId.equals(accountId) & _isClaimableNow(p, now),
+                (p) => p.accountId.equals(accountId) & _isClaimableNow(p, now),
               )
               ..orderBy([(p) => OrderingTerm(expression: p.createdAt)])
               ..limit(limit))
@@ -1187,8 +1330,7 @@ class AppDatabase extends _$AppDatabase {
     if (needle.isEmpty) return const [];
     final q = select(contacts)
       ..orderBy([
-        (c) =>
-            OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
+        (c) => OrderingTerm(expression: c.lastUsedAt, mode: OrderingMode.desc),
       ]);
     if (accountId != null) {
       q.where((c) => c.accountId.equals(accountId));
@@ -1210,6 +1352,10 @@ class AppDatabase extends _$AppDatabase {
   /// ekranından iliştirilip henüz gönderilmemiş dosyalar (`isOutgoing`)
   /// hariç tutulur. [accountId] `null` ise tüm hesaplarda arar.
   ///
+  /// [query] boşsa (Outlook'un Dosyalar sekmesindeki gibi) hiç yazı
+  /// yazılmadan en son eklenen [limit] ek, tarihe göre yeniden eskiye
+  /// gözat modunda döner — dosya adında arama yapılmaz.
+  ///
   /// [filters]'ın klasör ve silinmiş öğe kuralları, ekin ait olduğu iletiye
   /// uygulanır (bkz. [_messageFilterSql] — aynı kurallar). "Ekleri Var"
   /// burada anlamsızdır: sonuçların hepsi zaten bir ektir.
@@ -1220,22 +1366,22 @@ class AppDatabase extends _$AppDatabase {
     int limit = 50,
   }) async {
     final needle = trLower(query.trim());
-    if (needle.isEmpty) return const [];
     // Türkçe-duyarlı eşleme (`trLower`) SQL `LIKE` ile yapılamaz; bu yüzden
     // önce yalnızca (id, dosya adı) çiftleri okunup Dart'ta süzülür, tam
     // ileti/ek satırları ise yalnızca eşleşenler için ikinci sorguda yüklenir.
-    final q = selectOnly(attachments).join([
-      innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
-      innerJoin(mailboxes, mailboxes.id.equalsExp(messages.mailboxId)),
-    ])
-      ..addColumns([attachments.id, attachments.fileName])
-      ..where(
-        attachments.isOutgoing.equals(false) &
-            messages.isDeleted.equals(false),
-      )
-      ..orderBy([
-        OrderingTerm(expression: messages.dateUtc, mode: OrderingMode.desc),
-      ]);
+    final q =
+        selectOnly(attachments).join([
+            innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
+            innerJoin(mailboxes, mailboxes.id.equalsExp(messages.mailboxId)),
+          ])
+          ..addColumns([attachments.id, attachments.fileName])
+          ..where(
+            attachments.isOutgoing.equals(false) &
+                messages.isDeleted.equals(false),
+          )
+          ..orderBy([
+            OrderingTerm(expression: messages.dateUtc, mode: OrderingMode.desc),
+          ]);
     if (accountId != null) {
       q.where(messages.accountId.equals(accountId));
     }
@@ -1249,13 +1395,19 @@ class AppDatabase extends _$AppDatabase {
       final name = folder.customName;
       if (name != null) q.where(mailboxes.name.equals(name));
     }
+    // Gözat modunda dosya adı süzülmeyeceği için `limit` doğrudan SQL'de
+    // uygulanır — aksi hâlde hesaptaki tüm ekler belleğe okunurdu.
+    if (needle.isEmpty) q.limit(limit);
 
     final rows = await q.get();
     final matchedIds = <int>[];
     for (final row in rows) {
-      final fileName = row.read(attachments.fileName) ?? '';
-      if (!trLower(fileName).contains(needle)) continue;
-      matchedIds.add(row.read(attachments.id)!);
+      final id = row.read(attachments.id)!;
+      if (needle.isNotEmpty) {
+        final fileName = row.read(attachments.fileName) ?? '';
+        if (!trLower(fileName).contains(needle)) continue;
+      }
+      matchedIds.add(id);
       if (matchedIds.length >= limit) break;
     }
     if (matchedIds.isEmpty) return const [];

@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:open_filex/open_filex.dart';
@@ -24,6 +28,33 @@ import '../compose/compose_screen.dart' show ComposeMode;
 import 'mail_html_document.dart';
 
 /// İleti okuma ekranı.
+///
+/// Tek kaydırma alanı: sabitlenmiş (pinned), SABİT boyutlu `SliverAppBar`,
+/// büyük konu, gönderen başlığı, ekler ve gövde aynı `CustomScrollView`da
+/// kayar. Gövdenin WebView'ı kendi içinde kaydırmaz, içeriğinin boyuna
+/// uzatılır (bkz. `_HtmlWebView`): iç içe iki kaydırma alanı oluşmaz, parmak
+/// ekranın neresinde olursa olsun başlık gövdeyle birlikte hareket eder.
+///
+/// App bar kaydırma konumuna göre büyüyüp küçülmez, içeriği değişmez —
+/// KASITLI olarak animasyonsuz: konunun app bar'a "kayıp küçülmesi" daha
+/// önce denendi (önce elle bir `AnimationController`/scroll dinleyicisiyle,
+/// sonra `FlexibleSpaceBar` ile) ve ikisi de kaydırma sırasında her karede
+/// yeniden hesaplanan bir geçiş olduğundan performansı düşürdü. Konu bunun
+/// yerine `_Header`'ın üstünde sabit, büyük bir başlık olarak durur; app
+/// bar'da hiç görünmez.
+///
+/// Android'de, ekrandan geri çıkılırken (`Navigator.pop`) tüm ekran canlı
+/// haliyle DEĞİL, o anki görünümünün az önce çekilmiş sabit bir
+/// görüntüsüyle animasyonlanır (bkz. `_watchForExit`). Sebep, gövdedeki
+/// WebView'ın (`_HtmlWebView`) çökmeyi önlemek için kullandığı Hybrid
+/// Composition (bkz. o widget'ın belgesi): bu kip WebView'ı Flutter'ın kendi
+/// Skia sahnesi yerine Android'in View ağacına yerleştirir; geçiş
+/// animasyonunun uyguladığı solma/kaydırma ikisini aynı karede senkron
+/// tutamayıp ekranda "yırtılma" (tearing) yapar (flutter/flutter#104889).
+/// Donmuş görüntü düz bir Flutter widget'ı olduğundan bu sorunu yaşamaz.
+/// Görüntü, ekranın TAMAMI (sadece WebView değil) için ve İÇERİĞİN BOYU
+/// DEĞİL yalnızca o anki görünen alan (viewport) için çekilir — aksi hâlde
+/// uzun bir e-postada bellekte devasa bir görüntü tutulurdu.
 class MailDetailScreen extends ConsumerStatefulWidget {
   const MailDetailScreen({super.key, required this.messageId});
 
@@ -35,7 +66,22 @@ class MailDetailScreen extends ConsumerStatefulWidget {
 
 class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   late int _messageId = widget.messageId;
+
+  /// Son yüklenen ileti — önceki/sonraki iletiye geçerken yeni satır bir kare
+  /// sonra gelir; o arada ekran "bulunamadı"ya düşüp kaydırma alanını baştan
+  /// kurmasın diye bu gösterilmeye devam eder.
+  MessageRow? _shownMessage;
   Timer? _seenTimer;
+
+  final ScrollController _scrollController = ScrollController();
+
+  /// Ekranın TAMAMINI (viewport boyunda) sarar — geri çıkışta donmuş görüntü
+  /// çekmek için (bkz. `_watchForExit`).
+  final GlobalKey _screenBoundaryKey = GlobalKey();
+  ui.Image? _frozenScreenshot;
+  bool _frozen = false;
+  Animation<double>? _exitAnimation;
+  void Function(AnimationStatus)? _exitListener;
 
   @override
   void initState() {
@@ -48,9 +94,80 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Yalnızca bir kez kurulur (`_exitAnimation` ilk seferden sonra dolu
+    // olur) — yalnızca Android'de (bkz. sınıf belgesi, iOS'ta bu sorun yok).
+    if (_exitAnimation == null &&
+        defaultTargetPlatform == TargetPlatform.android) {
+      _watchForExit();
+    }
+  }
+
+  @override
   void dispose() {
     _seenTimer?.cancel();
+    _scrollController.dispose();
+    _cancelExitListener();
+    _frozenScreenshot?.dispose();
     super.dispose();
+  }
+
+  /// Route'un kendi geçiş animasyonu TERSİNE dönmeye (`reverse`, kullanıcı
+  /// geri gitti) başladığı anda ekranın o anki görüntüsünü yakalayıp donmuş
+  /// gösterime geçer (bkz. sınıf belgesi). Görüntü henüz hazır değilse (yakalama
+  /// bir çerçeve sürer) canlı görünüm kısa süre kalır — boş bir alan
+  /// göstermektense yırtılma riski göze alınır. Geri kaydırma yarıda
+  /// bırakılıp ekran tekrar tam açılırsa (`completed`) canlı görünüme döner.
+  void _watchForExit() {
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null) return;
+    void listener(AnimationStatus status) {
+      if (status == AnimationStatus.reverse) {
+        unawaited(_freezeForExit());
+      } else if (status.isCompleted && _frozen) {
+        setState(() => _frozen = false);
+      }
+    }
+
+    _exitAnimation = animation;
+    _exitListener = listener;
+    animation.addStatusListener(listener);
+  }
+
+  void _cancelExitListener() {
+    final animation = _exitAnimation;
+    final listener = _exitListener;
+    if (animation != null && listener != null) {
+      animation.removeStatusListener(listener);
+    }
+    _exitAnimation = null;
+    _exitListener = null;
+  }
+
+  Future<void> _freezeForExit() async {
+    final boundary = _screenBoundaryKey.currentContext?.findRenderObject();
+    // `reverse` yalnızca ekran tam görünür olduktan (route `completed`e
+    // ulaştıktan) sonra tetiklenebilir, bu yüzden burada zaten en az bir kez
+    // boyanmıştır; olmayan bir durumda `toImage()`in kendi hatası aşağıdaki
+    // `catch` ile yakalanır.
+    if (boundary is! RenderRepaintBoundary) return;
+    ui.Image image;
+    try {
+      image = await boundary.toImage(
+        pixelRatio: MediaQuery.devicePixelRatioOf(context),
+      );
+    } catch (_) {
+      // Yakalanamadı: canlı görünüm kalır (bkz. `_watchForExit` belgesi).
+      return;
+    }
+    if (!mounted) {
+      image.dispose();
+      return;
+    }
+    _frozenScreenshot?.dispose();
+    _frozenScreenshot = image;
+    setState(() => _frozen = true);
   }
 
   void _scheduleMarkSeen() {
@@ -76,13 +193,18 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final next = index + delta;
     if (next < 0 || next >= rows.length) return;
     setState(() => _messageId = rows[next].id);
+    // Yeni ileti en üstten, konusu büyük hâliyle açılır.
+    if (_scrollController.hasClients) _scrollController.jumpTo(0);
     _scheduleMarkSeen();
   }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final message = ref.watch(messageProvider(_messageId)).value;
+    final messageAsync = ref.watch(messageProvider(_messageId));
+    if (messageAsync.value case final loaded?) _shownMessage = loaded;
+    final message =
+        messageAsync.value ?? (messageAsync.isLoading ? _shownMessage : null);
     final body = ref.watch(messageBodyProvider(_messageId)).value;
     final bodyFetch = ref.watch(bodyFetchProvider(_messageId));
     final attachments =
@@ -91,71 +213,148 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final index = rows.indexWhere((m) => m.id == _messageId);
 
     if (message == null) {
+      // İlk açılışta satır veritabanından bir kare sonra gelir: o kare boş
+      // geçer, "bulunamadı" yalnızca ileti gerçekten yoksa gösterilir.
+      final loading = messageAsync.isLoading;
       return Scaffold(
-        appBar: AppBar(title: const Text('İleti')),
-        body: const EmptyState(
-          icon: LucideIcons.mailX,
-          title: 'İleti bulunamadı',
-          description: 'Bu ileti silinmiş veya taşınmış olabilir.',
+        appBar: AppBar(
+          leading: const _BackButton(),
+          title: loading ? null : const Text('İleti'),
         ),
+        body: loading
+            ? null
+            : const EmptyState(
+                icon: LucideIcons.mailX,
+                title: 'İleti bulunamadı',
+                description: 'Bu ileti silinmiş veya taşınmış olabilir.',
+              ),
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(LucideIcons.arrowLeft),
-          tooltip: 'Geri',
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const SizedBox.shrink(),
-        actions: [
-          IconButton(
-            icon: const Icon(LucideIcons.chevronUp, size: IconSize.md),
-            tooltip: 'Önceki ileti',
-            onPressed: index > 0 ? () => _navigate(-1) : null,
-          ),
-          IconButton(
-            icon: const Icon(LucideIcons.chevronDown, size: IconSize.md),
-            tooltip: 'Sonraki ileti',
-            onPressed: index >= 0 && index < rows.length - 1
-                ? () => _navigate(1)
-                : null,
-          ),
-          _MoreMenu(message: message),
-          const SizedBox(width: Space.xs),
-        ],
-      ),
-      body: Column(
+    final subject = message.subject.trim().isEmpty
+        ? '(konu yok)'
+        : message.subject;
+
+    return RepaintBoundary(
+      key: _screenBoundaryKey,
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Header(message: message),
-                const SizedBox(height: Space.lg),
-                if (attachments.isNotEmpty) ...[
-                  _AttachmentStrip(attachments: attachments),
-                  const SizedBox(height: Space.lg),
-                ],
-              ],
+          // Donmuş gösterim sırasında canlı ekran çizilmez ve dokunuşları
+          // almaz (`Offstage`) ama ağaçta KALIR — WebView'ın platform
+          // görünümü asla sökülüp yeniden kurulmaz (bkz. sınıf belgesi).
+          Offstage(
+            offstage: _frozen,
+            child: PrimaryScrollController(
+              // iOS'ta durum çubuğuna dokunmak (Scaffold) bu kaydırma alanını
+              // başa sarar. Boş platform kümesi: kontrolcü vermeyen başka
+              // kaydırılabilirler (ör. "Diğer" menüsünün paneli) buna
+              // kendiliğinden bağlanmaz.
+              controller: _scrollController,
+              automaticallyInheritForPlatforms: const <TargetPlatform>{},
+              child: Scaffold(
+                body: ScrollConfiguration(
+                  // Android'in esneme (stretch) efekti tüm görünüm alanını ölçekler:
+                  // sabitlenmiş app bar da esner, WebView (platform görünümü) ise bu
+                  // dönüşümü almadığı için çevresinden kayar. Bu ekranda kapalı.
+                  behavior: ScrollConfiguration.of(
+                    context,
+                  ).copyWith(overscroll: false),
+                  child: CustomScrollView(
+                    controller: _scrollController,
+                    slivers: [
+                      SliverAppBar(
+                        // `expandedHeight`/`flexibleSpace` YOK: app bar kaydırma
+                        // konumundan bağımsız, sabit boyutlu (bkz. `MailDetailScreen`
+                        // belgesi) — her scroll karesinde yeniden hesaplanan bir
+                        // boyut/opaklık geçişi yok.
+                        pinned: true,
+                        leading: const _BackButton(),
+                        actions: [
+                          IconButton(
+                            icon: const Icon(
+                              LucideIcons.chevronUp,
+                              size: IconSize.md,
+                            ),
+                            tooltip: 'Önceki ileti',
+                            onPressed: index > 0 ? () => _navigate(-1) : null,
+                          ),
+                          IconButton(
+                            icon: const Icon(
+                              LucideIcons.chevronDown,
+                              size: IconSize.md,
+                            ),
+                            tooltip: 'Sonraki ileti',
+                            onPressed: index >= 0 && index < rows.length - 1
+                                ? () => _navigate(1)
+                                : null,
+                          ),
+                          const SizedBox(width: Space.xs),
+                        ],
+                      ),
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(
+                            Space.lg,
+                            Space.md,
+                            Space.lg,
+                            0,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SelectableText(
+                                subject,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
+                              const SizedBox(height: Space.md),
+                              _Header(message: message),
+                              const SizedBox(height: Space.lg),
+                              if (attachments.isNotEmpty) ...[
+                                _AttachmentStrip(attachments: attachments),
+                                const SizedBox(height: Space.lg),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      SliverToBoxAdapter(
+                        child: Divider(color: t.divider, height: 1),
+                      ),
+                      SliverToBoxAdapter(
+                        child: _BodyView(
+                          body: body,
+                          fetchStatus: bodyFetch,
+                          onRetry: () =>
+                              ref.invalidate(bodyFetchProvider(_messageId)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                bottomNavigationBar: _ActionBar(message: message),
+              ),
             ),
           ),
-          Divider(color: t.divider, height: 1),
-          // Gövde kalan tüm alanı doldurur: WebView kendi içinde
-          // kaydırıp yakınlaştırır, dıştaki bir ListView'la iç içe iki
-          // kaydırma alanı oluşmaz.
-          Expanded(
-            child: _BodyView(
-              body: body,
-              fetchStatus: bodyFetch,
-              onRetry: () => ref.invalidate(bodyFetchProvider(_messageId)),
+          if (_frozen && _frozenScreenshot != null)
+            Positioned.fill(
+              child: RawImage(image: _frozenScreenshot, fit: BoxFit.fill),
             ),
-          ),
         ],
       ),
-      bottomNavigationBar: _ActionBar(message: message),
+    );
+  }
+}
+
+class _BackButton extends StatelessWidget {
+  const _BackButton();
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      icon: const Icon(LucideIcons.arrowLeft),
+      tooltip: 'Geri',
+      onPressed: () => Navigator.of(context).pop(),
     );
   }
 }
@@ -184,28 +383,8 @@ class _Header extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: SelectableText(
-                message.subject.trim().isEmpty ? '(konu yok)' : message.subject,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ),
-            if (message.isFlagged)
-              Padding(
-                padding: const EdgeInsets.only(left: Space.sm, top: 4),
-                child: Icon(
-                  LucideIcons.pin,
-                  size: IconSize.md,
-                  color: t.accent,
-                ),
-              ),
-          ],
-        ),
+        // Konu burada değil, hemen üstünde — bkz. `MailDetailScreen.build`.
         if (_labelNames.isNotEmpty) ...[
-          const SizedBox(height: Space.sm),
           Wrap(
             spacing: Space.xs,
             runSpacing: Space.xs,
@@ -214,8 +393,8 @@ class _Header extends StatelessWidget {
                 LabelChip(name: name, toneIndex: 0),
             ],
           ),
+          const SizedBox(height: Space.lg),
         ],
-        const SizedBox(height: Space.lg),
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -229,13 +408,30 @@ class _Header extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    message.fromName.isEmpty
-                        ? message.fromEmail
-                        : message.fromName,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          message.fromName.isEmpty
+                              ? message.fromEmail
+                              : message.fromName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      if (message.isFlagged)
+                        Padding(
+                          padding: const EdgeInsets.only(left: Space.sm),
+                          child: Icon(
+                            LucideIcons.pin,
+                            size: IconSize.sm,
+                            color: t.accent,
+                          ),
+                        ),
+                    ],
                   ),
                   Text(
                     message.fromEmail,
@@ -460,7 +656,7 @@ class _BodyView extends StatelessWidget {
 
     if (body == null && fetchStatus.hasError) {
       final error = fetchStatus.error;
-      return _paddedScroll(
+      return _padded(
         Padding(
           padding: const EdgeInsets.symmetric(vertical: Space.xxl),
           child: EmptyState(
@@ -493,18 +689,18 @@ class _BodyView extends StatelessWidget {
     final plain = body?.plainText;
 
     if (html != null && html.trim().isNotEmpty) {
-      // Kalan tüm alanı doldurur: kendi kaydırma/yakınlaştırmasını
-      // yönetir, dıştaki bir kaydırma alanına ihtiyacı yoktur.
+      // İçeriğinin boyuna uzar; dikey kaydırmayı ekranın tek kaydırma alanı
+      // yapar (bkz. `_HtmlWebView`).
       return _HtmlWebView(html: html);
     }
 
     if (plain != null && plain.trim().isNotEmpty) {
-      return _paddedScroll(
+      return _padded(
         SelectableText(plain, style: Theme.of(context).textTheme.bodyLarge),
       );
     }
 
-    return _paddedScroll(
+    return _padded(
       Padding(
         padding: const EdgeInsets.symmetric(vertical: Space.xxl),
         child: Text(
@@ -517,7 +713,9 @@ class _BodyView extends StatelessWidget {
     );
   }
 
-  Widget _paddedScroll(Widget child) => SingleChildScrollView(
+  /// Gövde ekranın tek kaydırma alanının parçasıdır (bkz. `MailDetailScreen`);
+  /// kendi kaydırma görünümü yoktur — iç içe kaydırma oluşmaz.
+  Widget _padded(Widget child) => Padding(
     padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
     child: child,
   );
@@ -538,7 +736,12 @@ class _BodyShimmer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
+      padding: const EdgeInsets.fromLTRB(
+        Space.lg,
+        Space.md,
+        Space.lg,
+        Space.xxl,
+      ),
       child: ShimmerSurface(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -565,6 +768,20 @@ class _BodyShimmer extends StatelessWidget {
 /// toplanır (viewport, akışkanlaştırma, yazı boyutu tabanı, koyu tema renk
 /// dönüşümü). Uygulamanın temasını (`KaydetTokens`) izler: tema değişince
 /// belge yeni renklerle yeniden kurulur.
+///
+/// Kendi içinde KAYDIRMAZ: render betiği içeriğin yüksekliğini bildirir (bkz.
+/// `MailHtmlDocument.layoutChannel`) ve WebView o boya uzatılır; dikey
+/// kaydırma, başlıkla birlikte ekranın tek `CustomScrollView`ındadır. WebView
+/// yalnızca dokunma (bağlantılar), uzun basma (metin seçimi) ve yatay sürükleme
+/// (sığmayan geniş içerik) hareketlerini alır. Yakınlaştırma kapalıdır:
+/// içerik boyundaki bir WebView'da büyütülen içerik dikeyde kaydırılamazdı.
+/// Sığmayan sabit genişlikli e-postalar Android'de yine "ekrana sığdır" ile
+/// açılır (`useWideViewPort` + overview kipi, yakınlaştırma ayarından
+/// bağımsızdır).
+///
+/// Ekranın kendisinin geri geçişte (bkz. `MailDetailScreen` belgesi) donmuş
+/// bir görüntüyle animasyonlanması, buradaki Hybrid Composition WebView'ın
+/// geçiş sırasında ekranda "yırtılmasını" (tearing) da önler.
 class _HtmlWebView extends StatefulWidget {
   const _HtmlWebView({required this.html});
 
@@ -575,19 +792,56 @@ class _HtmlWebView extends StatefulWidget {
 }
 
 class _HtmlWebViewState extends State<_HtmlWebView> {
+  /// İçerik ölçülene kadarki boy — yalnızca yükleme iskeletini taşıyacak kadar.
+  static const double _placeholderHeight = 200;
+
+  /// Son emniyet: bozuk bir yerleşim WebView'ı sınırsız uzatamasın. Gerçek
+  /// iletiler bunun çok altında kalır.
+  static const double _maxHeight = 100000;
+
+  /// WebView'ın kendisine aldığı hareketler. Listede olmayan dikey sürükleme
+  /// dıştaki kaydırma alanında kalır — gövdenin üstünden de kaydırılır ve
+  /// başlık geçişi çalışır. Tek dokunuşlar (bağlantılar) listede olmasa da
+  /// başka hiçbir tanıyıcı sahiplenmediği için WebView'a ulaşır.
+  static final Set<Factory<OneSequenceGestureRecognizer>> _gestures = {
+    Factory<LongPressGestureRecognizer>(LongPressGestureRecognizer.new),
+    Factory<HorizontalDragGestureRecognizer>(
+      HorizontalDragGestureRecognizer.new,
+    ),
+  };
+
   late final WebViewController _controller;
-  bool _pageLoading = true;
+  late final Widget _webView;
 
   // `_load()` art arda (ör. ilk `didChangeDependencies` hemen ardından
   // `didUpdateWidget`) tetiklenirse, önce başlayan ama geç biten bir isolate
   // çağrısı sonucu yeni içeriğin üzerine yazmasın diye her çağrının kendi
-  // sırası tutulur.
+  // sırası tutulur. Belgeye de kimlik olarak yazılır: yerine yenisi yüklenmiş
+  // eski belgeden geç gelen yükseklik bildirimi bununla ayıklanır.
   int _loadToken = 0;
 
   // Belgenin en son hangi temayla kurulduğu. Tema `initState`te okunamayan bir
   // InheritedWidget'tır; bu yüzden ilk yükleme `didChangeDependencies`te yapılır.
   KaydetTokens? _tokens;
   Timer? _themeReload;
+  Timer? _measureFallback;
+
+  // İlk yüklemenin, ekranın giriş geçişi bitene kadar ertelenmesi için (bkz.
+  // `_scheduleInitialLoad`) — geçiş erken kapanırsa (ör. geri dönüldüyse)
+  // dinleyici sızmasın diye `dispose()`ta temizlenir.
+  Animation<double>? _entranceAnimation;
+  void Function(AnimationStatus)? _entranceListener;
+
+  /// WebView'ın ekrandaki genişliği (mantıksal piksel).
+  double _viewWidth = 0;
+
+  // Betiğin son bildirdiği içerik yüksekliği ve görünen alan genişliği (CSS px).
+  double? _cssHeight;
+  double? _cssWidth;
+
+  /// Gövdenin ekrandaki yüksekliği; `null` iken içerik henüz ölçülmedi ve
+  /// WebView'ın üstünde yükleme iskeleti durur.
+  double? _height;
 
   @override
   void initState() {
@@ -596,15 +850,16 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     // betiğidir; e-postanın kendi betikleri belgedeki CSP ile engellenir.
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..enableZoom(true)
+      ..enableZoom(false)
+      ..setVerticalScrollBarEnabled(false)
+      ..setOverScrollMode(WebViewOverScrollMode.never)
+      ..addJavaScriptChannel(
+        MailHtmlDocument.layoutChannel,
+        onMessageReceived: _onLayoutMessage,
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) {
-            if (mounted) setState(() => _pageLoading = true);
-          },
-          onPageFinished: (_) {
-            if (mounted) setState(() => _pageLoading = false);
-          },
+          onPageFinished: _onPageFinished,
           onNavigationRequest: _onNavigationRequest,
         ),
       );
@@ -619,6 +874,20 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     if (platform is AndroidWebViewController) {
       unawaited(platform.setUseWideViewPort(true));
     }
+    // Android'de Hybrid Composition: varsayılan (doku tabanlı) kip platform
+    // görünümünü boyutu kadar bir dokuya çizer; içerik boyuna uzatılmış uzun
+    // bir WebView o dokuya sığmaz ve uygulama çöker (flutter/flutter#104889,
+    // #116954). Hybrid Composition WebView'ı gerçek bir Android görünümü
+    // olarak yerleştirir; yalnızca ekranda görünen kısmı çizilir.
+    _webView = platform is AndroidWebViewController
+        ? WebViewWidget.fromPlatformCreationParams(
+            params: AndroidWebViewWidgetCreationParams(
+              controller: platform,
+              displayWithHybridComposition: true,
+              gestureRecognizers: _gestures,
+            ),
+          )
+        : WebViewWidget(controller: _controller, gestureRecognizers: _gestures);
   }
 
   @override
@@ -632,7 +901,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     unawaited(_controller.setBackgroundColor(tokens.bg));
 
     if (previous == null) {
-      unawaited(_load());
+      _scheduleInitialLoad();
     } else if (previous.isDark != tokens.isDark ||
         previous.bg != tokens.bg ||
         previous.textPrimary != tokens.textPrimary) {
@@ -649,6 +918,8 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   void dispose() {
     _themeReload?.cancel();
+    _measureFallback?.cancel();
+    _cancelEntranceListener();
     super.dispose();
   }
 
@@ -656,8 +927,47 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   void didUpdateWidget(covariant _HtmlWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.html != widget.html) {
+      // Yeni içerik: eski ölçü geçersizdir; yeni belge ölçülene kadar iskelet.
+      _height = null;
+      _cssHeight = null;
+      _cssWidth = null;
       unawaited(_load());
     }
+  }
+
+  /// İlk yükleme (büyük gövdelerde platform kanalından geçen ağır
+  /// `loadHtmlString` çağrısı, ardından isolate/JS işi) ekranın giriş geçişi
+  /// (push animasyonu, bkz. `KaydetRoute`) bitene kadar ertelenir. İkisi aynı
+  /// karede yarışırsa — özellikle uzun/ağır e-postalarda — geçiş sırasında
+  /// gözle görülür bir takılmaya yol açar. Geçiş zaten bitmişse (route
+  /// yoksa/animasyonsuzsa, ya da içerik geç geldiği için ekran zaten
+  /// oturmuşsa) hemen yüklenir; yalnızca ekranın İLK açılışını etkiler —
+  /// tema değişimi ve önceki/sonraki ileti geçişleri buradan geçmez.
+  void _scheduleInitialLoad() {
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.isCompleted) {
+      unawaited(_load());
+      return;
+    }
+    void listener(AnimationStatus status) {
+      if (!status.isCompleted) return;
+      _cancelEntranceListener();
+      if (mounted) unawaited(_load());
+    }
+
+    _entranceAnimation = animation;
+    _entranceListener = listener;
+    animation.addStatusListener(listener);
+  }
+
+  void _cancelEntranceListener() {
+    final animation = _entranceAnimation;
+    final listener = _entranceListener;
+    if (animation != null && listener != null) {
+      animation.removeStatusListener(listener);
+    }
+    _entranceAnimation = null;
+    _entranceListener = null;
   }
 
   /// Ağır regex temizliğini (viewport, `prefers-color-scheme`)
@@ -707,9 +1017,86 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
           tokens: tokens,
           emailSupportsDark: emailSupportsDark,
           script: script,
+          documentId: token,
         ),
       ),
     );
+  }
+
+  /// Render betiğinin yükseklik bildirimi: `{doc, h, w}` (CSS pikseli).
+  void _onLayoutMessage(JavaScriptMessage message) {
+    final Object? data;
+    try {
+      data = jsonDecode(message.message);
+    } on FormatException {
+      return;
+    }
+    if (data case {
+      'doc': final int doc,
+      'h': final num h,
+      'w': final num w,
+    } when doc == _loadToken) {
+      _cssHeight = h.toDouble();
+      _cssWidth = w.toDouble();
+      _applyHeight();
+    }
+  }
+
+  void _applyHeight() {
+    final cssHeight = _cssHeight;
+    final cssWidth = _cssWidth;
+    if (!mounted || cssHeight == null || cssWidth == null) return;
+    if (cssWidth <= 0 || _viewWidth <= 0) return;
+    // Ekrandaki boy = CSS boyu × ölçek. Ölçek genellikle 1'dir; sığmayan
+    // sabit genişlikli e-postalar Android'de uzaklaştırılmış (< 1) açılır.
+    final height = clampDouble(
+      (cssHeight * _viewWidth / cssWidth).ceilToDouble(),
+      1,
+      _maxHeight,
+    );
+    _measureFallback?.cancel();
+    if (height != _height) setState(() => _height = height);
+  }
+
+  void _trackViewWidth(double width) {
+    if (width == _viewWidth) return;
+    _viewWidth = width;
+    // Genişlik değişince (döndürme) içerik yeniden akar ve betik yeni ölçüyü
+    // kendisi bildirir. Yalnızca ilk bildirim WebView yerleşmeden gelmişse
+    // (beklenmez) genişlik belli olunca uygulanır.
+    if (_height == null && _cssHeight != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _applyHeight());
+    }
+  }
+
+  /// Emniyet ağı: render betiği yüksekliği bildiremezse (beklenmez) iskelet
+  /// sonsuza dek kalmasın — sayfa yüklendikten kısa süre sonra yükseklik
+  /// doğrudan sorulur.
+  void _onPageFinished(String url) {
+    if (_height != null) return;
+    _measureFallback?.cancel();
+    _measureFallback = Timer(const Duration(seconds: 1), _measureDirectly);
+  }
+
+  Future<void> _measureDirectly() async {
+    final token = _loadToken;
+    Object? ratio;
+    try {
+      // İçerik yüksekliğinin görünen alan genişliğine oranı (ikisi de CSS
+      // px): ekrandaki yükseklik = oran × WebView genişliği.
+      ratio = await _controller.runJavaScriptReturningResult(
+        'document.documentElement.scrollHeight / '
+        '((window.visualViewport && window.visualViewport.width) || '
+        'window.innerWidth)',
+      );
+    } catch (_) {
+      // Ölçülemedi: iskelet yer tutucu boyda kalkar.
+    }
+    if (!mounted || token != _loadToken || _height != null) return;
+    final height = ratio is num && ratio > 0 && _viewWidth > 0
+        ? (ratio * _viewWidth).ceilToDouble()
+        : _placeholderHeight;
+    setState(() => _height = clampDouble(height, 1, _maxHeight));
   }
 
   /// Bağlantı tıklamaları WebView içinde takip edilmez, sistem tarayıcısında
@@ -728,23 +1115,53 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Stack(
-      children: [
-        Positioned.fill(child: WebViewWidget(controller: _controller)),
-        if (_pageLoading)
-          Positioned.fill(
-            child: Container(
-              color: t.bg,
-              alignment: Alignment.topCenter,
-              padding: const EdgeInsets.only(top: Space.huge),
-              child: CircularProgressIndicator(strokeWidth: 2, color: t.accent),
-            ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        _trackViewWidth(constraints.maxWidth);
+        return SizedBox(
+          height: _height ?? _placeholderHeight,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _webView,
+              // İçerik ölçülene kadar gövde iskeleti WebView'ın üstünde durur
+              // (anında belirir); ölçü gelince yumuşakça söner ve ağaçtan
+              // çıkar — shimmer animasyonu görünmezken boşuna dönmez.
+              AnimatedSwitcher(
+                duration: Motion.instant,
+                reverseDuration: Motion.base,
+                layoutBuilder: (current, previous) => Stack(
+                  fit: StackFit.expand,
+                  children: [...previous, ?current],
+                ),
+                child: _height == null
+                    ? ColoredBox(
+                        color: t.bg,
+                        // Sönerken gövde iskeletten kısa olabilir: iskelet
+                        // kendi boyunda çizilip kırpılır, taşma olmaz.
+                        child: const ClipRect(
+                          child: OverflowBox(
+                            alignment: Alignment.topCenter,
+                            maxHeight: double.infinity,
+                            child: _BodyShimmer(),
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
           ),
-      ],
+        );
+      },
     );
   }
 }
 
+/// Alt eylem çubuğu — Outlook mobil gibi eşit aralıklı, aynı görünümde ikon
+/// düğmeler: Yanıtla / İlet / Arşivle / Sil / Diğer. Hiçbiri öne çıkarılmaz.
+/// "Tümünü Yanıtla" ayrı bir düğme DEĞİL — [_MoreMenu]nin en üstünde (bkz. o
+/// widget'ın belgesi); iki yanıt eylemini iki ayrı düğme olarak göstermek
+/// çubuğu kalabalıklaştırıyordu.
 class _ActionBar extends ConsumerWidget {
   const _ActionBar({required this.message});
 
@@ -778,40 +1195,37 @@ class _ActionBar extends ConsumerWidget {
         child: SizedBox(
           height: height,
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _DetailAction(
-                icon: LucideIcons.cornerUpLeft,
-                label: 'Yanıtla',
-                onTap: () => startCompose(ComposeMode.reply),
+              IconButton(
+                icon: const Icon(LucideIcons.cornerUpLeft),
+                tooltip: 'Yanıtla',
+                onPressed: () => startCompose(ComposeMode.reply),
               ),
-              _DetailAction(
-                icon: LucideIcons.reply,
-                label: 'Tümünü',
-                onTap: () => startCompose(ComposeMode.replyAll),
+              IconButton(
+                icon: const Icon(LucideIcons.cornerUpRight),
+                tooltip: 'İlet',
+                onPressed: () => startCompose(ComposeMode.forward),
               ),
-              _DetailAction(
-                icon: LucideIcons.cornerUpRight,
-                label: 'İlet',
-                onTap: () => startCompose(ComposeMode.forward),
-              ),
-              _DetailAction(
-                icon: LucideIcons.archive,
-                label: 'Arşivle',
-                onTap: () async {
+              IconButton(
+                icon: const Icon(LucideIcons.archive),
+                tooltip: 'Arşivle',
+                onPressed: () async {
                   await repository.archive([message.id]);
                   if (context.mounted) Navigator.of(context).pop();
                 },
               ),
-              _DetailAction(
-                icon: LucideIcons.trash2,
-                label: 'Sil',
-                onTap: () async {
+              IconButton(
+                icon: const Icon(LucideIcons.trash2),
+                tooltip: 'Sil',
+                onPressed: () async {
                   final deleted = await deleteWithConfirmation(context, ref, [
                     message.id,
                   ]);
                   if (deleted && context.mounted) Navigator.of(context).pop();
                 },
               ),
+              _MoreMenu(message: message),
             ],
           ),
         ),
@@ -820,51 +1234,13 @@ class _ActionBar extends ConsumerWidget {
   }
 }
 
-class _DetailAction extends StatelessWidget {
-  const _DetailAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return Expanded(
-      child: InkWell(
-        onTap: onTap,
-        child: Semantics(
-          button: true,
-          label: label,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: IconSize.md, color: t.textSecondary),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(color: t.textSecondary),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Okuma ekranının "..." menüsü — "Etiketle"/"Klasöre taşı" artık ayrı bir
-/// alttan panel açmıyor, aynı popup içinde kendi alt menüsüne (bkz.
-/// `SubmenuButton`) cascade oluyor (bkz. bellek: popup'lar modallara
-/// tercih edilir).
+/// Okuma ekranının "..." menüsü — alt eylem çubuğunun sağ ucunda yaşıyor
+/// (bkz. `_ActionBar`), eskiden üst `AppBar`'daydı: üst kısmın sade kalması
+/// için taşındı. "Tümünü Yanıtla" artık ayrı bir düğme değil, bu menünün EN
+/// ÜSTÜNDE — alt çubuktaki tek "Yanıtla" düğmesiyle iki yanıt eylemi aynı
+/// anda gösterilmiyor. "Etiketle"/"Klasöre taşı" ayrı bir alttan panel
+/// açmıyor, aynı popup içinde kendi alt menüsüne (bkz. `SubmenuButton`)
+/// cascade oluyor (bkz. bellek: popup'lar modallara tercih edilir).
 class _MoreMenu extends ConsumerWidget {
   const _MoreMenu({required this.message});
 
@@ -877,6 +1253,19 @@ class _MoreMenu extends ConsumerWidget {
     return MenuAnchor(
       animated: true,
       menuChildren: [
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.replyAll, size: IconSize.sm),
+          onPressed: () => openCompose(
+            context,
+            ref,
+            replyToId: message.id,
+            mode: ComposeMode.replyAll,
+            fullscreenDialog: true,
+            noticeBottomInset: _ActionBar.height,
+          ),
+          child: const Text('Tümünü yanıtla'),
+        ),
+        const Divider(height: 1),
         MenuItemButton(
           leadingIcon: Icon(
             message.isFlagged ? LucideIcons.pinOff : LucideIcons.pin,

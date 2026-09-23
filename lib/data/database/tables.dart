@@ -62,6 +62,11 @@ class Mailboxes extends Table {
   DateTimeColumn get lastSyncAt => dateTime().nullable()();
   IntColumn get sortOrder => integer().withDefault(const Constant(100))();
 
+  /// Klasör Yönetimi ekranının "Sık Kullanılanlar" bölümü — salt yerel bir
+  /// tercih, sunucuda karşılığı yoktur ve senkronizasyon bu sütuna asla
+  /// dokunmaz (bkz. `AppDatabase.upsertMailbox`).
+  BoolColumn get isFavorite => boolean().withDefault(const Constant(false))();
+
   /// Sunucuda daha eski ileti kaldı mı? (sayfalama sonu göstergesi)
   BoolColumn get hasMoreOnServer =>
       boolean().withDefault(const Constant(true))();

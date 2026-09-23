@@ -11,8 +11,10 @@
  *               kendi koyu temasını getirmiyor)
  *   bg, text  : uygulamanın zemin / metin rengi ([r, g, b])
  *   minFont   : metnin inebileceği en küçük yazı boyutu (px)
+ *   channel   : içerik yüksekliğinin bildirildiği JavaScript kanalının adı
+ *   doc       : bu belgenin kimliği (bildirimlerde geri gönderilir)
  *
- * Üç iş yapar:
+ * Dört iş yapar:
  *
  *  1. Akışkanlaştırma — telefon genişliğine sığmayan sabit genişlikli düzenleri
  *     (600px'lik bülten tabloları gibi) yüzde genişliğe çevirir. Yalnızca
@@ -28,6 +30,12 @@
  *     açık metne dokunmaz. Görsel/gradyan arka planlı alt ağaçlar (ve
  *     içindeki metin) tasarlandığı gibi bırakılır. Her metin, çevrildikten
  *     sonraki gerçek zeminine göre okunabilir kontrasta zorlanır.
+ *
+ *  4. Yükseklik bildirimi — okuma ekranında WebView kendi içinde kaydırmaz:
+ *     boyu içeriğin boyuna eşitlenir ve e-posta başlığıyla birlikte ekranın
+ *     TEK kaydırma alanında kayar. İçerik boyu her değiştiğinde uygulamaya
+ *     bildirilir. Bunun ön koşulu olarak vh/vmin/vmax birimleri ekran boyuna
+ *     göre piksele sabitlenir (aksi hâlde boy uzadıkça içerik de uzar).
  *
  * Tüm hesap `getComputedStyle` üzerinden yapılır: satır içi stil, <style>
  * sınıfları, bgcolor/color/text nitelikleri ve kalıtım hazır çözülmüş gelir.
@@ -344,6 +352,125 @@
     for (j = 0; j < decls.length; j++) put(el, decls[j][0], decls[j][1]);
   }
 
+  // ── Görünüm birimleri ─────────────────────────────────────────────────
+
+  // WebView içerik boyuna uzatıldığı için "100vh" ekranı değil tüm içeriği
+  // ifade eder: vh'ye bağlı bir blok her uzamada yeniden uzar ve boy sonsuza
+  // dek büyür. vh/vb/vmin/vmax (s/l/d önekleriyle) e-postanın tasarlandığı
+  // gibi ekran boyuna göre piksele sabitlenir; vw'ye dokunulmaz (genişlik
+  // zaten ekran genişliğidir). `url(...)` içindeki dosya adları eşleşmez:
+  // sayıdan önce boşluk/`(`/`,`, birimden sonra da `.`/harf olmaması aranır.
+  var VIEWPORT_UNIT = /(^|[\s(,])(-?(?:\d+\.?\d*|\.\d+))[sld]?(vh|vb|vmin|vmax)(?![\w.%-])/gi;
+  var HAS_VIEWPORT_UNIT = /\d[sld]?(?:vh|vb|vmin|vmax)(?![\w-])/i;
+
+  function viewportUnitPx(unit) {
+    var w = screen.width || root.clientWidth, h = screen.height || w;
+    unit = unit.toLowerCase();
+    if (unit === 'vmin') return Math.min(w, h) / 100;
+    if (unit === 'vmax') return Math.max(w, h) / 100;
+    return h / 100;
+  }
+
+  function pinDeclarations(style) {
+    for (var i = 0; i < style.length; i++) {
+      var prop = style[i], value = style.getPropertyValue(prop);
+      if (!HAS_VIEWPORT_UNIT.test(value)) continue;
+      var pinned = value.replace(VIEWPORT_UNIT, function (m, lead, num, unit) {
+        return lead + parseFloat(num) * viewportUnitPx(unit) + 'px';
+      });
+      if (pinned !== value) style.setProperty(prop, pinned, style.getPropertyPriority(prop));
+    }
+  }
+
+  function pinRules(rules) {
+    for (var i = 0; i < rules.length; i++) {
+      var rule = rules[i];
+      if (rule.style && HAS_VIEWPORT_UNIT.test(rule.style.cssText)) pinDeclarations(rule.style);
+      if (rule.cssRules) pinRules(rule.cssRules); // @media, @supports, @keyframes…
+    }
+  }
+
+  function pinViewportUnits() {
+    var sheets = doc.styleSheets, i, rules;
+    for (i = 0; i < sheets.length; i++) {
+      rules = null;
+      try { rules = sheets[i].cssRules; } catch (e) { /* başka kökenden gelen sayfa okunamaz */ }
+      if (rules) pinRules(rules);
+    }
+    var inline = doc.querySelectorAll('[style*="vh" i],[style*="vb" i],[style*="vmin" i],[style*="vmax" i]');
+    for (i = 0; i < inline.length; i++) {
+      if (inline[i].style) pinDeclarations(inline[i].style);
+    }
+  }
+
+  // ── Yükseklik bildirimi ───────────────────────────────────────────────
+
+  // Uygulamaya {doc, h, w} gönderilir: h içeriğin yüksekliği, w görünen alanın
+  // genişliği (ikisi de CSS pikseli). Ekrandaki yüksekliği uygulama kendi
+  // genişliği / w ölçeğiyle bulur — sığmayan sabit genişlikli e-postalar
+  // Android'de "ekrana sığdır" ile uzaklaştırılmış (ölçek < 1) açılır.
+  //
+  // Ölçülen şey belgenin kaydırma yüksekliği DEĞİL, gövdeyi saran <kd-root>'tur:
+  // `scrollHeight` görünen alandan küçük olamaz (boy hiç kısalamaz) ve
+  // `body { height: 100% }` gibi kurallarda WebView'ın kendi boyunu geri
+  // döndürür (boy her bildirimde padding kadar büyür).
+  // Her bildirim, uygulama tarafında WebView'ı yeniden boyutlandırıp gerçek
+  // bir Android görünüm yerleşimi (relayout) tetikler (bkz. `_HtmlWebView`
+  // belgesi) — ucuz değildir. Çok sayıda görsel/yazı tipi olan uzun
+  // e-postalarda yüklemeler birbirine yakın aralıklarla art arda gelir; bu
+  // gecikme, birbirine bu kadar yakın gelen tetikleyicileri TEK bildirime
+  // toplar (aşağıdaki `scheduleReport`).
+  var REPORT_DEBOUNCE_MS = 120;
+  var lastHeight = -1, lastWidth = -1, reportTimer = 0;
+
+  function contentHeight() {
+    var wrap = doc.getElementsByTagName('kd-root')[0], body = doc.body;
+    if (!wrap || !body) return 0;
+    var bs = getComputedStyle(body);
+    return wrap.getBoundingClientRect().bottom + (window.pageYOffset || 0) +
+      (parseFloat(bs.paddingBottom) || 0) + (parseFloat(bs.borderBottomWidth) || 0) +
+      (parseFloat(bs.marginBottom) || 0);
+  }
+
+  function report() {
+    reportTimer = 0;
+    var channel = cfg.channel && window[cfg.channel];
+    if (!channel || typeof channel.postMessage !== 'function') return;
+    var vv = window.visualViewport;
+    var w = (vv && vv.width) || window.innerWidth;
+    var h = Math.ceil(contentHeight());
+    if (!(h > 0 && w > 0)) return;
+    if (Math.abs(h - lastHeight) < 1 && Math.abs(w - lastWidth) < 0.5) return;
+    lastHeight = h;
+    lastWidth = w;
+    channel.postMessage(JSON.stringify({ doc: cfg.doc, h: h, w: w }));
+  }
+
+  // Geriye sayan (trailing) debounce: her yeni tetikleyici sayacı sıfırlar,
+  // bildirim ancak `REPORT_DEBOUNCE_MS` boyunca yeni bir tetikleyici gelmeyince
+  // gider. Böylece art arda gelen çok sayıda görsel/yazı tipi yüklemesi TEK
+  // bir bildirime/yeniden boyutlandırmaya iner. rAF yerine zamanlayıcı: WebView
+  // ekranın dışındayken (başlık uzun, gövde henüz aşağıda) rAF hiç çalışmayabilir.
+  function scheduleReport() {
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(function () {
+      reportTimer = 0;
+      guarded(report);
+    }, REPORT_DEBOUNCE_MS);
+  }
+
+  function observeLayout() {
+    var wrap = doc.getElementsByTagName('kd-root')[0];
+    if (wrap && window.ResizeObserver) new ResizeObserver(scheduleReport).observe(wrap);
+    // Görsel/yazı tipi yüklemeleri: `load`/`error` kabarcıklanmaz, yakalama
+    // aşamasında dinlenir (boyut vermeyen görseller yüklenince yerleşim değişir).
+    doc.addEventListener('load', scheduleReport, true);
+    doc.addEventListener('error', scheduleReport, true);
+    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(function () { scheduleReport(); });
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', scheduleReport);
+    report();
+  }
+
   // ── Başlatma ──────────────────────────────────────────────────────────
 
   function guarded(fn) {
@@ -351,8 +478,10 @@
   }
 
   function start() {
+    guarded(pinViewportUnits);
     guarded(applyFluid);
     guarded(enhance);
+    guarded(observeLayout);
     root.setAttribute('data-kd-ms', String(Math.round(performance.now() - startedAt)));
   }
 
@@ -361,9 +490,10 @@
 
   // WebView'ın gerçek genişliği ilk yerleşimde henüz oturmamış olabilir; genişlik
   // değişince (ya da yükleme bitince) akışkanlaştırma o genişliğe göre yeniden kurulur.
-  window.addEventListener('load', function () { guarded(applyFluid); });
+  window.addEventListener('load', function () { guarded(applyFluid); guarded(report); });
   var frame = 0;
   window.addEventListener('resize', function () {
+    scheduleReport();
     if (frame) return;
     frame = requestAnimationFrame(function () { frame = 0; guarded(applyFluid); });
   });

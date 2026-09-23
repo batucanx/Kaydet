@@ -16,11 +16,12 @@ import '../auth/login_screen.dart';
 import '../contacts/contacts_screen.dart';
 import '../mail_list/mail_list_screen.dart';
 import '../settings/settings_screen.dart';
+import 'folder_management_screen.dart';
 
 /// Uygulama kabuğu: gövde (etkin modül) + yan menü (klasörler + modül
 /// geçişi).
 ///
-/// eM Client'taki gibi modüller (İletiler/Takvim/Kişiler/Ayarlar) arasında
+/// eM Client'taki gibi modüller (İletiler/Kişiler/Ayarlar) arasında
 /// geçiş artık ayrı bir alt gezinme çubuğuyla değil, hamburger menünün
 /// (bkz. `FolderDrawer`) en altındaki modül listesiyle yapılır — sol
 /// rail'in telefondaki karşılığı budur.
@@ -100,7 +101,7 @@ class _AppShellState extends ConsumerState<AppShell>
         // Seçim modunda yan menü kaydırmayla açılmaz: liste üzerindeki
         // yatay kaydırma hareketiyle çakışır.
         drawerEnableOpenDragGesture: !isSelectionMode,
-        // Modül geçişi (İletiler/Takvim/Kişiler/Ayarlar) eskiden ham
+        // Modül geçişi (İletiler/Kişiler/Ayarlar) eskiden ham
         // `switch` ile anlık widget değişimiydi — "sıfır sert geçiş"
         // kuralı gereği artık `AnimatedSwitcher` üzerinden yumuşak
         // crossfade'e sarılır. `ValueKey` şart: `AnimatedSwitcher` yalnızca
@@ -111,42 +112,10 @@ class _AppShellState extends ConsumerState<AppShell>
           switchOutCurve: Motion.standard,
           child: switch (tab) {
             0 => const MailListScreen(key: ValueKey('tab-mail')),
-            2 => const ContactsScreen(key: ValueKey('tab-contacts')),
-            3 => const SettingsScreen(key: ValueKey('tab-settings')),
-            _ => const _ComingSoon(key: ValueKey('tab-coming-soon')),
+            1 => const ContactsScreen(key: ValueKey('tab-contacts')),
+            _ => const SettingsScreen(key: ValueKey('tab-settings')),
           },
         ),
-      ),
-    );
-  }
-}
-
-/// Takvim v2'de gelecek (CardDAV); sekme şimdiden yerinde durur ki
-/// eklenince gezinme yeniden tasarlanmasın. Kişiler artık burada değil —
-/// yerel kişi defteri çalışıyor (bkz. `ContactsScreen`).
-class _ComingSoon extends StatelessWidget {
-  const _ComingSoon({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        // Bu ekranın kendi `Scaffold`u `AppShell`'in klasör/modül menüsünü
-        // taşımaz; menü butonu Flutter'ın otomatik `leading`iyle gelmez,
-        // elle eklenir (bkz. `mail_list_screen.dart`daki aynı desen).
-        leading: IconButton(
-          icon: const Icon(LucideIcons.menu),
-          tooltip: 'Menü',
-          onPressed: () => Scaffold.of(context).openDrawer(),
-        ),
-        title: const Text('Takvim'),
-      ),
-      body: const EmptyState(
-        icon: LucideIcons.calendarDays,
-        title: 'Takvim yakında',
-        description:
-            'Sunucudaki CalDAV takviminiz bir sonraki sürümde bu sekmede '
-            'görünecek.',
       ),
     );
   }
@@ -156,7 +125,7 @@ class _ComingSoon extends StatelessWidget {
 ///
 /// Soldan sağa üç şerit: (1) [NavigationRail] — üstte büyük hesap avatarları
 /// (Outlook ölçeğinde, bkz. `Dimens.navRailAvatarSize`) + hesap ekle, altta
-/// İletiler/Takvim/Kişiler modülleri, en altta (her zaman, bkz.
+/// İletiler/Kişiler modülleri, en altta (her zaman, bkz.
 /// `trailingAtBottom`) onlarla aynı boyuttaki Ayarlar; (2) o an etkin hesabın
 /// klasörleri. Rayda bir
 /// avatara dokunmak o hesabı etkinleştirir ve doğrudan Gelen Kutusu'nu açar
@@ -179,6 +148,20 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
   void _addAccount() {
     Navigator.of(context).pop();
     context.pushScreen(const LoginScreen(isAddingAccount: true));
+  }
+
+  /// Panel başlığındaki pencil/Düzenle ikonuna dokunma — Klasör Yönetimi
+  /// ekranını açar (bkz. `FolderManagementScreen`). `_addAccount`'la aynı
+  /// desen: basit kapat + it, `_choose`/`_selectAccountAndOpenInbox`'taki
+  /// `Motion.fast` ertelemesine gerek yok çünkü burada drawer'ın kapanma
+  /// animasyonuyla çakışacak bir provider durumu güncellemesi yok, sadece
+  /// yeni bir rota push'u.
+  void _manageFolders() {
+    Navigator.of(context).pop();
+    context.pushScreen(
+      const FolderManagementScreen(),
+      fullscreenDialog: true,
+    );
   }
 
   /// Rayda bir avatara dokunma: o hesabı etkinleştirir ve panelinde
@@ -248,7 +231,7 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
     Navigator.of(context).pop();
     Future.delayed(context.motion(Motion.fast), () {
       if (!mounted) return;
-      // Kullanıcı Ayarlar/Takvim/Kişiler modülündeyken bir posta klasörü
+      // Kullanıcı Ayarlar/Kişiler modülündeyken bir posta klasörü
       // seçerse İletiler'e geçilir — aksi hâlde klasör değişir ama ekranda
       // hâlâ önceki modül görünür kalırdı.
       ref.read(activeTabProvider.notifier).select(0);
@@ -299,6 +282,7 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
                         : _AccountFolderPanel(
                             account: activeAccount,
                             onChooseFolder: _choose,
+                            onManageFolders: _manageFolders,
                           ),
                   ),
                 ],
@@ -335,7 +319,7 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
 
 /// Yan menünün sol şeridi: üstte ([leading]) büyük hesap avatarları + hesap
 /// ekle, altta (bkz. `groupAlignment: 1`) bir [NavigationRail] ile
-/// İletiler/Takvim/Kişiler modülleri arasında geçiş, en altta
+/// İletiler/Kişiler modülleri arasında geçiş, en altta
 /// ([trailing] + `trailingAtBottom`) onlarla aynı ikon boyutundaki Ayarlar.
 /// Modül geçişi eskiden ayrı bir yatay şeritteydi; artık gerçek bir
 /// `NavigationRail` — soldaki dikey konumu ve varsayılan seçili-simge
@@ -373,9 +357,9 @@ class _SideRail extends StatelessWidget {
       indicatorColor: t.accentSubtle,
       selectedIconTheme: IconThemeData(color: t.accent),
       unselectedIconTheme: IconThemeData(color: t.textSecondary),
-      // 3 (Ayarlar) formal bir hedef değil, `trailing`de — o yüzden
+      // 2 (Ayarlar) formal bir hedef değil, `trailing`de — o yüzden
       // hedefler listesinde hiçbiri seçili görünmemeli.
-      selectedIndex: activeTab < 3 ? activeTab : null,
+      selectedIndex: activeTab < 2 ? activeTab : null,
       onDestinationSelected: onSelectTab,
       leading: Column(
         mainAxisSize: MainAxisSize.min,
@@ -431,10 +415,6 @@ class _SideRail extends StatelessWidget {
           label: Text('İletiler'),
         ),
         NavigationRailDestination(
-          icon: Icon(LucideIcons.calendarDays),
-          label: Text('Takvim'),
-        ),
-        NavigationRailDestination(
           icon: Icon(LucideIcons.users),
           label: Text('Kişiler'),
         ),
@@ -444,8 +424,8 @@ class _SideRail extends StatelessWidget {
         child: _RailIconButton(
           icon: LucideIcons.settings,
           tooltip: 'Ayarlar',
-          isSelected: activeTab == 3,
-          onTap: () => onSelectTab(3),
+          isSelected: activeTab == 2,
+          onTap: () => onSelectTab(2),
         ),
       ),
     );
@@ -457,7 +437,7 @@ class _SideRail extends StatelessWidget {
 /// diğer üç modülün otomatik aldığı görünümle aynı: dairesel `accentSubtle`
 /// arka plan.
 ///
-/// [NavigationRail]'in kendi hedefleri (İletiler/Takvim/Kişiler) seçim
+/// [NavigationRail]'in kendi hedefleri (İletiler/Kişiler) seçim
 /// değiştiğinde Flutter'ın dahili `AnimationController`larıyla (bkz.
 /// `_destinationControllers`, `kThemeAnimationDuration`) zaten yumuşak geçer
 /// — burası formal hedef listesinde OLMADIĞI için o mekanizmadan
@@ -570,10 +550,12 @@ class _AccountFolderPanel extends StatelessWidget {
   const _AccountFolderPanel({
     required this.account,
     required this.onChooseFolder,
+    required this.onManageFolders,
   });
 
   final AccountRow account;
   final ValueChanged<SelectedFolder> onChooseFolder;
+  final VoidCallback onManageFolders;
 
   @override
   Widget build(BuildContext context) {
@@ -585,6 +567,7 @@ class _AccountFolderPanel extends StatelessWidget {
         key: ValueKey(account.id),
         account: account,
         onChooseFolder: onChooseFolder,
+        onManageFolders: onManageFolders,
       ),
     );
   }
@@ -595,10 +578,12 @@ class _AccountFolderPanelContent extends ConsumerWidget {
     super.key,
     required this.account,
     required this.onChooseFolder,
+    required this.onManageFolders,
   });
 
   final AccountRow account;
   final ValueChanged<SelectedFolder> onChooseFolder;
+  final VoidCallback onManageFolders;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -609,6 +594,21 @@ class _AccountFolderPanelContent extends ConsumerWidget {
         const <MailboxRow>[];
     final flaggedCount =
         ref.watch(flaggedCountForAccountProvider(account.id)).value ?? 0;
+    final folders = mailboxes.where((m) => m.isSelectable).toList();
+    // Aynı klasör hem burada hem aşağıdaki tam listede görünür — ikinci bir
+    // kopya değil, aynı `MailboxRow`un `isFavorite` süzgeci (bkz.
+    // `FolderManagementScreen`). Sıra da ortak `sortOrder`dan gelir.
+    final favorites = folders.where((m) => m.isFavorite).toList();
+
+    Widget folderTile(MailboxRow box) => _FolderTile(
+      icon: folderIcon(box.specialUse),
+      label: box.name,
+      isSelected: selected?.mailboxId == box.id,
+      badge: box.specialUse == SpecialUse.drafts
+          ? null
+          : ref.watch(unreadCountProvider(box.id)).value,
+      onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -617,30 +617,42 @@ class _AccountFolderPanelContent extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(
             Space.lg,
             Space.xl,
-            Space.lg,
+            Space.sm,
             Space.lg,
           ),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                account.displayName.isEmpty
-                    ? account.email
-                    : account.displayName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      account.displayName.isEmpty
+                          ? account.email
+                          : account.displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      account.email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 2),
-              Text(
-                account.email,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: Theme.of(
-                  context,
-                ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+              IconButton(
+                icon: const Icon(LucideIcons.pencil, size: IconSize.sm),
+                tooltip: 'Düzenle',
+                onPressed: onManageFolders,
               ),
             ],
           ),
@@ -650,16 +662,28 @@ class _AccountFolderPanelContent extends ConsumerWidget {
           child: ListView(
             padding: const EdgeInsets.symmetric(vertical: Space.sm),
             children: [
-              for (final box in mailboxes.where((m) => m.isSelectable))
-                _FolderTile(
-                  icon: folderIcon(box.specialUse),
-                  label: box.name,
-                  isSelected: selected?.mailboxId == box.id,
-                  badge: box.specialUse == SpecialUse.drafts
-                      ? null
-                      : ref.watch(unreadCountProvider(box.id)).value,
-                  onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
+              if (favorites.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Space.lg,
+                    Space.sm,
+                    Space.lg,
+                    Space.xs,
+                  ),
+                  child: Text(
+                    'Sık Kullanılanlar',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelMedium?.copyWith(color: t.textTertiary),
+                  ),
                 ),
+                for (final box in favorites) folderTile(box),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: Space.sm),
+                  child: Divider(color: t.divider, height: 1),
+                ),
+              ],
+              for (final box in folders) folderTile(box),
               // Sabitlenenler sanal bir klasördür: IMAP \Flagged bayrağı
               // taşıyan iletiler, hangi klasörde olursa olsun.
               _FolderTile(

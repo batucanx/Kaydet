@@ -1115,6 +1115,21 @@ class $MailboxesTable extends Mailboxes
     requiredDuringInsert: false,
     defaultValue: const Constant(100),
   );
+  static const VerificationMeta _isFavoriteMeta = const VerificationMeta(
+    'isFavorite',
+  );
+  @override
+  late final GeneratedColumn<bool> isFavorite = GeneratedColumn<bool>(
+    'is_favorite',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_favorite" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _hasMoreOnServerMeta = const VerificationMeta(
     'hasMoreOnServer',
   );
@@ -1160,6 +1175,7 @@ class $MailboxesTable extends Mailboxes
     isSelectable,
     lastSyncAt,
     sortOrder,
+    isFavorite,
     hasMoreOnServer,
     retentionLimit,
   ];
@@ -1289,6 +1305,12 @@ class $MailboxesTable extends Mailboxes
         sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
       );
     }
+    if (data.containsKey('is_favorite')) {
+      context.handle(
+        _isFavoriteMeta,
+        isFavorite.isAcceptableOrUnknown(data['is_favorite']!, _isFavoriteMeta),
+      );
+    }
     if (data.containsKey('has_more_on_server')) {
       context.handle(
         _hasMoreOnServerMeta,
@@ -1386,6 +1408,10 @@ class $MailboxesTable extends Mailboxes
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
       )!,
+      isFavorite: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_favorite'],
+      )!,
       hasMoreOnServer: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}has_more_on_server'],
@@ -1426,6 +1452,11 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
   final DateTime? lastSyncAt;
   final int sortOrder;
 
+  /// Klasör Yönetimi ekranının "Sık Kullanılanlar" bölümü — salt yerel bir
+  /// tercih, sunucuda karşılığı yoktur ve senkronizasyon bu sütuna asla
+  /// dokunmaz (bkz. `AppDatabase.upsertMailbox`).
+  final bool isFavorite;
+
   /// Sunucuda daha eski ileti kaldı mı? (sayfalama sonu göstergesi)
   final bool hasMoreOnServer;
 
@@ -1452,6 +1483,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     required this.isSelectable,
     this.lastSyncAt,
     required this.sortOrder,
+    required this.isFavorite,
     required this.hasMoreOnServer,
     required this.retentionLimit,
   });
@@ -1486,6 +1518,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       map['last_sync_at'] = Variable<DateTime>(lastSyncAt);
     }
     map['sort_order'] = Variable<int>(sortOrder);
+    map['is_favorite'] = Variable<bool>(isFavorite);
     map['has_more_on_server'] = Variable<bool>(hasMoreOnServer);
     map['retention_limit'] = Variable<int>(retentionLimit);
     return map;
@@ -1517,6 +1550,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           ? const Value.absent()
           : Value(lastSyncAt),
       sortOrder: Value(sortOrder),
+      isFavorite: Value(isFavorite),
       hasMoreOnServer: Value(hasMoreOnServer),
       retentionLimit: Value(retentionLimit),
     );
@@ -1546,6 +1580,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       isSelectable: serializer.fromJson<bool>(json['isSelectable']),
       lastSyncAt: serializer.fromJson<DateTime?>(json['lastSyncAt']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      isFavorite: serializer.fromJson<bool>(json['isFavorite']),
       hasMoreOnServer: serializer.fromJson<bool>(json['hasMoreOnServer']),
       retentionLimit: serializer.fromJson<int>(json['retentionLimit']),
     );
@@ -1572,6 +1607,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
       'isSelectable': serializer.toJson<bool>(isSelectable),
       'lastSyncAt': serializer.toJson<DateTime?>(lastSyncAt),
       'sortOrder': serializer.toJson<int>(sortOrder),
+      'isFavorite': serializer.toJson<bool>(isFavorite),
       'hasMoreOnServer': serializer.toJson<bool>(hasMoreOnServer),
       'retentionLimit': serializer.toJson<int>(retentionLimit),
     };
@@ -1594,6 +1630,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     bool? isSelectable,
     Value<DateTime?> lastSyncAt = const Value.absent(),
     int? sortOrder,
+    bool? isFavorite,
     bool? hasMoreOnServer,
     int? retentionLimit,
   }) => MailboxRow(
@@ -1615,6 +1652,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     isSelectable: isSelectable ?? this.isSelectable,
     lastSyncAt: lastSyncAt.present ? lastSyncAt.value : this.lastSyncAt,
     sortOrder: sortOrder ?? this.sortOrder,
+    isFavorite: isFavorite ?? this.isFavorite,
     hasMoreOnServer: hasMoreOnServer ?? this.hasMoreOnServer,
     retentionLimit: retentionLimit ?? this.retentionLimit,
   );
@@ -1654,6 +1692,9 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           ? data.lastSyncAt.value
           : this.lastSyncAt,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      isFavorite: data.isFavorite.present
+          ? data.isFavorite.value
+          : this.isFavorite,
       hasMoreOnServer: data.hasMoreOnServer.present
           ? data.hasMoreOnServer.value
           : this.hasMoreOnServer,
@@ -1682,6 +1723,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           ..write('isSelectable: $isSelectable, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('isFavorite: $isFavorite, ')
           ..write('hasMoreOnServer: $hasMoreOnServer, ')
           ..write('retentionLimit: $retentionLimit')
           ..write(')'))
@@ -1706,6 +1748,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
     isSelectable,
     lastSyncAt,
     sortOrder,
+    isFavorite,
     hasMoreOnServer,
     retentionLimit,
   );
@@ -1729,6 +1772,7 @@ class MailboxRow extends DataClass implements Insertable<MailboxRow> {
           other.isSelectable == this.isSelectable &&
           other.lastSyncAt == this.lastSyncAt &&
           other.sortOrder == this.sortOrder &&
+          other.isFavorite == this.isFavorite &&
           other.hasMoreOnServer == this.hasMoreOnServer &&
           other.retentionLimit == this.retentionLimit);
 }
@@ -1750,6 +1794,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
   final Value<bool> isSelectable;
   final Value<DateTime?> lastSyncAt;
   final Value<int> sortOrder;
+  final Value<bool> isFavorite;
   final Value<bool> hasMoreOnServer;
   final Value<int> retentionLimit;
   const MailboxesCompanion({
@@ -1769,6 +1814,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     this.isSelectable = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
     this.sortOrder = const Value.absent(),
+    this.isFavorite = const Value.absent(),
     this.hasMoreOnServer = const Value.absent(),
     this.retentionLimit = const Value.absent(),
   });
@@ -1789,6 +1835,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     this.isSelectable = const Value.absent(),
     this.lastSyncAt = const Value.absent(),
     this.sortOrder = const Value.absent(),
+    this.isFavorite = const Value.absent(),
     this.hasMoreOnServer = const Value.absent(),
     this.retentionLimit = const Value.absent(),
   }) : accountId = Value(accountId),
@@ -1811,6 +1858,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     Expression<bool>? isSelectable,
     Expression<DateTime>? lastSyncAt,
     Expression<int>? sortOrder,
+    Expression<bool>? isFavorite,
     Expression<bool>? hasMoreOnServer,
     Expression<int>? retentionLimit,
   }) {
@@ -1831,6 +1879,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
       if (isSelectable != null) 'is_selectable': isSelectable,
       if (lastSyncAt != null) 'last_sync_at': lastSyncAt,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (isFavorite != null) 'is_favorite': isFavorite,
       if (hasMoreOnServer != null) 'has_more_on_server': hasMoreOnServer,
       if (retentionLimit != null) 'retention_limit': retentionLimit,
     });
@@ -1853,6 +1902,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     Value<bool>? isSelectable,
     Value<DateTime?>? lastSyncAt,
     Value<int>? sortOrder,
+    Value<bool>? isFavorite,
     Value<bool>? hasMoreOnServer,
     Value<int>? retentionLimit,
   }) {
@@ -1873,6 +1923,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
       isSelectable: isSelectable ?? this.isSelectable,
       lastSyncAt: lastSyncAt ?? this.lastSyncAt,
       sortOrder: sortOrder ?? this.sortOrder,
+      isFavorite: isFavorite ?? this.isFavorite,
       hasMoreOnServer: hasMoreOnServer ?? this.hasMoreOnServer,
       retentionLimit: retentionLimit ?? this.retentionLimit,
     );
@@ -1931,6 +1982,9 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
     }
+    if (isFavorite.present) {
+      map['is_favorite'] = Variable<bool>(isFavorite.value);
+    }
     if (hasMoreOnServer.present) {
       map['has_more_on_server'] = Variable<bool>(hasMoreOnServer.value);
     }
@@ -1959,6 +2013,7 @@ class MailboxesCompanion extends UpdateCompanion<MailboxRow> {
           ..write('isSelectable: $isSelectable, ')
           ..write('lastSyncAt: $lastSyncAt, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('isFavorite: $isFavorite, ')
           ..write('hasMoreOnServer: $hasMoreOnServer, ')
           ..write('retentionLimit: $retentionLimit')
           ..write(')'))
@@ -7361,6 +7416,7 @@ typedef $$MailboxesTableCreateCompanionBuilder =
       Value<bool> isSelectable,
       Value<DateTime?> lastSyncAt,
       Value<int> sortOrder,
+      Value<bool> isFavorite,
       Value<bool> hasMoreOnServer,
       Value<int> retentionLimit,
     });
@@ -7382,6 +7438,7 @@ typedef $$MailboxesTableUpdateCompanionBuilder =
       Value<bool> isSelectable,
       Value<DateTime?> lastSyncAt,
       Value<int> sortOrder,
+      Value<bool> isFavorite,
       Value<bool> hasMoreOnServer,
       Value<int> retentionLimit,
     });
@@ -7508,6 +7565,11 @@ class $$MailboxesTableFilterComposer
 
   ColumnFilters<int> get sortOrder => $composableBuilder(
     column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isFavorite => $composableBuilder(
+    column: $table.isFavorite,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7654,6 +7716,11 @@ class $$MailboxesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isFavorite => $composableBuilder(
+    column: $table.isFavorite,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get hasMoreOnServer => $composableBuilder(
     column: $table.hasMoreOnServer,
     builder: (column) => ColumnOrderings(column),
@@ -7761,6 +7828,11 @@ class $$MailboxesTableAnnotationComposer
   GeneratedColumn<int> get sortOrder =>
       $composableBuilder(column: $table.sortOrder, builder: (column) => column);
 
+  GeneratedColumn<bool> get isFavorite => $composableBuilder(
+    column: $table.isFavorite,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<bool> get hasMoreOnServer => $composableBuilder(
     column: $table.hasMoreOnServer,
     builder: (column) => column,
@@ -7864,6 +7936,7 @@ class $$MailboxesTableTableManager
                 Value<bool> isSelectable = const Value.absent(),
                 Value<DateTime?> lastSyncAt = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
+                Value<bool> isFavorite = const Value.absent(),
                 Value<bool> hasMoreOnServer = const Value.absent(),
                 Value<int> retentionLimit = const Value.absent(),
               }) => MailboxesCompanion(
@@ -7883,6 +7956,7 @@ class $$MailboxesTableTableManager
                 isSelectable: isSelectable,
                 lastSyncAt: lastSyncAt,
                 sortOrder: sortOrder,
+                isFavorite: isFavorite,
                 hasMoreOnServer: hasMoreOnServer,
                 retentionLimit: retentionLimit,
               ),
@@ -7904,6 +7978,7 @@ class $$MailboxesTableTableManager
                 Value<bool> isSelectable = const Value.absent(),
                 Value<DateTime?> lastSyncAt = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
+                Value<bool> isFavorite = const Value.absent(),
                 Value<bool> hasMoreOnServer = const Value.absent(),
                 Value<int> retentionLimit = const Value.absent(),
               }) => MailboxesCompanion.insert(
@@ -7923,6 +7998,7 @@ class $$MailboxesTableTableManager
                 isSelectable: isSelectable,
                 lastSyncAt: lastSyncAt,
                 sortOrder: sortOrder,
+                isFavorite: isFavorite,
                 hasMoreOnServer: hasMoreOnServer,
                 retentionLimit: retentionLimit,
               ),

@@ -10,7 +10,7 @@ import '../domain/use_cases/folder_mapping.dart';
 import 'providers.dart';
 
 /// Arama ekranının filtre çipleri.
-enum SearchCategory { all, mail, contacts, files, events }
+enum SearchCategory { all, mail, contacts, files }
 
 /// Aranan metin — 250ms debounce ile yazılır (bkz. eski
 /// `SearchQueryNotifier`, aynı desen). `autoDispose`: ekran kapanınca
@@ -41,10 +41,10 @@ class SearchQueryNotifier extends Notifier<String> {
   }
 }
 
-final searchQueryProvider = NotifierProvider.autoDispose<
-  SearchQueryNotifier,
-  String
->(SearchQueryNotifier.new);
+final searchQueryProvider =
+    NotifierProvider.autoDispose<SearchQueryNotifier, String>(
+      SearchQueryNotifier.new,
+    );
 
 class SearchCategoryNotifier extends Notifier<SearchCategory> {
   @override
@@ -53,10 +53,10 @@ class SearchCategoryNotifier extends Notifier<SearchCategory> {
   void select(SearchCategory value) => state = value;
 }
 
-final searchCategoryProvider = NotifierProvider.autoDispose<
-  SearchCategoryNotifier,
-  SearchCategory
->(SearchCategoryNotifier.new);
+final searchCategoryProvider =
+    NotifierProvider.autoDispose<SearchCategoryNotifier, SearchCategory>(
+      SearchCategoryNotifier.new,
+    );
 
 /// Arama kapsamı: hangi hesapta aranıyor. `null` = Tüm Hesaplar (varsayılan).
 class SearchScopeNotifier extends Notifier<int?> {
@@ -126,26 +126,29 @@ final searchFolderOptionsProvider =
 
 // -------------------------------------------------------------- sonuçlar
 
-final mailSearchResultsProvider = FutureProvider.autoDispose<List<MessageRow>>(
-  (ref) async {
-    final query = ref.watch(searchQueryProvider);
-    if (query.trim().isEmpty) return const [];
-    final scope = ref.watch(searchScopeProvider);
-    final filters = ref.watch(searchFiltersProvider);
-    final db = ref.watch(databaseProvider);
-    final ids = await db.searchMessageIds(
-      accountId: scope,
-      query: query,
-      filters: filters,
-    );
-    if (ids.isEmpty) return const [];
-    final rows = await db.messagesByIds(ids);
-    // Sorgunun tarih sırasını (yeniden eskiye) koru — `messagesByIds` id
-    // sırasını korumaz.
-    final byId = {for (final row in rows) row.id: row};
-    return [for (final id in ids) if (byId[id] != null) byId[id]!];
-  },
-);
+final mailSearchResultsProvider = FutureProvider.autoDispose<List<MessageRow>>((
+  ref,
+) async {
+  final query = ref.watch(searchQueryProvider);
+  if (query.trim().isEmpty) return const [];
+  final scope = ref.watch(searchScopeProvider);
+  final filters = ref.watch(searchFiltersProvider);
+  final db = ref.watch(databaseProvider);
+  final ids = await db.searchMessageIds(
+    accountId: scope,
+    query: query,
+    filters: filters,
+  );
+  if (ids.isEmpty) return const [];
+  final rows = await db.messagesByIds(ids);
+  // Sorgunun tarih sırasını (yeniden eskiye) koru — `messagesByIds` id
+  // sırasını korumaz.
+  final byId = {for (final row in rows) row.id: row};
+  return [
+    for (final id in ids)
+      if (byId[id] != null) byId[id]!,
+  ];
+});
 
 /// Sonuçtaki iletilerin klasör etiketi ("Taslak", "Gelen Kutusu"…) için.
 final searchResultMailboxesProvider =
@@ -167,10 +170,13 @@ final contactSearchResultsProvider =
       return db.searchContacts(accountId: scope, query: query);
     });
 
+/// [query] boşsa Outlook'un Dosyalar sekmesi gibi en son ekleri gözat
+/// modunda döner (bkz. [AppDatabase.searchAttachments]) — bu yüzden diğer
+/// kategori sağlayıcılarının (posta, kişiler) aksine boş sorguda erken
+/// dönmez.
 final attachmentSearchResultsProvider =
     FutureProvider.autoDispose<List<AttachmentSearchResult>>((ref) async {
       final query = ref.watch(searchQueryProvider);
-      if (query.trim().isEmpty) return const [];
       final scope = ref.watch(searchScopeProvider);
       final filters = ref.watch(searchFiltersProvider);
       final db = ref.watch(databaseProvider);
