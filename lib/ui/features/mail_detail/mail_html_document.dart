@@ -85,8 +85,8 @@ abstract final class MailHtmlDocument {
 <meta name="viewport" content="width=device-width">
 <style>
 :root { color-scheme: ${dark ? 'dark' : 'light'}; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-html { background: ${_hex(tokens.bg)}; }
-body { margin: 0; padding: 16px; color: ${_hex(tokens.textPrimary)}; font-family: -apple-system, Roboto, sans-serif; overflow-wrap: break-word; }
+html { background: ${_hex(tokens.bg)}; overflow-x: hidden; }
+body { margin: 0; padding: 16px; color: ${_hex(tokens.textPrimary)}; font-family: -apple-system, Roboto, sans-serif; overflow-wrap: break-word; overflow-x: hidden; }
 a { overflow-wrap: anywhere; }
 img { max-width: 100%; }
 img:not([width="1"]):not([height="1"]) { height: auto; }

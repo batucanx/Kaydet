@@ -491,6 +491,7 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final messages = ref.watch(messageListProvider);
   final mailbox = ref.watch(currentMailboxProvider);
   final folder = ref.watch(selectedFolderProvider);
+  final accountId = ref.watch(accountIdProvider);
   final isSelectionMode = ref.watch(isSelectionModeProvider);
   final sort = ref.watch(messageFilterProvider.select((f) => f.sort));
   final filterActive = ref.watch(
@@ -551,12 +552,42 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   // üretilmeye devam edilip doğrudan `AsyncData` olarak döndürülüyor —
   // gösterilen liste `loadMore` sırasında hiç kaybolmuyor, yalnızca listenin
   // altındaki `_LoadMoreControl` "Yükleniyor…" metnine dönüyor.
+  //
+  // ANCAK bu "önceki değeri koru" davranışı `messageListProvider`ın
+  // izlediği HERHANGİ bir şey değiştiğinde tetiklenir — `pageLimitProvider`
+  // kadar `folder`/`accountId` için de geçerlidir. Klasör değiştirildiğinde
+  // (ör. Gelen Kutusu → Gönderilenler) `folder`/`mailbox` yukarıda ANINDA
+  // yeni klasöre geçer, ama Drift'in yeni klasör için sorgusu bir sonraki
+  // mikro görevde sonuçlanır; o arada `l.value` HÂLÂ ESKİ klasörün
+  // satırlarıdır. `_rowsMatchFolder` kontrolü olmadan bu eski satırlar yeni
+  // klasörün bağlamıyla (`buildItems` içindeki `showPinned`/gruplama) işlenip
+  // ekrana yazılıyordu — eski klasör o an boşsa (veya farklı sayıda ileti
+  // içeriyorsa) kullanıcı gerçekte boş OLMAYAN yeni klasörde anlık "Bu
+  // klasör boş" görüyor, hemen ardından gerçek içerik onun yerini alıyordu.
+  // Satırlar seçili klasörle eşleşmiyorsa (ya da boşsa — boş bir listeden
+  // hangi klasöre ait olduğu anlaşılamaz, güvenli tarafta kalınır) burada
+  // `AsyncLoading` dönülür; `MailListScreen` bunu `_ListSkeleton` ile
+  // karşılar — yanlış klasörün (veya yanlış "boş") içeriğini göstermektense
+  // kısa bir iskelet, doğru davranış.
+  bool rowsMatchFolder(List<MessageRow> rows) {
+    if (rows.isEmpty || folder == null || accountId == null) return false;
+    final sample = rows.first;
+    if (sample.accountId != accountId) return false;
+    return folder.isFlaggedView
+        ? rows.every((m) => m.isFlagged)
+        : sample.mailboxId == folder.mailboxId;
+  }
+
   return messages.map(
     data: (d) => AsyncData(buildItems(d.value)),
     error: (e) => AsyncError(e.error, e.stackTrace),
-    loading: (l) => l.hasValue
-        ? AsyncData(buildItems(l.value!))
-        : AsyncLoading<List<MailListItem>>(progress: l.progress),
+    loading: (l) {
+      final previousRows = l.value;
+      if (previousRows != null && rowsMatchFolder(previousRows)) {
+        return AsyncData(buildItems(previousRows));
+      }
+      return AsyncLoading<List<MailListItem>>(progress: l.progress);
+    },
   );
 });
 

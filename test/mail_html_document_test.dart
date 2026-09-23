@@ -59,7 +59,10 @@ void main() {
         tokens: KaydetTokens.outlookDark,
         body: '<p id="x">Selam</p>',
       );
-      expect(html, contains('html { background: #000000; }'));
+      expect(
+        html,
+        contains('html { background: #000000; overflow-x: hidden; }'),
+      );
       expect(html, contains('"bg":[0,0,0]'));
       expect(
         html,

@@ -352,6 +352,48 @@
     for (j = 0; j < decls.length; j++) put(el, decls[j][0], decls[j][1]);
   }
 
+  // ── Ekrana sığdırma (Android'in native "overview mode"unun eşdeğeri) ────
+  //
+  // `applyFluid` esnetemediği (sabit piksel sütunlu tablo gibi, hücreleri
+  // ezildiği için geri alınan) düzenleri olduğu gibi bırakır. Android'de bu
+  // durumda native WebView (`useWideViewPort`, bkz. `_HtmlWebView`) sayfayı
+  // OLDUĞU GENİŞLİKTE yerleştirip bütününü ekrana sığacak şekilde küçültür;
+  // WKWebView'da (iOS) bunun karşılığı yok — taşan içerik sağdan kırpılır
+  // (yakınlaştırma da kapalı, bkz. `enableZoom(false)`, kullanıcı kaydırıp
+  // da göremez). Aynı "bütünü küçült" davranışı burada `<kd-root>`a bir
+  // `transform: scale()` ile taklit edilir; yalnızca `applyFluid`den SONRA
+  // hâlâ taşma varsa devreye girer, onun başarılı olduğu e-postalara
+  // dokunmaz. `getBoundingClientRect` (bkz. `contentHeight`) CSS transform'u
+  // zaten hesaba kattığı için Dart tarafında ek bir değişiklik gerekmez —
+  // bildirilen yükseklik doğrudan küçültülmüş olarak çıkar. Küçültülmüş
+  // metni yakından okumak için kullanıcı iki parmakla yakınlaştırabilir
+  // (bkz. `_PinchZoomableBody`).
+  var shrinkWrap = null;
+  var shrinkScale = 1;
+
+  function applyShrinkToFit() {
+    var body = doc.body;
+    if (!shrinkWrap) shrinkWrap = doc.getElementsByTagName('kd-root')[0];
+    if (!body || !shrinkWrap) return;
+    if (shrinkScale !== 1) {
+      put(shrinkWrap, 'transform', 'none');
+      put(shrinkWrap, 'width', 'auto');
+      shrinkScale = 1;
+    }
+    var vw = root.clientWidth;
+    if (!vw) return;
+    var natural = shrinkWrap.scrollWidth;
+    if (natural <= vw + 1) return; // sığıyor: dokunma
+    var scale = vw / natural;
+    put(shrinkWrap, 'transform-origin', 'top left');
+    // Genişlik doğal (küçültülmemiş) değere sabitlenir ki içerideki tablo/
+    // sütunlar kendi düzenine göre yerleşsin; küçültme yalnızca boyama
+    // aşamasında (transform) olur, iç yerleşimi bir daha etkilemez.
+    put(shrinkWrap, 'width', natural + 'px');
+    put(shrinkWrap, 'transform', 'scale(' + scale + ')');
+    shrinkScale = scale;
+  }
+
   // ── Görünüm birimleri ─────────────────────────────────────────────────
 
   // WebView içerik boyuna uzatıldığı için "100vh" ekranı değil tüm içeriği
@@ -480,6 +522,7 @@
   function start() {
     guarded(pinViewportUnits);
     guarded(applyFluid);
+    guarded(applyShrinkToFit);
     guarded(enhance);
     guarded(observeLayout);
     root.setAttribute('data-kd-ms', String(Math.round(performance.now() - startedAt)));
@@ -490,11 +533,19 @@
 
   // WebView'ın gerçek genişliği ilk yerleşimde henüz oturmamış olabilir; genişlik
   // değişince (ya da yükleme bitince) akışkanlaştırma o genişliğe göre yeniden kurulur.
-  window.addEventListener('load', function () { guarded(applyFluid); guarded(report); });
+  window.addEventListener('load', function () {
+    guarded(applyFluid);
+    guarded(applyShrinkToFit);
+    guarded(report);
+  });
   var frame = 0;
   window.addEventListener('resize', function () {
     scheduleReport();
     if (frame) return;
-    frame = requestAnimationFrame(function () { frame = 0; guarded(applyFluid); });
+    frame = requestAnimationFrame(function () {
+      frame = 0;
+      guarded(applyFluid);
+      guarded(applyShrinkToFit);
+    });
   });
 })();
