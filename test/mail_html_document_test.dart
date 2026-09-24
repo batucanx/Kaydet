@@ -61,9 +61,9 @@ void main() {
       );
       expect(
         html,
-        contains('html { background: #1c1c1e; overflow-x: hidden; }'),
+        contains('html { background: #242629; overflow-x: hidden; }'),
       );
-      expect(html, contains('"bg":[28,28,30]'));
+      expect(html, contains('"bg":[36,38,41]'));
       expect(
         html,
         contains('<body><kd-root><p id="x">Selam</p></kd-root></body>'),

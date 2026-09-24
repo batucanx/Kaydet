@@ -41,6 +41,7 @@ class AccountWatcher {
     required ImapService imapService,
     required SecureStore secureStore,
     required this.onSynced,
+    this.onFoldersSynced,
   }) : _db = database,
        _imap = imapService {
     _connection = MailConnection(
@@ -57,6 +58,9 @@ class AccountWatcher {
 
   /// Her başarılı eşitlemeden sonra çağrılır. Hatası izleyiciyi durdurmaz.
   final Future<void> Function(WatchedSync sync) onSynced;
+
+  /// Klasör listesi eşitlendiğinde çağrılır.
+  final Future<void> Function(int accountId)? onFoldersSynced;
 
   final AppDatabase _db;
   final ImapService _imap;
@@ -75,6 +79,11 @@ class AccountWatcher {
   /// birkaç olay tek eşitlemeye indirgenir.
   static const Duration _debounce = Duration(milliseconds: 700);
 
+  /// Klasör listesi (web istemcisinde eklenen/silinen/yeniden adlandırılan
+  /// klasörler) en sık bu aralıkla yenilenir. IDLE yalnızca Gelen Kutusu'nu
+  /// izler; klasör değişikliklerini sunucu bildirmez.
+  static const Duration _folderRefreshInterval = Duration(minutes: 2);
+
   /// Yeni iletilerin önizleme metni için gövde indirmeye ayrılan süre.
   /// Aşılırsa bildirim yalnızca konuyla gösterilir; gecikme yaşatılmaz.
   static const Duration _previewBudget = Duration(seconds: 6);
@@ -92,6 +101,7 @@ class AccountWatcher {
   ];
 
   bool _running = false;
+  DateTime? _lastFolderSync;
   Future<void>? _loop;
   Completer<void>? _wake;
   Timer? _debounceTimer;
@@ -195,6 +205,8 @@ class AccountWatcher {
         if (synced == _SyncResult.authFailed) return _SessionEnd.authFailed;
         if (synced == _SyncResult.failed) return _SessionEnd.ended;
         if (!_running) break;
+        await _refreshFolders();
+        if (!_running) break;
 
         if (supportsIdle) {
           final started = await _imap.startIdle();
@@ -209,6 +221,23 @@ class AccountWatcher {
       await _changes?.cancel();
       _changes = null;
     }
+  }
+
+  /// Klasör listesini eşitler; hata dinlemeyi kesmez (bir sonraki turda
+  /// yeniden denenir). Bağlantı sağlığını Gelen Kutusu eşitlemesi belirler.
+  Future<void> _refreshFolders() async {
+    final last = _lastFolderSync;
+    if (last != null &&
+        DateTime.now().difference(last) < _folderRefreshInterval) {
+      return;
+    }
+    try {
+      final result = await _engine.syncMailboxes(accountId);
+      if (result is Ok<List<MailboxRow>>) {
+        _lastFolderSync = DateTime.now();
+        await onFoldersSynced?.call(accountId);
+      }
+    } on Object catch (_) {}
   }
 
   Future<int?> _resolveInboxId() async {

@@ -21,6 +21,16 @@ enum KaydetTransitionStyle {
   /// [KaydetDepthCoverEffect] ile sarılmalıdır (bkz. `MailListScreen` —
   /// Gelen Kutusu, Mail Oluşturma'yı bu stille açar).
   horizontalPush,
+
+  /// Yeni İleti / Compose geçişi: iOS + Outlook tarzı, modern, premium, sakin
+  /// ve doğal tam ekran çalışma alanı geçişi.
+  /// Üç hareket aynı anda çalışır:
+  /// - Fade: 0.0 → 1.0
+  /// - Çok hafif ölçeklenme: 0.975 → 1.0
+  /// - Mikro dikey hareket: +8px → 0 (hafifçe aşağıdan yerine oturur)
+  /// Alttaki ekran karartılmaz veya küçültülmez; yeni ekran kendi tam ekran
+  /// opak zemininde akıcı biçimde açılır.
+  compose,
 }
 
 /// Uygulamanın TEK sayfa geçiş noktası. `Navigator.push(MaterialPageRoute(...))`
@@ -29,7 +39,7 @@ enum KaydetTransitionStyle {
 class KaydetRoute<T> extends PageRouteBuilder<T> {
   KaydetRoute({
     required WidgetBuilder builder,
-    this.fullscreenDialog = false,
+    super.fullscreenDialog = false,
     KaydetTransitionStyle? transitionStyle,
     super.settings,
   }) : transitionStyle =
@@ -42,27 +52,27 @@ class KaydetRoute<T> extends PageRouteBuilder<T> {
              builder(context),
        );
 
-  @override
-  final bool fullscreenDialog;
-
   /// Görsel geçiş stili — verilmezse [fullscreenDialog]'dan türetilir, böylece
   /// bunu belirtmeyen mevcut çağrı yerleri davranışını korur.
   final KaydetTransitionStyle transitionStyle;
 
-  // `horizontalPush`, diğer stillerden bağımsız kendi süresini kullanır (bkz.
-  // `Motion.horizontalPush` — Outlook/iOS'un native push hızını hedefler).
-  // Diğer tüm stiller `Motion.page`/`Motion.pageBack`'i kullanmaya devam eder.
+  // Stile göre optimize edilmiş geçiş süreleri:
+  // - `compose`: 280 ms giriş (iOS/Outlook sakinliği), 220 ms dönüş
+  // - `horizontalPush`: 300 ms giriş, 250 ms dönüş
+  // - Diğerleri: `Motion.page`/`Motion.pageBack`
   @override
-  Duration get transitionDuration =>
-      transitionStyle == KaydetTransitionStyle.horizontalPush
-      ? Motion.horizontalPush
-      : Motion.page;
+  Duration get transitionDuration => switch (transitionStyle) {
+    KaydetTransitionStyle.compose => Motion.compose,
+    KaydetTransitionStyle.horizontalPush => Motion.horizontalPush,
+    _ => Motion.page,
+  };
 
   @override
-  Duration get reverseTransitionDuration =>
-      transitionStyle == KaydetTransitionStyle.horizontalPush
-      ? Motion.horizontalPushBack
-      : Motion.pageBack;
+  Duration get reverseTransitionDuration => switch (transitionStyle) {
+    KaydetTransitionStyle.compose => Motion.composeBack,
+    KaydetTransitionStyle.horizontalPush => Motion.horizontalPushBack,
+    _ => Motion.pageBack,
+  };
 
   /// [KaydetTransitionStyle.horizontalPush] ile açılan ekranın anlık giriş
   /// ilerlemesi (0 → 1). Bir route'un kendi `secondaryAnimation`'ı yalnızca
@@ -84,6 +94,7 @@ class KaydetRoute<T> extends PageRouteBuilder<T> {
     if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return child;
 
     return switch (transitionStyle) {
+      KaydetTransitionStyle.compose => _composeTransition(animation, child),
       KaydetTransitionStyle.modal => _modalTransition(animation, child),
       KaydetTransitionStyle.horizontalPush => _horizontalPushTransition(
         animation,
@@ -91,6 +102,24 @@ class KaydetRoute<T> extends PageRouteBuilder<T> {
       ),
       KaydetTransitionStyle.fade => _fadeTransition(animation, child),
     };
+  }
+
+  static Widget _composeTransition(Animation<double> animation, Widget child) {
+    // iOS/Outlook tarzı doğal yavaşlama eğrisi: sekme/overshoot yok,
+    // yumuşak ve akıcı biçimde yerine oturur.
+    final curved = CurvedAnimation(
+      parent: animation,
+      curve: Motion.standard, // Curves.easeOutCubic
+      reverseCurve: Curves.easeInCubic,
+    );
+
+    return FadeTransition(
+      opacity: curved,
+      child: _ComposeScaleAndSlide(
+        animation: curved,
+        child: child,
+      ),
+    );
   }
 
   static Widget _modalTransition(Animation<double> animation, Widget child) {
@@ -134,6 +163,39 @@ class KaydetRoute<T> extends PageRouteBuilder<T> {
       child: SlideTransition(
         position: slideIn,
         child: ScaleTransition(scale: scaleIn, child: child),
+      ),
+    );
+  }
+}
+
+/// Yeni İleti / Compose ekranı için mikro dikey hareket (+8px → 0) ve
+/// çok hafif ölçeklenmeyi (0.975 → 1.0) tek seferde uygulayan geçiş widget'ı.
+///
+/// [child]'ı yeniden inşa etmez (rebuild yok); yalnızca `Transform` matrisini
+/// render seviyesinde günceller — 60/120 FPS akıcılık sağlar ve form/editör
+/// durumuna hiç dokunmaz.
+class _ComposeScaleAndSlide extends AnimatedWidget {
+  const _ComposeScaleAndSlide({
+    required Animation<double> animation,
+    required this.child,
+  }) : super(listenable: animation);
+
+  final Widget child;
+
+  Animation<double> get animation => listenable as Animation<double>;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = animation.value;
+    final scale = 0.975 + (0.025 * t);
+    final dy = (1.0 - t) * 8.0;
+
+    return Transform.translate(
+      offset: Offset(0, dy),
+      child: Transform.scale(
+        scale: scale,
+        alignment: Alignment.center,
+        child: child,
       ),
     );
   }

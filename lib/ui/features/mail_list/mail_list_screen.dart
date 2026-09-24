@@ -67,6 +67,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final accountId = ref.watch(accountIdProvider);
+    final activeAccount = ref.watch(activeAccountProvider).value;
     // Yalnızca "Tümünü seç" için ham id listesi gerekiyor — gövde artık
     // `mailListItemsProvider`den okunuyor (bkz. aşağısı), bu yüzden bu akışı
     // burada ikinci kez gruplamıyoruz.
@@ -77,9 +78,6 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     final sync = ref.watch(syncControllerProvider);
     final mailbox = ref.watch(currentMailboxProvider);
     final folder = ref.watch(selectedFolderProvider);
-    final filterFlaggedOnly = ref.watch(
-      messageFilterProvider.select((f) => f.flaggedOnly),
-    );
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
 
     final isSentLike =
@@ -96,6 +94,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
         title: folder?.isFlaggedView == true
             ? 'Sabitlenenler'
             : (mailbox?.name ?? 'Kaydet'),
+        account: activeAccount,
       ),
       body: Column(
         children: [
@@ -117,8 +116,13 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             ),
           Expanded(
             child: RefreshIndicator(
-              onRefresh: () =>
-                  ref.read(syncControllerProvider.notifier).syncCurrentFolder(),
+              onRefresh: () async {
+                final sync = ref.read(syncControllerProvider.notifier);
+                await sync.syncCurrentFolder();
+                // Çekip yenileme klasör listesini de güncel tutar (web
+                // istemcisinde eklenen/silinen klasörler).
+                await sync.syncFolders(force: true);
+              },
               color: t.accent,
               backgroundColor: t.surfaceElevated,
               // `skipLoadingOnReload`: klasör/filtre/hesap değişimi veya
@@ -168,13 +172,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                       labels: labels,
                       isSentLike: isSentLike,
                       isLoadingMore: sync.isLoadingMore,
-                      hasMore:
-                          sync.hasMore && mailbox?.hasMoreOnServer == true,
-                      rowLeavesViewOnFlagToggle:
-                          (items.isNotEmpty &&
-                              items.first is PinnedSectionItem) ||
-                          folder?.isFlaggedView == true ||
-                          filterFlaggedOnly,
+                      hasMore: sync.hasMore && mailbox?.hasMoreOnServer == true,
                     ),
                   ),
                 ),
@@ -187,10 +185,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
           ? null
           : ValueListenableBuilder<bool>(
               valueListenable: _isAtTop,
-              builder: (context, isAtTop, _) => _ComposeFab(
-                isExpanded: isAtTop,
-                onPressed: _openCompose,
-              ),
+              builder: (context, isAtTop, _) =>
+                  _ComposeFab(isExpanded: isAtTop, onPressed: _openCompose),
             ),
       bottomNavigationBar: isSelectionMode
           ? _SelectionActionBar(ids: selection.toList())
@@ -216,7 +212,6 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     required bool isSentLike,
     required bool isLoadingMore,
     required bool hasMore,
-    required bool rowLeavesViewOnFlagToggle,
   }) {
     return ListView.builder(
       key: const PageStorageKey('mail-list'),
@@ -241,13 +236,15 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             height: MediaQuery.sizeOf(context).height * 0.6,
             child: _emptyState(filterActive),
           ),
-          DateHeaderItem(:final label) => SectionHeader(label),
+          DateHeaderItem(:final label) => SectionHeader(
+            label,
+            showDivider: true,
+          ),
           MessageItem(:final message) => _SlidableRow(
             key: ValueKey(message.id),
             message: message,
             labels: labels,
             isSentFolder: isSentLike,
-            leavesViewOnFlagToggle: rowLeavesViewOnFlagToggle,
             onTap: () => _onRowTap(message),
             onAvatarTap: () =>
                 ref.read(selectionProvider.notifier).toggle(message.id),
@@ -296,9 +293,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     context,
     ref,
     draftId: draftId,
-    // Outlook/iOS'taki "slide over" gibi: Compose sağdan kayarak gelip
-    // Gelen Kutusu'nun üzerine yerleşir; Gelen Kutusu tamamen sabit kalır.
-    transitionStyle: KaydetTransitionStyle.horizontalPush,
+    // iOS/Outlook tarzı modern Compose geçişi: Fade + subtle scale + micro
+    // vertical hareket. Gelen Kutusu sabit kalır, kararma/küçülme olmaz.
+    transitionStyle: KaydetTransitionStyle.compose,
     // "Taslağa kaydedildi" bildirimi "Yeni" düğmesinin üstünde durur.
     noticeBottomInset: _ComposeFab.footprint,
   );
@@ -309,6 +306,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     required int selectionCount,
     required List<int> visibleIds,
     required String title,
+    AccountRow? account,
   }) {
     final t = context.tokens;
 
@@ -347,22 +345,12 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       );
     }
 
-    return AppBar(
-      leading: IconButton(
-        icon: const Icon(LucideIcons.menu),
-        tooltip: 'Klasörler',
-        onPressed: () => Scaffold.of(context).openDrawer(),
-      ),
-      title: Text(title),
-      actions: [
-        const _FilterMenuButton(),
-        IconButton(
-          icon: const Icon(LucideIcons.search),
-          tooltip: 'Ara',
-          onPressed: () => context.pushScreen(const SearchScreen()),
-        ),
-        const SizedBox(width: Space.xs),
-      ],
+    return _InboxAppBar(
+      title: title,
+      account: account,
+      onMenuTap: () => Scaffold.of(context).openDrawer(),
+      onSearchTap: () => context.pushScreen(const SearchScreen()),
+      filterButton: const _FilterMenuButton(),
     );
   }
 }
@@ -451,24 +439,14 @@ class _ComposeFab extends StatelessWidget {
 /// seçimi kaldırıldığında SADECE o satırın widget'ı yeniden çizilir,
 /// listedeki diğer görünür satırlar etkilenmez.
 ///
-/// [leavesViewOnFlagToggle] doğruysa (Gelen Kutusu'nda sabitlenenler bölümü
-/// gösteriliyorken sabitlemek, ya da "Sabitlenenler" sanal klasöründe/
-/// "yalnızca sabitlenenler" filtresinde sabitlemeyi kaldırmak — bkz.
-/// `MailListScreen.build`), raptiyeye dokunmak satırı listeden aniden
-/// ışınlamak yerine önce nazikçe küçültüp söndürür; asıl `isFlagged`
-/// durumu bu görsel geçiş bittikten SONRA veritabanına yazılır (bkz.
-/// [_PinnedMailRowState._unpin] — aynı desen), böylece satırın listeden
-/// çıkışı sert bir sıçrama değil buradan ayrılan bir hareket gibi
-/// hissettirir. Diğer durumlarda (satır sabitleme sonrası da görünür
-/// kalacaksa) gecikmeye gerek yok — arka plan rengi zaten `MailRow`
-/// içindeki `AnimatedContainer` ile yumuşakça geçiyor.
+/// Kaydırma eylemleri arşivle/sil ile sınırlıdır; sabitleme mail detayındaki
+/// kontrol ve seçim araç çubuğundan kullanılmaya devam eder.
 class _SlidableRow extends ConsumerStatefulWidget {
   const _SlidableRow({
     super.key,
     required this.message,
     required this.labels,
     required this.isSentFolder,
-    required this.leavesViewOnFlagToggle,
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
@@ -477,7 +455,6 @@ class _SlidableRow extends ConsumerStatefulWidget {
   final MessageRow message;
   final List<LabelRow> labels;
   final bool isSentFolder;
-  final bool leavesViewOnFlagToggle;
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
@@ -487,21 +464,6 @@ class _SlidableRow extends ConsumerStatefulWidget {
 }
 
 class _SlidableRowState extends ConsumerState<_SlidableRow> {
-  bool _hiding = false;
-
-  Future<void> _toggleFlag() async {
-    final repository = ref.read(mailRepositoryProvider);
-    final nextFlagged = !widget.message.isFlagged;
-    if (!widget.leavesViewOnFlagToggle) {
-      await repository.setFlagged([widget.message.id], nextFlagged);
-      return;
-    }
-    setState(() => _hiding = true);
-    await Future.delayed(context.motion(Motion.base));
-    if (!mounted) return;
-    await repository.setFlagged([widget.message.id], nextFlagged);
-  }
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -512,59 +474,43 @@ class _SlidableRowState extends ConsumerState<_SlidableRow> {
       ),
     );
 
-    return AnimatedSize(
-      duration: context.motion(Motion.base),
-      curve: Motion.standard,
-      alignment: Alignment.topCenter,
-      child: AnimatedOpacity(
-        duration: context.motion(Motion.fast),
-        opacity: _hiding ? 0 : 1,
-        child: Align(
-          alignment: Alignment.topCenter,
-          heightFactor: _hiding ? 0 : 1,
-          child: Slidable(
-            key: ValueKey('slide-${widget.message.id}'),
-            startActionPane: ActionPane(
-              motion: const DrawerMotion(),
-              extentRatio: 0.28,
-              children: [
-                SlidableAction(
-                  onPressed: (_) => repository.archive([widget.message.id]),
-                  backgroundColor: t.success,
-                  foregroundColor: Colors.white,
-                  icon: LucideIcons.archive,
-                  label: 'Arşivle',
-                ),
-              ],
-            ),
-            endActionPane: ActionPane(
-              motion: const DrawerMotion(),
-              extentRatio: 0.28,
-              children: [
-                SlidableAction(
-                  onPressed: (_) =>
-                      deleteWithConfirmation(context, ref, [
-                        widget.message.id,
-                      ]),
-                  backgroundColor: t.dangerFill,
-                  foregroundColor: Colors.white,
-                  icon: LucideIcons.trash2,
-                  label: 'Sil',
-                ),
-              ],
-            ),
-            child: MailRow(
-              message: widget.message,
-              labels: widget.labels,
-              isSelected: isSelected,
-              isSentFolder: widget.isSentFolder,
-              onTap: widget.onTap,
-              onAvatarTap: widget.onAvatarTap,
-              onLongPress: widget.onLongPress,
-              onFlagTap: _toggleFlag,
-            ),
+    return Slidable(
+      key: ValueKey('slide-${widget.message.id}'),
+      startActionPane: ActionPane(
+        motion: const DrawerMotion(),
+        extentRatio: 0.28,
+        children: [
+          SlidableAction(
+            onPressed: (_) => repository.archive([widget.message.id]),
+            backgroundColor: t.success,
+            foregroundColor: Colors.white,
+            icon: LucideIcons.archive,
+            label: 'Arşivle',
           ),
-        ),
+        ],
+      ),
+      endActionPane: ActionPane(
+        motion: const DrawerMotion(),
+        extentRatio: 0.28,
+        children: [
+          SlidableAction(
+            onPressed: (_) =>
+                deleteWithConfirmation(context, ref, [widget.message.id]),
+            backgroundColor: t.dangerFill,
+            foregroundColor: Colors.white,
+            icon: LucideIcons.trash2,
+            label: 'Sil',
+          ),
+        ],
+      ),
+      child: MailRow(
+        message: widget.message,
+        labels: widget.labels,
+        isSelected: isSelected,
+        isSentFolder: widget.isSentFolder,
+        onTap: widget.onTap,
+        onAvatarTap: widget.onAvatarTap,
+        onLongPress: widget.onLongPress,
       ),
     );
   }
@@ -584,9 +530,7 @@ class _SlidableRowState extends ConsumerState<_SlidableRow> {
 /// birlikte kayıp gözden kaybolur.
 ///
 /// 3'ten fazla sabitli ileti varsa bölüm sonsuza uzamasın diye daraltılabilir
-/// bir başlığa döner ("SABİTLENENLER (N)"); azken başlığa gerek yok — her
-/// satırın hafif mavi vurgulu arka planı (bkz. `MailRow.isFlagged`) neden
-/// üstte olduklarını zaten anlatıyor.
+/// bir başlığa döner ("SABİTLENENLER (N)"); azken başlığa gerek yok.
 class _PinnedSection extends ConsumerStatefulWidget {
   const _PinnedSection();
 
@@ -597,8 +541,6 @@ class _PinnedSection extends ConsumerStatefulWidget {
 class _PinnedSectionState extends ConsumerState<_PinnedSection> {
   static const _collapseThreshold = 2;
 
-  bool? _userExpanded;
-
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -607,8 +549,9 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
 
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
     final isCollapsible = pinned.length > _collapseThreshold;
+    final userExpanded = ref.watch(pinnedSectionExpandedProvider);
     // Az sayıda sabitli iletide daraltma anlamsız — her zaman açık say.
-    final expanded = !isCollapsible || (_userExpanded ?? false);
+    final expanded = !isCollapsible || userExpanded;
 
     return Container(
       decoration: BoxDecoration(
@@ -619,7 +562,8 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
         children: [
           if (isCollapsible)
             InkWell(
-              onTap: () => setState(() => _userExpanded = !expanded),
+              onTap: () =>
+                  ref.read(pinnedSectionExpandedProvider.notifier).toggle(),
               child: SectionHeader(
                 'SABİTLENENLER (${pinned.length})',
                 trailing: AnimatedRotation(
@@ -656,13 +600,8 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
   }
 }
 
-/// Sabitlenenler bölümündeki tek satır: raptiye ikonuna dokunmak iletiyi
-/// aniden listeden ışınlamak yerine önce nazikçe küçültüp söndürür — asıl
-/// `isFlagged` durumu bu görsel geçiş bittikten SONRA veritabanına yazılır
-/// (bkz. [_unpin]), böylece iletinin aşağıdaki kronolojik gruba geri
-/// gönderilmesi ani bir sıçrama gibi değil, buradan ayrılan bir hareket
-/// gibi hissettirir.
-class _PinnedMailRow extends ConsumerStatefulWidget {
+/// Sabitlenenler bölümündeki ileti satırı; sabitleme mail detayından yönetilir.
+class _PinnedMailRow extends ConsumerWidget {
   const _PinnedMailRow({
     super.key,
     required this.message,
@@ -672,49 +611,30 @@ class _PinnedMailRow extends ConsumerStatefulWidget {
   final MessageRow message;
   final List<LabelRow> labels;
 
-  @override
-  ConsumerState<_PinnedMailRow> createState() => _PinnedMailRowState();
-}
-
-class _PinnedMailRowState extends ConsumerState<_PinnedMailRow> {
-  bool _removing = false;
-
-  Future<void> _unpin() async {
-    setState(() => _removing = true);
-    await Future.delayed(context.motion(Motion.base));
-    if (!mounted) return;
-    await ref
-        .read(mailRepositoryProvider)
-        .setFlagged([widget.message.id], false);
-  }
-
-  void _openDetail() =>
-      context.pushScreen(MailDetailScreen(messageId: widget.message.id));
+  void _openDetail(BuildContext context) =>
+      context.pushScreen(MailDetailScreen(messageId: message.id));
 
   @override
-  Widget build(BuildContext context) {
-    return AnimatedSize(
-      duration: context.motion(Motion.base),
-      curve: Motion.standard,
-      alignment: Alignment.topCenter,
-      child: AnimatedOpacity(
-        duration: context.motion(Motion.fast),
-        opacity: _removing ? 0 : 1,
-        child: Align(
-          alignment: Alignment.topCenter,
-          heightFactor: _removing ? 0 : 1,
-          child: MailRow(
-            message: widget.message,
-            labels: widget.labels,
-            isSelected: false,
-            isSentFolder: false,
-            onTap: _openDetail,
-            onAvatarTap: _openDetail,
-            onLongPress: () {},
-            onFlagTap: _unpin,
-          ),
-        ),
-      ),
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isSelected = ref.watch(
+      selectionProvider.select((selection) => selection.contains(message.id)),
+    );
+    return MailRow(
+      message: message,
+      labels: labels,
+      isSelected: isSelected,
+      isSentFolder: false,
+      onTap: () {
+        if (ref.read(selectionProvider).isNotEmpty) {
+          ref.read(selectionProvider.notifier).toggle(message.id);
+          return;
+        }
+        _openDetail(context);
+      },
+      onAvatarTap: () =>
+          ref.read(selectionProvider.notifier).toggle(message.id),
+      onLongPress: () =>
+          ref.read(selectionProvider.notifier).toggle(message.id),
     );
   }
 }
@@ -789,9 +709,9 @@ class _SelectionActionBar extends ConsumerWidget {
                 icon: LucideIcons.folderInput,
                 label: 'Taşı',
                 menuChildren: folderMenuItems(ref, (target) async {
-                  await repository.moveToMailbox(
+                  await repository.moveToFolder(
                     messageIds: ids,
-                    target: target,
+                    targetMailboxId: target.id,
                   );
                   done();
                 }),
@@ -974,7 +894,9 @@ class _ListSkeleton extends StatelessWidget {
                       children: const [
                         ShimmerBar(width: 140, height: 11),
                         SizedBox(height: Space.xs),
-                        ShimmerBar(widthFactor: 1, height: 10),
+                        ShimmerBar(widthFactor: 0.85, height: 10),
+                        SizedBox(height: Space.xs),
+                        ShimmerBar(widthFactor: 0.65, height: 9),
                       ],
                     ),
                   ),
@@ -1112,4 +1034,145 @@ class _FilterMenuButton extends ConsumerWidget {
     MessageSort.senderAZ => 'Gönderene göre (A-Z)',
     MessageSort.subjectAZ => 'Konuya göre (A-Z)',
   };
+}
+
+/// Gelen Kutusu normal-mod üst çubuğu.
+///
+/// ┌──────────────────────────────────────────────────────┐
+/// │  [Avatar]  Başlık                    [Search][Filter]│
+/// │            hesap@adres.com                           │
+/// └──────────────────────────────────────────────────────┘
+///
+/// Outlook'taki gibi: hamburger buton yok. Avatar'a dokunmak drawer'ı açar.
+/// - Avatar: [KaydetAvatar] — mail satırlarıyla aynı ton sistemi (FNV-1a).
+/// - Başlık + email ikili hiyerarşi: [Column] içinde tek [Expanded].
+/// - Uzun email adresi ellipsis ile kesilir, butonlara taşmaz.
+/// - Tüm renkler [KaydetTokens]'dan gelir; widget içinde ham renk yok.
+/// - [PreferredSizeWidget] uygular — normal [AppBar] ile değiştirilebilir.
+class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
+  const _InboxAppBar({
+    required this.title,
+    required this.account,
+    required this.onMenuTap,
+    required this.onSearchTap,
+    required this.filterButton,
+  });
+
+  final String title;
+  final AccountRow? account;
+
+  /// Drawer'ı açan callback — avatar'a dokunulduğunda tetiklenir.
+  final VoidCallback onMenuTap;
+  final VoidCallback onSearchTap;
+  final Widget filterButton;
+
+  @override
+  Size get preferredSize => const Size.fromHeight(Dimens.appBarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final theme = Theme.of(context);
+    final account = this.account;
+
+    return Material(
+      color: t.appBarBg,
+      elevation: theme.appBarTheme.elevation ?? 0,
+      shadowColor: theme.appBarTheme.shadowColor,
+      surfaceTintColor: theme.appBarTheme.surfaceTintColor,
+      child: SafeArea(
+        bottom: false,
+        child: SizedBox(
+          height: Dimens.appBarHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              // ── Hesap avatarı (drawer tetikleyici) ───────────────────────
+              // Outlook'taki gibi: avatar'a dokunmak hamburger menünün
+              // yerini alır. InkWell doğrudan avatar etrafında — circular
+              // splash, Material inkwell üstüne yazılır.
+              Semantics(
+                button: true,
+                label: 'Klasörleri göster',
+                child: Tooltip(
+                  message: 'Klasörler',
+                  child: InkWell(
+                    onTap: onMenuTap,
+                    borderRadius: BorderRadius.circular(Radii.full),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Space.md,
+                        vertical: Space.sm,
+                      ),
+                      child: account != null
+                          ? KaydetAvatar(
+                              name: account.displayName,
+                              email: account.email,
+                              size: Dimens.avatarSize,
+                            )
+                          // Hesap yüklenmemişse sade bir yer tutucu ikon.
+                          : Icon(
+                              LucideIcons.menu,
+                              size: Dimens.avatarSize,
+                              color:
+                                  theme.appBarTheme.iconTheme?.color ??
+                                  t.textPrimary,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+
+              // ── Başlık + email adresi ─────────────────────────────────
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppText.titleMedium.copyWith(
+                        color:
+                            theme.appBarTheme.titleTextStyle?.color ??
+                            t.textPrimary,
+                      ),
+                    ),
+                    if (account != null)
+                      Text(
+                        account.email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppText.bodyMedium.copyWith(
+                          fontSize: 12.5 * AppText.scale,
+                          fontWeight: FontWeight.w500,
+                          color: t.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+              // ── Arama butonu ──────────────────────────────────────────
+              IconButton(
+                icon: const Icon(LucideIcons.search),
+                tooltip: 'Ara',
+                color:
+                    theme.appBarTheme.actionsIconTheme?.color ??
+                    theme.appBarTheme.iconTheme?.color ??
+                    t.textPrimary,
+                onPressed: onSearchTap,
+              ),
+
+              // ── Filtre butonu ─────────────────────────────────────────
+              filterButton,
+
+              const SizedBox(width: Space.xs),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

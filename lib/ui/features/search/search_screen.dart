@@ -661,12 +661,12 @@ Future<void> _openMessageResult(
 
   if (message.isDraft || message.outboxState == OutboxState.failed) {
     // Taslağa devam etmek Gelen Kutusu'ndaki aynı eylemle aynı hissettirsin
-    // (bkz. `MailListScreen._openCompose`) — bu yüzden burada da yatay push.
+    // (bkz. `MailListScreen._openCompose`) — Compose geçişiyle açılır.
     await openCompose(
       context,
       ref,
       draftId: message.id,
-      transitionStyle: KaydetTransitionStyle.horizontalPush,
+      transitionStyle: KaydetTransitionStyle.compose,
     );
     return;
   }
@@ -683,6 +683,5 @@ Future<void> _openContactResult(
     context,
     ref,
     initialTo: contact.email,
-    fullscreenDialog: true,
   );
 }

@@ -255,13 +255,32 @@ abstract final class MimeBuilder {
       final hasHtml = message.html != null && message.html!.trim().isNotEmpty;
       final hasAttachments = message.attachmentPaths.isNotEmpty;
 
+      // Düz metin + HTML ASLA kardeş (`multipart/mixed`) parçalar olarak
+      // gönderilmez: istemciler karışık parçaları art arda gösterir, yani
+      // alıcı önce düz metni sonra biçimli HTML'i (ya da tersini) görür ve
+      // hangisinin çizileceği istemciye göre değişir. Doğru yapı
+      // `multipart/alternative`dir: alıcının istemcisi biri seçer, HTML
+      // gösterebilen istemci biçimli olanı çizer (RFC 2046 §5.1.4 — en sadık
+      // biçim, yani HTML, SONA konur).
+      //
+      // Ekler varsa kök `multipart/mixed` olur ve alternatif çifti onun İLK
+      // çocuğu, ekler ise kardeşleridir.
       if (hasAttachments) {
         builder.setContentType(
           em.MediaType.fromSubtype(em.MediaSubtype.multipartMixed),
         );
-      }
-
-      if (hasHtml) {
+        if (hasHtml) {
+          builder.addMultipartAlternative(
+            plainText: message.plainText,
+            htmlText: message.html!,
+          );
+        } else {
+          builder.addTextPlain(message.plainText);
+        }
+      } else if (hasHtml) {
+        builder.setContentType(
+          em.MediaType.fromSubtype(em.MediaSubtype.multipartAlternative),
+        );
         builder.addTextPlain(message.plainText);
         builder.addTextHtml(message.html!);
       } else {

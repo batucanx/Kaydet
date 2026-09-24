@@ -59,7 +59,7 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
   }
 
   Future<void> _openCompose(String email) =>
-      openCompose(context, ref, initialTo: email, fullscreenDialog: true);
+      openCompose(context, ref, initialTo: email);
 
   Future<void> _addContact(int accountId) async {
     final nameController = TextEditingController();

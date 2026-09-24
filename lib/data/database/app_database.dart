@@ -489,6 +489,19 @@ class AppDatabase extends _$AppDatabase {
   ///
   /// Yerel (henüz gönderilmemiş) iletiler korunur — onların sunucuda
   /// karşılığı yoktur ve kaybolmaları veri kaybı demektir.
+  /// Klasörde sunucuda karşılığı olmayan (taslak/giden kutusu) ileti var mı?
+  Future<bool> hasLocalOnlyMessages(int mailboxId) async {
+    final row =
+        await (select(messages)
+              ..where(
+                (m) =>
+                    m.mailboxId.equals(mailboxId) & m.isLocalOnly.equals(true),
+              )
+              ..limit(1))
+            .getSingleOrNull();
+    return row != null;
+  }
+
   Future<void> purgeMailboxMessages(int mailboxId) async {
     final ids =
         await (select(messages)..where(
@@ -638,6 +651,20 @@ class AppDatabase extends _$AppDatabase {
             messages.mailboxId.equals(mailboxId) &
                 messages.isSeen.equals(false) &
                 messages.isDeleted.equals(false),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .watchSingle();
+  }
+
+  /// Cihazdaki tüm hesap ve klasörlerdeki okunmamış ileti toplamı.
+  /// Aynı ölçütü [countUnread] ile kullanır; böylece uygulama rozeti klasör
+  /// rozetleriyle aynı yerel veritabanı gerçeğini yansıtır.
+  Stream<int> watchAllUnreadCount() {
+    final count = countAll();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.isSeen.equals(false) & messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
         .watchSingle();

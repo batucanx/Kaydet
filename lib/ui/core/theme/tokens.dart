@@ -66,9 +66,61 @@ abstract final class Motion {
   static const Duration horizontalPush = Duration(milliseconds: 300);
   static const Duration horizontalPushBack = Duration(milliseconds: 250);
 
+  // Yeni İleti / Compose ekranının açılış ve kapanış süreleri (bkz.
+  // `KaydetTransitionStyle.compose`). iOS + Outlook tarzı, sakin ve
+  // akıcı bir geçiş için 280 ms giriş, 220 ms dönüş.
+  static const Duration compose = Duration(milliseconds: 280);
+  static const Duration composeBack = Duration(milliseconds: 220);
+
   static const Curve standard = Curves.easeOutCubic;
   static const Curve emphasized = Curves.fastOutSlowIn;
   static const Curve symmetric = Curves.easeInOut;
+}
+
+/// Yazma ekranının metin/vurgu rengi paleti.
+///
+/// Bunlar arayüz rengi değil, e-posta İÇERİĞİNE yazılan renklerdir: alıcının
+/// istemcisinde bu uygulamanın teması yoktur, bu yüzden açık/koyu temaya göre
+/// değişmezler. Yine de kural gereği ham renk yalnızca bu dosyada durur.
+abstract final class ComposePalette {
+  /// Metin rengi seçenekleri (`#RRGGBB`).
+  static const List<String> text = [
+    '#EF4444', // kırmızı
+    '#F97316', // turuncu
+    '#F5C518', // altın
+    '#22C55E', // yeşil
+    '#14B8A6', // turkuaz
+    '#3B82F6', // mavi
+    '#8B5CF6', // mor
+    '#EC4899', // pembe
+    '#9CA3AF', // gri
+  ];
+
+  /// Vurgu (arka plan) rengi seçenekleri (`#RRGGBB`).
+  static const List<String> highlight = [
+    '#FEF08A', // sarı
+    '#FED7AA', // turuncu
+    '#BBF7D0', // yeşil
+    '#BFDBFE', // mavi
+    '#E9D5FF', // mor
+    '#FBCFE8', // pembe
+  ];
+
+  static const Color _checkOnLight = Color(0xDD000000);
+  static const Color _checkOnDark = Color(0xFFFFFFFF);
+
+  /// `#RRGGBB` → [Color]. Geçersiz metin için `null`.
+  static Color? tryParse(String hex) {
+    final body = hex.startsWith('#') ? hex.substring(1) : hex;
+    if (body.length != 6) return null;
+    final value = int.tryParse(body, radix: 16);
+    return value == null ? null : Color(0xFF000000 | value);
+  }
+
+  /// Renk karesinin üzerindeki onay işaretinin rengi — karenin KENDİ
+  /// parlaklığına göre seçilir (tema değil), çünkü kare her temada aynıdır.
+  static Color onSwatch(Color swatch) =>
+      swatch.computeLuminance() > 0.5 ? _checkOnLight : _checkOnDark;
 }
 
 /// Sabit ölçüler.
@@ -80,7 +132,9 @@ abstract final class Dimens {
   // sığar; taşarsa `minHeight` olduğu için satır kendiliğinden büyür.
   // Kullanıcı isteğiyle sıkılaştırıldı: tek ekranda daha fazla ileti görünsün.
   static const double listRowMinHeight = 56;
-  static const double avatarSize = 36;
+  // Liste satırlarında gelen maillerin yanındaki avatar kutusu ölçeği.
+  // Sıkılaştırılmış tipografiyle orantılı durması için 32 dp olarak tutulur.
+  static const double avatarSize = 32;
   // Outlook'un hesap şeridindeki avatar ölçeği — yan menünün sol rayında
   // (bkz. `FolderDrawer`) hesap değiştirmeyi tek bakışta belirginleştirir.
   static const double navRailAvatarSize = 52;
@@ -181,27 +235,24 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     avatarTones: _lightAvatarTones,
   );
 
-  /// Koyu tema — varsayılan. Outlook mobil uygulamasının koyu temasından
-  /// alınan ekran görüntülerinin renk analizinden çıkarıldı.
+  /// Koyu tema — varsayılan.
   ///
-  /// App bar/durum çubuğu VE navigasyon drawer'ı saf siyah, aynı düzlemde
-  /// (`appBarBg` = `surfaceDeep`); liste ekranları (gelen kutusu vb.) ve
-  /// mail detayının okuma bölmesi ise gözü yormayan gri kömür tonunda
-  /// (`bg` = `readingBg`). `textSecondary`/`textTertiary`, referans
-  /// görsellerdeki beyaz metnin sırasıyla %62 ve %42 opaklığının bu gri
-  /// zemin üzerine düz renk karşılığıdır.
+  /// App bar/üst çubuk, navigasyon drawer'ı ve liste ekranları aynı yumuşak
+  /// antrasit tonunu kullanır; yükseltilmiş yüzeyler bunun biraz üzerindedir.
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
-    bg: Color(0xFF1C1C1E), // Gelen kutusu / liste ekranları
-    appBarBg: Color(0xFF000000),
-    readingBg: Color(0xFF1C1C1E), // Mail detayının okuma bölmesi
-    surface: Color(0xFF1C1C1E),
-    surfaceElevated: Color(0xFF2C2C2E),
-    surfaceDeep: Color(0xFF000000), // Drawer zemini — app bar'la aynı düzlem
+    bg: Color(0xFF242629), // Gelen kutusu / liste ekranları
+    appBarBg: Color(0xFF242629), // Üst çubuk — liste ile aynı gri tonda
+    readingBg: Color(0xFF242629), // Mail detayının okuma bölmesi
+    surface: Color(0xFF242629),
+    surfaceElevated: Color(0xFF34373A),
+    surfaceDeep: Color(
+      0xFF242629,
+    ), // Drawer zemini — liste ve app bar ile aynı gri tonda
     textPrimary: Color(0xFFFFFFFF),
     // beyaz %62/%42 opaklık, readingBg (1C1C1E) üzerine düz renk karşılığı
     textSecondary: Color(0xFFA9A9AA),
-    textTertiary: Color(0xFF7B7B7D),
+    textTertiary: Color(0xFF8A8D90),
     accent: Color(0xFF0078D4), // Fluent marka mavisi
     accentFill: Color(0xFF0078D4),
     onAccentFill: Color(0xFFFFFFFF),
@@ -215,8 +266,8 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     // `readingBg` (1C1C1E) üzerinde görünür kalması için beyaz %12
     // opaklığın düz renk karşılığına çekildi (saf siyah `bg` üzerinde de
     // fazlasıyla kontrastlı kalır).
-    divider: Color(0xFF37373A),
-    border: Color(0xFF37373A),
+    divider: Color(0xFF3D4043),
+    border: Color(0xFF414448),
     scrim: Color(0x8C000000),
     avatarTones: _darkAvatarTones,
   );

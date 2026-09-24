@@ -74,6 +74,18 @@ final class DuplicateFolderFailure extends AppFailure {
   bool get isActionable => true;
 }
 
+/// Klasör adı geçersiz (boş ya da hiyerarşi ayırıcısı içeriyor).
+final class InvalidFolderNameFailure extends AppFailure {
+  const InvalidFolderNameFailure({super.detail});
+
+  @override
+  String get userMessage =>
+      'Klasör adı boş bırakılamaz ve dizin ayırıcı karakter içeremez.';
+
+  @override
+  bool get isActionable => true;
+}
+
 /// Sistem klasörü (Gelen Kutusu, Gönderilenler, Taslaklar, Çöp Kutusu,
 /// İstenmeyen, Arşiv) üzerinde yeniden adlandırma/silme/taşıma denendi.
 final class SystemFolderProtectedFailure extends AppFailure {

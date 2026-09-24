@@ -312,33 +312,47 @@ class StatusBanner extends StatelessWidget {
 
 /// Bölüm başlığı.
 class SectionHeader extends StatelessWidget {
-  const SectionHeader(this.title, {super.key, this.trailing});
+  const SectionHeader(
+    this.title, {
+    super.key,
+    this.trailing,
+    this.showDivider = false,
+  });
 
   final String title;
   final Widget? trailing;
+  final bool showDivider;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
+      padding: EdgeInsets.fromLTRB(
         Space.lg,
-        Space.xl,
+        showDivider ? Space.lg : Space.xl,
         Space.sm,
-        Space.sm,
+        showDivider ? Space.xs : Space.sm,
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Text(
-              title,
-              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                color: t.textTertiary,
-                letterSpacing: 0.8,
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: t.textTertiary,
+                    letterSpacing: 0.8,
+                  ),
+                ),
               ),
-            ),
+              ?trailing,
+            ],
           ),
-          ?trailing,
+          if (showDivider)
+            const Divider(height: Space.md, thickness: Dimens.dividerThickness),
         ],
       ),
     );
@@ -597,12 +611,7 @@ class _ShimmerSurfaceState extends State<ShimmerSurface>
 /// görünmesi istenen yerlerde) çevresindeki alana oranla; `width` verilirse
 /// sabit piksel genişliğinde çizilir.
 class ShimmerBar extends StatelessWidget {
-  const ShimmerBar({
-    super.key,
-    this.width,
-    this.widthFactor,
-    this.height = 14,
-  });
+  const ShimmerBar({super.key, this.width, this.widthFactor, this.height = 14});
 
   final double? width;
   final double? widthFactor;

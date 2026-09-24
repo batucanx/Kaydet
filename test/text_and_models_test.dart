@@ -32,16 +32,14 @@ void main() {
     });
 
     test('br etiketleri satır sonuna döner', () {
-      expect(
-        TextExtraction.htmlToPlain('Bir<br>İki<br/>Üç'),
-        'Bir\nİki\nÜç',
-      );
+      expect(TextExtraction.htmlToPlain('Bir<br>İki<br/>Üç'), 'Bir\nİki\nÜç');
     });
   });
 
   group('önizleme metni', () {
     test('alıntılanmış yanıtı atlar', () {
-      const body = 'Teşekkürler, uygundur.\n\n'
+      const body =
+          'Teşekkürler, uygundur.\n\n'
           '14 Eylül 2026 tarihinde Ahmet Yılmaz <a@x.com> yazdı:\n'
           '> Merhaba, teklifi gönderiyorum.';
       expect(TextExtraction.buildPreview(body), 'Teşekkürler, uygundur.');
@@ -232,33 +230,48 @@ void main() {
       expect(formatListDate(date, now: now), '13:54');
     });
 
-    test('dünkü ileti "Dün" gösterir', () {
+    test('dünkü ileti gün ve saati gösterir', () {
+      expect(formatListDate(DateTime(2026, 9, 13, 10), now: now), 'Dün 10:00');
+    });
+
+    test('önceki gün Türkçe kısa adı ve saati gösterir', () {
+      // 2026-09-10 Perşembe; aynı haftadan önceki haftaya geçişi de kapsar.
+      expect(formatListDate(DateTime(2026, 9, 10, 10), now: now), 'Per 10:00');
+    });
+
+    test('İngilizce locale kısa İngilizce gün adı üretir', () {
       expect(
-        formatListDate(DateTime(2026, 9, 13, 10), now: now),
-        'Dün',
+        formatListDate(DateTime(2026, 9, 10, 10), now: now, locale: 'en'),
+        'Thu 10:00',
       );
     });
 
-    test('son hafta gün adı gösterir', () {
-      // 2026-09-10 Perşembe
-      expect(
-        formatListDate(DateTime(2026, 9, 10, 10), now: now),
-        'Per',
-      );
-    });
+    test(
+      'takvim günü karşılaştırması gece yarısı ve ay/yıl geçişini izler',
+      () {
+        expect(
+          formatListDate(
+            DateTime(2025, 12, 31, 23, 59),
+            now: DateTime(2026, 1, 1, 0, 1),
+          ),
+          'Dün 23:59',
+        );
+        expect(
+          formatListDate(
+            DateTime(2026, 9, 14, 23, 59),
+            now: DateTime(2026, 9, 15, 0, 1),
+          ),
+          'Dün 23:59',
+        );
+      },
+    );
 
     test('aynı yıl gün ve ay gösterir', () {
-      expect(
-        formatListDate(DateTime(2026, 3, 5, 10), now: now),
-        '5 Mar',
-      );
+      expect(formatListDate(DateTime(2026, 3, 5, 10), now: now), '5 Mar');
     });
 
     test('geçmiş yıl tam tarih gösterir', () {
-      expect(
-        formatListDate(DateTime(2025, 3, 5, 10), now: now),
-        '05.03.25',
-      );
+      expect(formatListDate(DateTime(2025, 3, 5, 10), now: now), '05.03.25');
     });
 
     test('detay tarihi Türkçe ay ve gün adı içerir', () {
@@ -275,12 +288,18 @@ void main() {
 
     test('göreli süre', () {
       final now = DateTime(2026, 9, 14, 15, 0);
-      expect(formatRelative(now.subtract(const Duration(seconds: 10)), now: now),
-          'az önce');
-      expect(formatRelative(now.subtract(const Duration(minutes: 5)), now: now),
-          '5 dk önce');
-      expect(formatRelative(now.subtract(const Duration(hours: 3)), now: now),
-          '3 sa önce');
+      expect(
+        formatRelative(now.subtract(const Duration(seconds: 10)), now: now),
+        'az önce',
+      );
+      expect(
+        formatRelative(now.subtract(const Duration(minutes: 5)), now: now),
+        '5 dk önce',
+      );
+      expect(
+        formatRelative(now.subtract(const Duration(hours: 3)), now: now),
+        '3 sa önce',
+      );
     });
   });
 

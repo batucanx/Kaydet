@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_quill/quill_delta.dart' show Delta;
-import 'package:flutter_quill_delta_from_html/flutter_quill_delta_from_html.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -17,6 +16,8 @@ import '../../../core/date_format.dart';
 import '../../../core/turkish.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/compose_formatting.dart';
+import '../../../domain/use_cases/email_html_codec.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
 import '../../core/theme/app_theme.dart';
@@ -83,6 +84,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _subject = TextEditingController();
   late final QuillController _quill;
   final _bodyFocus = FocusNode();
+
+  /// Editörün state'ini sabitler. Gövde bir `ListView` çocuğudur ve
+  /// üstündeki alanların sayısı değişince (Bilgi/Gizli açılıp kapanınca, ek
+  /// eklenince/çıkarılınca) dizini kayar; anahtarsız çocuk dizine göre
+  /// eşleştiği için editör yeniden yaratılırdı.
+  final _editorKey = GlobalKey();
   final _toFocus = FocusNode();
   final _ccFocus = FocusNode();
   final _bccFocus = FocusNode();
@@ -141,13 +148,28 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // `_prefill` taslak/yanıt ise gerçek sahibiyle değiştirecek (aşağı bkz.);
     // yeni bir iletide bu, ilk karede gösterilecek tek değerdir.
     _fromAccountId = ref.read(accountIdProvider);
-    _quill = QuillController.basic();
+    _quill = _createQuillController();
     _quill.addListener(_onChanged);
     for (final controller in [_to, _cc, _bcc, _subject]) {
       controller.addListener(_onChanged);
     }
     scheduleMicrotask(_prefill);
   }
+
+  /// Dışarıdan yapıştırılan zengin içerik keyfi boyut/öznitelik taşıyabilir
+  /// (bkz. [ComposeFontSize]); editöre girmeden [ComposeDeltaSanitizer]'dan
+  /// geçirilir. `flutter_quill` bu kancayı `@experimental` işaretlemiş ama
+  /// belgelenmiş tek yol bu; sürüm `pubspec.lock` ile sabit.
+  static QuillController _createQuillController() => QuillController.basic(
+    config: QuillControllerConfig(
+      // ignore: experimental_member_use
+      clipboardConfig: QuillClipboardConfig(
+        // ignore: experimental_member_use
+        onRichTextPaste: (delta, _) async =>
+            ComposeDeltaSanitizer.sanitize(delta),
+      ),
+    ),
+  );
 
   @override
   void didChangeDependencies() {
@@ -272,13 +294,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   /// Kaydedilmiş gövdeyi düzenleyiciye yükler.
   ///
-  /// HTML varsa biçimlendirmeyi korumak için önce o denenir; ayrıştırma
-  /// başarısız olursa (ör. beklenmeyen bir etiket) düz metne düşülür —
+  /// HTML varsa biçimlendirmeyi korumak için önce o denenir (bkz.
+  /// [EmailHtmlCodec.decode]); ayrıştırma başarısız olursa düz metne düşülür —
   /// metin hiçbir zaman kaybolmaz, yalnızca biçim kaybolabilir.
   void _loadBody(String? html, String? plainText) {
     if (html != null && html.trim().isNotEmpty) {
       try {
-        final delta = HtmlToDelta().convert(html);
+        final delta = EmailHtmlCodec.decode(html);
         _quill.document = Document.fromDelta(delta);
         return;
       } on Object {
@@ -386,11 +408,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   String get _bodyPlainText => _quill.document.toPlainText().trim();
 
-  /// Zengin metni gönderim/kaydetme için HTML'e çevirir; içerik boşsa
-  /// `null` döner (düz taslak olarak kalır).
+  /// Zengin metni gönderim/kaydetme için e-posta HTML'ine çevirir (bkz.
+  /// [EmailHtmlCodec.encode]); içerik boşsa `null` döner (düz taslak olarak
+  /// kalır).
   String? get _bodyHtml {
     if (_bodyPlainText.isEmpty) return null;
-    return _deltaToHtml(_quill.document.toDelta());
+    return EmailHtmlCodec.encode(_quill.document.toDelta());
   }
 
   bool get _hasContent =>
@@ -944,6 +967,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                         context,
                       ).textTheme.bodyLarge!.copyWith(color: t.textPrimary),
                       child: QuillEditor.basic(
+                        key: _editorKey,
                         controller: _quill,
                         focusNode: _bodyFocus,
                         config: const QuillEditorConfig(
@@ -953,6 +977,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                           placeholder: 'İletinizi buraya yazın…',
                           textCapitalization: TextCapitalization.sentences,
                           minHeight: 220,
+                          customStyleBuilder: _composeCustomStyle,
                         ),
                       ),
                     ),
@@ -988,60 +1013,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   };
 }
 
-/// Quill Delta'yı gönderim için HTML'e çevirir.
+/// Satır aralığını editörde giden HTML'dekiyle BİREBİR çizer.
 ///
-/// KAYDET kalın/italik/altı çizili + metin/vurgu rengi + yazı boyutu ve
-/// belge geneli satır aralığını destekler; bu yüzden tam bir Delta→HTML
-/// kütüphanesi yerine bu dar kapsamlı, bağımsız dönüştürücü yeterlidir.
-/// Aynı biçim [HtmlToDelta] tarafından geri okunabilir (bkz. `_loadBody`),
-/// böylece taslak yeniden açıldığında biçimlendirme korunur. Satır aralığı
-/// tek bir belge genelindeki değerdir (ilk bulunan `line-height`
-/// kullanılır) — Quill'de gerçek satır bazlı ayrıştırma bu basit
-/// dönüştürücünün kapsamı dışında bırakıldı.
-String _deltaToHtml(Delta delta) {
-  final buffer = StringBuffer();
-  double? lineHeight;
-  for (final op in delta.toList()) {
-    final attrs = op.attributes ?? const <String, dynamic>{};
-    final rawLineHeight = attrs['line-height'];
-    if (lineHeight == null && rawLineHeight is num) {
-      lineHeight = rawLineHeight.toDouble();
-    }
-
-    final data = op.data;
-    if (data is! String) continue; // Gömülü içerik (ör. görsel) desteklenmiyor.
-    final lines = data.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var segment = _escapeHtml(lines[i]);
-      if (segment.isNotEmpty) {
-        final styles = <String>[];
-        final color = attrs['color'];
-        final background = attrs['background'];
-        final size = attrs['size'];
-        if (color is String) styles.add('color:$color');
-        if (background is String) styles.add('background-color:$background');
-        if (size is String) styles.add('font-size:$size');
-        if (styles.isNotEmpty) {
-          segment = '<span style="${styles.join(';')}">$segment</span>';
-        }
-        if (attrs['bold'] == true) segment = '<b>$segment</b>';
-        if (attrs['italic'] == true) segment = '<i>$segment</i>';
-        if (attrs['underline'] == true) segment = '<u>$segment</u>';
-        buffer.write(segment);
-      }
-      if (i != lines.length - 1) buffer.write('<br>');
-    }
-  }
-
-  final body = buffer.toString();
-  if (lineHeight == null) return body;
-  return '<div style="line-height:$lineHeight">$body</div>';
+/// Quill yalnızca 4 sabit `line-height` değerini tanır ve kendi tablosundaki
+/// yüksekliği kullanır: 1.15 → 1.30, 1.5 → 1.55 çiziliyordu — editörde
+/// görülen aralık alıcıya giden aralıktan farklıydı. Bu oluşturucu Quill'in
+/// tablosunu geçersiz kılar (bkz. [ComposeLineSpacing]).
+TextStyle _composeCustomStyle(Attribute attribute) {
+  if (attribute.key != Attribute.lineHeight.key) return const TextStyle();
+  final spacing = ComposeLineSpacing.fromAttribute(attribute.value);
+  return TextStyle(height: spacing?.height);
 }
-
-String _escapeHtml(String text) => text
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
 
 class _RecipientField extends StatelessWidget {
   const _RecipientField({
@@ -1445,46 +1427,22 @@ class _SignatureMenuButton extends StatelessWidget {
   }
 }
 
-const _textColors = <String>[
-  '#EF4444', // kırmızı
-  '#F97316', // turuncu
-  '#F5C518', // altın
-  '#22C55E', // yeşil
-  '#14B8A6', // turkuaz
-  '#3B82F6', // mavi
-  '#8B5CF6', // mor
-  '#EC4899', // pembe
-  '#9CA3AF', // gri
+/// Yazı boyutu / satır aralığı seçeneklerinin etiketleri. Değerler ve
+/// px/çarpan karşılıkları [ComposeFontSize]/[ComposeLineSpacing] modelindedir;
+/// arayüz yalnızca bu modelin seçeneklerini sunar.
+const _fontSizeLabels = <(String, ComposeFontSize)>[
+  ('Küçük', ComposeFontSize.small),
+  ('Normal', ComposeFontSize.normal),
+  ('Büyük', ComposeFontSize.large),
+  ('Çok büyük', ComposeFontSize.extraLarge),
 ];
 
-const _highlightColors = <String>[
-  '#FEF08A', // sarı
-  '#FED7AA', // turuncu
-  '#BBF7D0', // yeşil
-  '#BFDBFE', // mavi
-  '#E9D5FF', // mor
-  '#FBCFE8', // pembe
+const _lineSpacingLabels = <(String, ComposeLineSpacing)>[
+  ('Normal', ComposeLineSpacing.normal),
+  ('Sıkı (1,0)', ComposeLineSpacing.tight),
+  ('1,5 satır', ComposeLineSpacing.oneAndHalf),
+  ('Çift satır', ComposeLineSpacing.doubled),
 ];
-
-const _fontSizes = <(String, String?)>[
-  ('Küçük', '12px'),
-  ('Normal', null),
-  ('Büyük', '18px'),
-  ('Çok büyük', '24px'),
-];
-
-const _lineHeights = <(String, double?)>[
-  ('Normal', null),
-  ('Sıkı (1.15)', 1.15),
-  ('1,5 satır', 1.5),
-  ('Çift satır', 2),
-];
-
-Color _parseHexColor(String hex) =>
-    Color(int.parse('FF${hex.replaceFirst('#', '')}', radix: 16));
-
-Color _contrastingIconColor(Color background) =>
-    background.computeLuminance() > 0.5 ? Colors.black87 : Colors.white;
 
 /// Araç çubuğunun biçimlendirme moduna geçmiş hâli (bkz. `_ComposeToolbar`)
 /// — "Biçimlendir" ikonuna dokunulduğunda ayrı bir satır AÇILMAZ, araç
@@ -1512,13 +1470,20 @@ class _FormatToolbarRow extends StatelessWidget {
     return value is String ? value : null;
   }
 
-  double? _currentLineHeight() {
-    final value = controller
-        .getSelectionStyle()
-        .attributes[Attribute.lineHeight.key]
-        ?.value;
-    return value is num ? value.toDouble() : null;
-  }
+  ComposeFontSize _currentFontSize() =>
+      ComposeFontSize.fromAttribute(
+        controller.getSelectionStyle().attributes[Attribute.size.key]?.value,
+      ) ??
+      ComposeFontSize.normal;
+
+  ComposeLineSpacing _currentLineSpacing() =>
+      ComposeLineSpacing.fromAttribute(
+        controller
+            .getSelectionStyle()
+            .attributes[Attribute.lineHeight.key]
+            ?.value,
+      ) ??
+      ComposeLineSpacing.normal;
 
   void _toggle(Attribute attribute) {
     final active = _isActive(attribute);
@@ -1532,17 +1497,22 @@ class _FormatToolbarRow extends StatelessWidget {
     controller.formatSelection(Attribute.clone(attribute, value));
   }
 
-  void _applySize(String? value) =>
-      controller.formatSelection(Attribute.clone(Attribute.size, value));
+  /// Yalnızca kontrollü seviyeler yazılır (bkz. [ComposeFontSize]); serbest
+  /// bir `font-size` metni editörü çökertir. Biçim yalnızca seçili metne (ya
+  /// da imleçten sonra yazılacak metne) uygulanır — ekranı ölçeklemez.
+  void _applySize(ComposeFontSize size) => controller.formatSelection(
+    Attribute.clone(Attribute.size, size.attributeValue),
+  );
 
-  void _applyLineHeight(double? value) =>
-      controller.formatSelection(LineHeightAttribute(lineHeight: value));
+  void _applyLineSpacing(ComposeLineSpacing spacing) => controller
+      .formatSelection(LineHeightAttribute(lineHeight: spacing.attributeValue));
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final textColor = _currentString(Attribute.color.key);
-    final backgroundColor = _currentString(Attribute.background.key);
+    // Seçime bağlı göstergeler (renk, boyut, satır aralığı) `AnimatedBuilder`
+    // İÇİNDE okunur: bu widget yalnızca üst öğe yeniden kurulunca yenilenir,
+    // imleç boşken seçilen biçim ise yalnızca denetleyiciyi bildirir.
     return AnimatedBuilder(
       animation: controller,
       builder: (context, _) => Row(
@@ -1584,33 +1554,33 @@ class _FormatToolbarRow extends StatelessWidget {
                     icon: LucideIcons.palette,
                     label: 'Metin rengi',
                     title: 'METİN RENGİ',
-                    colors: _textColors,
-                    current: textColor,
+                    colors: ComposePalette.text,
+                    current: _currentString(Attribute.color.key),
                     onSelected: (value) => _applyColor(false, value),
                   ),
                   _ColorMenuButton(
                     icon: LucideIcons.paintBucket,
                     label: 'Vurgu rengi',
                     title: 'VURGU RENGİ',
-                    colors: _highlightColors,
-                    current: backgroundColor,
+                    colors: ComposePalette.highlight,
+                    current: _currentString(Attribute.background.key),
                     onSelected: (value) => _applyColor(true, value),
                   ),
-                  _OptionMenuButton<String?>(
+                  _OptionMenuButton<ComposeFontSize>(
                     icon: LucideIcons.caseSensitive,
                     label: 'Yazı boyutu',
-                    isActive: _currentString(Attribute.size.key) != null,
-                    options: _fontSizes,
-                    current: _currentString(Attribute.size.key),
+                    isActive: _currentFontSize() != ComposeFontSize.normal,
+                    options: _fontSizeLabels,
+                    current: _currentFontSize(),
                     onSelected: _applySize,
                   ),
-                  _OptionMenuButton<double?>(
+                  _OptionMenuButton<ComposeLineSpacing>(
                     icon: LucideIcons.alignVerticalSpaceAround,
                     label: 'Satır aralığı',
-                    isActive: _isActive(Attribute.lineHeight),
-                    options: _lineHeights,
-                    current: _currentLineHeight(),
-                    onSelected: _applyLineHeight,
+                    isActive: _currentLineSpacing() != ComposeLineSpacing.normal,
+                    options: _lineSpacingLabels,
+                    current: _currentLineSpacing(),
+                    onSelected: _applyLineSpacing,
                   ),
                 ],
               ),
@@ -1725,7 +1695,7 @@ class _ColorMenuButton extends StatelessWidget {
                 ),
                 for (final hex in colors)
                   _SwatchButton(
-                    color: _parseHexColor(hex),
+                    color: ComposePalette.tryParse(hex),
                     isSelected: current?.toLowerCase() == hex.toLowerCase(),
                     onSelected: () => onSelected(hex),
                   ),
@@ -1738,7 +1708,7 @@ class _ColorMenuButton extends StatelessWidget {
         icon: icon,
         label: label,
         isActive: current != null,
-        tintColor: current != null ? _parseHexColor(current!) : null,
+        tintColor: current != null ? ComposePalette.tryParse(current!) : null,
         onTap: () => controller.isOpen ? controller.close() : controller.open(),
       ),
     );
@@ -1786,7 +1756,7 @@ class _SwatchButton extends StatelessWidget {
                 ? Icon(
                     LucideIcons.check,
                     size: 16,
-                    color: _contrastingIconColor(color!),
+                    color: ComposePalette.onSwatch(color!),
                   )
                 : child,
           ),

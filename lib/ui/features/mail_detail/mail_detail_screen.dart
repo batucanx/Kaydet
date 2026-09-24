@@ -777,25 +777,19 @@ class _BodyShimmer extends StatelessWidget {
 /// ile İKİ (veya daha fazla) parmağın konumu izlenir ve ölçek/kaydırma elle
 /// hesaplanıp bir `Transform` ile uygulanır — jest arenasına HİÇ girilmez
 /// (`Listener`, `GestureRecognizer` gibi bir hareketi tekeline almaz, sadece
-/// izler). Böylece tek parmakla kaydırma, bağlantı dokunuşu, uzun basmayla
-/// metin seçme ve yatay sürükleme (`_HtmlWebView`nin kendi tanıyıcıları)
-/// aynen öncekiler gibi çalışmaya devam eder; yalnızca ikinci parmak
-/// eklendiğinde yakınlaştırma devreye girer. Büyütülen alan kendi kutusunun
+/// izler). Böylece normal boyda dış kaydırma, bağlantı dokunuşu ve uzun
+/// basmayla metin seçme korunur; yalnızca ikinci parmak eklendiğinde
+/// yakınlaştırma devreye girer. Büyütülen alan kendi kutusunun
 /// sınırlarıyla kırpılır (`ClipRect`) — komşu widget'ların (konu başlığı,
 /// ekler) üstüne taşmaz.
 ///
-/// BİLİNÇLİ SINIRLAMA: yakınlaştırılmışken TEK parmakla sürükleme, dıştaki
-/// `CustomScrollView`ı kaydırmaya devam eder (büyütülmüş alanı olduğu gibi
-/// yukarı/aşağı kaydırır); yakınlaştırılmış görünüm İÇİNDE gezinmek pinch'i
-/// sürdürerek İKİ parmakla yapılır (native fotoğraf görüntüleyicilerdeki
-/// gibi — ölçek sabit tutulup yalnızca iki parmak birlikte kaydırılabilir).
-/// Gerçek bir tarayıcıdaki "yakınlaştır, sonra tek parmakla gez" hissinin
-/// tam eşleniği değil, ama bunun bedeli ağır: tek parmağı yakınlaştırılmışken
-/// ele geçirip ölçek 1'e dönünce dıştaki kaydırmaya geri bırakmak,
-/// `Scrollable`ın kendi tanıyıcısıyla jest arenasında rekabete giren özel bir
-/// `GestureRecognizer` gerektirir — bu da yukarıdaki "arenaya hiç girilmez"
-/// ilkesini bozup bağlantı dokunuşu/metin seçimi/yatay kaydırmayı regresyona
-/// sokma riski taşır.
+/// Normal boyda gövde, ekranın `CustomScrollView` kaydırmasına katılır.
+/// Yakınlaştırıldığında bu widget'ın koşullu `PanGestureRecognizer`ı tek
+/// parmaklı sürüklemeyi devralır ve dönüşümü hem yatay hem dikey günceller;
+/// iki parmaklı pinch ise aşağıdaki `Listener` tarafından izlenmeye devam
+/// eder. WebView'ın yerel yakınlaştırması kapalıdır ve HTML düzeni Flutter
+/// dönüşümünden habersizdir, bu yüzden pan WebView'ın kendi scroll alanında
+/// değil, aynı görsel dönüşüm katmanında yapılmalıdır.
 class _PinchZoomableBody extends StatefulWidget {
   const _PinchZoomableBody({required this.contentKey, required this.child});
 
@@ -1015,6 +1009,23 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
     }
   }
 
+  void _onPanUpdate(DragUpdateDetails details) {
+    // Listener aynı anda ham pointer sayısını tutar. İki parmaklı pinch'te
+    // PanGestureRecognizer'ın centroid hareketini ayrıca uygulamayarak
+    // yakınlaştırma ile sürüklemenin iki kez sayılmasını önler.
+    if (_targetScale <= _minScale || _pointers.length != 1) return;
+    _ticker.stop();
+    final next = _clamp(_offset + details.delta, _scale);
+    setState(() {
+      _targetOffset = next;
+      _offset = next;
+    });
+  }
+
+  void _onPanEnd(DragEndDetails details) {
+    if (_pointers.isEmpty) _snapToBounds();
+  }
+
   /// Son parmak da kalkınca: kauçuk bantla sınırın az ötesindeyse geçerli
   /// aralığa, 1'e yakınsa tam kimliğe (`scale=1, offset=0`) yumuşakça
   /// toparlar — `_onTick` bunu akıcı bir animasyona çevirir, aksi halde
@@ -1071,6 +1082,21 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
     // yerleşimde ÖLÇÜSÜ değiştiğinde (içerik yüklendikçe, ekran döndükçe)
     // bunu yukarı bildirir; boy bir sonraki karede (yerleşim kesinleştikten
     // sonra) `_measureSize` ile yeniden okunur (bkz. `_size` alan belgesi).
+    final panGestures = _scale > _minScale
+        ? <Type, GestureRecognizerFactory<OneSequenceGestureRecognizer>>{
+            PanGestureRecognizer:
+                GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
+                  PanGestureRecognizer.new,
+                  (recognizer) => recognizer
+                    ..onUpdate = _onPanUpdate
+                    ..onEnd = _onPanEnd,
+                ),
+          }
+        : const <
+            Type,
+            GestureRecognizerFactory<OneSequenceGestureRecognizer>
+          >{};
+
     return NotificationListener<SizeChangedLayoutNotification>(
       onNotification: (_) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
@@ -1079,18 +1105,22 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
       child: SizeChangedLayoutNotifier(
         child: ClipRect(
           key: _boundsKey,
-          child: Listener(
+          child: RawGestureDetector(
+            gestures: panGestures,
             behavior: HitTestBehavior.translucent,
-            onPointerDown: _onPointerDown,
-            onPointerMove: _onPointerMove,
-            onPointerUp: (e) => _onPointerGone(e.pointer),
-            onPointerCancel: (e) => _onPointerGone(e.pointer),
-            child: Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.identity()
-                ..translate(_offset.dx, _offset.dy)
-                ..scale(_scale),
-              child: widget.child,
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerDown: _onPointerDown,
+              onPointerMove: _onPointerMove,
+              onPointerUp: (e) => _onPointerGone(e.pointer),
+              onPointerCancel: (e) => _onPointerGone(e.pointer),
+              child: Transform(
+                alignment: Alignment.center,
+                transform: Matrix4.identity()
+                  ..translate(_offset.dx, _offset.dy)
+                  ..scale(_scale),
+                child: widget.child,
+              ),
             ),
           ),
         ),
@@ -1113,8 +1143,8 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
 /// Kendi içinde KAYDIRMAZ: render betiği içeriğin yüksekliğini bildirir (bkz.
 /// `MailHtmlDocument.layoutChannel`) ve WebView o boya uzatılır; dikey
 /// kaydırma, başlıkla birlikte ekranın tek `CustomScrollView`ındadır. WebView
-/// yalnızca dokunma (bağlantılar), uzun basma (metin seçimi) ve yatay sürükleme
-/// (sığmayan geniş içerik) hareketlerini alır. Yakınlaştırma kapalıdır:
+/// yalnızca dokunma (bağlantılar) ve uzun basma (metin seçimi) hareketlerini
+/// alır. Yakınlaştırma kapalıdır:
 /// içerik boyundaki bir WebView'da büyütülen içerik dikeyde kaydırılamazdı.
 /// Sığmayan sabit genişlikli e-postalar Android'de yine "ekrana sığdır" ile
 /// açılır (`useWideViewPort` + overview kipi, yakınlaştırma ayarından
@@ -1140,15 +1170,11 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   /// iletiler bunun çok altında kalır.
   static const double _maxHeight = 100000;
 
-  /// WebView'ın kendisine aldığı hareketler. Listede olmayan dikey sürükleme
-  /// dıştaki kaydırma alanında kalır — gövdenin üstünden de kaydırılır ve
-  /// başlık geçişi çalışır. Tek dokunuşlar (bağlantılar) listede olmasa da
-  /// başka hiçbir tanıyıcı sahiplenmediği için WebView'a ulaşır.
+  /// Uzun basma WebView'ın metin seçimini korur. Tek parmak sürüklemesi,
+  /// gövde normal boydayken dıştaki kaydırma alanında; büyütülmüşken ise
+  /// `_PinchZoomableBody`ın pan tanıyıcısındadır.
   static final Set<Factory<OneSequenceGestureRecognizer>> _gestures = {
     Factory<LongPressGestureRecognizer>(LongPressGestureRecognizer.new),
-    Factory<HorizontalDragGestureRecognizer>(
-      HorizontalDragGestureRecognizer.new,
-    ),
   };
 
   late final WebViewController _controller;
@@ -1522,7 +1548,6 @@ class _ActionBar extends ConsumerWidget {
       ref,
       replyToId: message.id,
       mode: mode,
-      fullscreenDialog: true,
       noticeBottomInset: height,
     );
 
@@ -1601,7 +1626,6 @@ class _MoreMenu extends ConsumerWidget {
             ref,
             replyToId: message.id,
             mode: ComposeMode.replyAll,
-            fullscreenDialog: true,
             noticeBottomInset: _ActionBar.height,
           ),
           child: const Text('Tümünü yanıtla'),
@@ -1640,9 +1664,9 @@ class _MoreMenu extends ConsumerWidget {
           animated: true,
           leadingIcon: const Icon(LucideIcons.folderInput, size: IconSize.sm),
           menuChildren: folderMenuItems(ref, (target) async {
-            await repository.moveToMailbox(
+            await repository.moveToFolder(
               messageIds: [message.id],
-              target: target,
+              targetMailboxId: target.id,
             );
             if (context.mounted) Navigator.of(context).pop();
           }),

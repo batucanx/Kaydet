@@ -314,6 +314,52 @@ void main() {
       expect(find.text('3 seçildi'), findsOneWidget);
     });
 
+    appTest(
+        'seçim moduna geçildiğinde Sabitlenenler bölümü kaybolmaz ve durumunu korur',
+        (tester) async {
+      await seedAccount();
+      imap.seedInbox([
+        envelope(uid: 1, subject: 'Sabit 1', flagged: true),
+        envelope(uid: 2, subject: 'Sabit 2', flagged: true),
+        envelope(uid: 3, subject: 'Sabit 3', flagged: true),
+        envelope(uid: 4, subject: 'Normal Mail 1'),
+        envelope(uid: 5, subject: 'Normal Mail 2'),
+      ]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      // 3 sabitli ileti olduğu için daraltılabilir başlık görünür, içerik collapsed durumdadır.
+      expect(find.text('SABİTLENENLER (3)'), findsOneWidget);
+      expect(find.text('Sabit 1'), findsNothing);
+      expect(find.text('Normal Mail 1'), findsOneWidget);
+
+      // Normal bir iletinin avatarına dokunarak seçim moduna gir.
+      await tester.tap(find.byType(InkResponse).first);
+      await tester.pump();
+
+      // Seçim moduna girildi.
+      expect(find.text('1 seçildi'), findsOneWidget);
+
+      // SABİTLENENLER bölümü KAYBOLMAMALI ve collapsed kalmalı! Sabitlenenler normal listeye dökülmemeli.
+      expect(find.text('SABİTLENENLER (3)'), findsOneWidget);
+      expect(find.text('Sabit 1'), findsNothing);
+      expect(find.text('Normal Mail 1'), findsOneWidget);
+
+      // Sabitlenenler başlığına dokunulduğunda expand edilmeli
+      await tester.tap(find.text('SABİTLENENLER (3)'));
+      await tester.pumpAndSettle();
+      expect(find.text('Sabit 1'), findsOneWidget);
+
+      // Seçim modundan çık
+      await tester.tap(find.byTooltip('Vazgeç'));
+      await tester.pumpAndSettle();
+
+      // Expanded durumu korunmalı
+      expect(find.text('SABİTLENENLER (3)'), findsOneWidget);
+      expect(find.text('Sabit 1'), findsOneWidget);
+    });
+
     appTest('silme iletiyi listeden anında kaldırır', (tester) async {
       await seedAccount();
       imap.seedInbox([
