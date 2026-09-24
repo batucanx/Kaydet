@@ -126,6 +126,23 @@ class AppSettingsStore {
     );
   }
 
+  static const _kCollapsedFolders = 'kaydet.collapsedFolders.';
+
+  /// Hesap bazında daraltılmış (alt klasörleri gizlenmiş) klasör id'lerini okur.
+  Set<int> readCollapsedFolders(int accountId) {
+    final list = _prefs.getStringList('$_kCollapsedFolders$accountId');
+    if (list == null) return const {};
+    return list.map(int.tryParse).whereType<int>().toSet();
+  }
+
+  /// Hesap bazında daraltılmış klasör id'lerini kalıcı kaydeder.
+  Future<void> writeCollapsedFolders(int accountId, Set<int> ids) async {
+    await _prefs.setStringList(
+      '$_kCollapsedFolders$accountId',
+      ids.map((id) => id.toString()).toList(),
+    );
+  }
+
   Future<void> write(AppSettings settings) async {
     await _prefs.setInt(_kTheme, settings.themeMode.index);
     await _prefs.setBool(_kNotifications, settings.notificationsEnabled);

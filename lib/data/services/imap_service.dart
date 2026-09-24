@@ -198,6 +198,10 @@ class EnoughMailImapService implements ImapService {
             event is em.ImapExpungeEvent ||
             event is em.ImapVanishedEvent) {
           if (!_changes.isClosed) _changes.add(null);
+        } else if (event is em.ImapConnectionLostEvent) {
+          _idling = false;
+          _selectedPath = null;
+          if (!_changes.isClosed) _changes.add(null);
         }
       }, onError: (_) {});
 
@@ -210,6 +214,7 @@ class EnoughMailImapService implements ImapService {
           supportsCondStore: names.any((n) => n.toUpperCase() == 'CONDSTORE'),
           supportsQresync: client.serverInfo.supportsQresync,
           supportsUidPlus: client.serverInfo.supportsUidPlus,
+          supportsNotify: names.any((n) => n.toUpperCase() == 'NOTIFY'),
         ),
       );
     } catch (error, stack) {

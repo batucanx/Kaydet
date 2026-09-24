@@ -1,4 +1,4 @@
-/// Türkçe tarih biçimlendirme.
+/// Tarih biçimlendirme yardımcıları.
 ///
 /// `intl` paketinin locale verisi çalışma anında yüklenmek zorunda olduğu için
 /// (ve test ortamında bu ek kurulum gerektirdiği için) Türkçe ay/gün adları
@@ -18,36 +18,72 @@ const List<String> _monthsLong = [
 
 /// DateTime.weekday: 1 = Pazartesi ... 7 = Pazar
 const List<String> _weekdaysShort = [
-  'Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz',
+  'Pzt',
+  'Sal',
+  'Çar',
+  'Per',
+  'Cum',
+  'Cmt',
+  'Paz',
+];
+
+const List<String> _weekdaysShortEnglish = [
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+  'Sun',
 ];
 
 const List<String> _weekdaysLong = [
-  'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi', 'Pazar',
+  'Pazartesi',
+  'Salı',
+  'Çarşamba',
+  'Perşembe',
+  'Cuma',
+  'Cumartesi',
+  'Pazar',
 ];
 
 String _two(int value) => value.toString().padLeft(2, '0');
 
-DateTime _dayOf(DateTime value) =>
-    DateTime(value.year, value.month, value.day);
+/// Takvim günü farkı; UTC'de yalnızca yıl/ay/gün kullanıldığı için DST'nin
+/// 23 veya 25 saatlik günleri sonucu değiştiremez.
+int _calendarDayDifference(DateTime later, DateTime earlier) {
+  final laterDay = DateTime.utc(later.year, later.month, later.day);
+  final earlierDay = DateTime.utc(earlier.year, earlier.month, earlier.day);
+  return laterDay.difference(earlierDay).inDays;
+}
 
 /// Liste satırında gösterilen kısa tarih.
 ///
 /// - Bugün → `14:23`
-/// - Dün → `Dün`
-/// - Son 7 gün → `Pzt`
+/// - Dün → `Dün 14:23`
+/// - Önceki 2–6 takvim günü → `Pzt 14:23`
 /// - Bu yıl → `14 Eyl`
 /// - Daha eski → `14.09.25`
-String formatListDate(DateTime dateUtc, {DateTime? now}) {
+String formatListDate(DateTime dateUtc, {DateTime? now, String locale = 'tr'}) {
   final local = dateUtc.toLocal();
   final reference = (now ?? DateTime.now()).toLocal();
 
-  final today = _dayOf(reference);
-  final day = _dayOf(local);
-  final diffDays = today.difference(day).inDays;
+  final diffDays = _calendarDayDifference(reference, local);
+  final time = '${_two(local.hour)}:${_two(local.minute)}';
+  final weekdays = locale.toLowerCase().startsWith('en')
+      ? _weekdaysShortEnglish
+      : _weekdaysShort;
 
-  if (diffDays == 0) return '${_two(local.hour)}:${_two(local.minute)}';
-  if (diffDays == 1) return 'Dün';
-  if (diffDays > 1 && diffDays < 7) return _weekdaysShort[local.weekday - 1];
+  if (diffDays == 0) return time;
+  if (diffDays == 1) {
+    final yesterday = locale.toLowerCase().startsWith('en')
+        ? 'Yesterday'
+        : 'Dün';
+    return '$yesterday $time';
+  }
+  if (diffDays > 1 && diffDays < 7) {
+    return '${weekdays[local.weekday - 1]} $time';
+  }
   if (local.year == reference.year) {
     return '${local.day} ${_monthsShort[local.month - 1]}';
   }
@@ -67,7 +103,7 @@ String formatDetailDate(DateTime dateUtc) {
 String formatGroupHeader(DateTime dateUtc, {DateTime? now}) {
   final local = dateUtc.toLocal();
   final reference = (now ?? DateTime.now()).toLocal();
-  final diffDays = _dayOf(reference).difference(_dayOf(local)).inDays;
+  final diffDays = _calendarDayDifference(reference, local);
 
   if (diffDays == 0) return 'Bugün';
   if (diffDays == 1) return 'Dün';
@@ -86,7 +122,9 @@ String formatBytes(int bytes) {
     value /= 1024;
     unit++;
   }
-  final rounded = value >= 10 ? value.round().toString() : value.toStringAsFixed(1);
+  final rounded = value >= 10
+      ? value.round().toString()
+      : value.toStringAsFixed(1);
   return '${rounded.replaceAll('.', ',')} ${units[unit]}';
 }
 

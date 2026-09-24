@@ -8,7 +8,9 @@ import '../core/result.dart';
 import '../core/turkish.dart';
 import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
+import '../domain/use_cases/folder_mapping.dart';
 import '../data/repositories/account_repository.dart';
+import '../data/repositories/folder_repository.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
@@ -99,6 +101,13 @@ final accountRepositoryProvider = Provider<AccountRepository>(
   ),
 );
 
+final folderRepositoryProvider = Provider<FolderRepository>(
+  (ref) => FolderRepository(
+    database: ref.watch(databaseProvider),
+    connection: ref.watch(mailConnectionProvider),
+  ),
+);
+
 /// `main()` içinde gerçek örnekle geçersiz kılınır.
 final settingsStoreProvider = Provider<AppSettingsStore>(
   (ref) => throw UnimplementedError('settingsStoreProvider ayarlanmadı'),
@@ -140,7 +149,8 @@ class SettingsNotifier extends Notifier<AppSettings> {
     await _save(
       state.copyWith(
         notificationsEnabled: enabled,
-        notificationPermissionAsked: enabled || state.notificationPermissionAsked,
+        notificationPermissionAsked:
+            enabled || state.notificationPermissionAsked,
       ),
     );
   }
@@ -176,6 +186,33 @@ class SettingsNotifier extends Notifier<AppSettings> {
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(
   SettingsNotifier.new,
 );
+
+/// Hesap bazında daraltılmış (alt klasörleri gizlenmiş) klasör id'leri.
+class CollapsedFoldersNotifier extends Notifier<Map<int, Set<int>>> {
+  @override
+  Map<int, Set<int>> build() => const {};
+
+  Set<int> getForAccount(int accountId) {
+    return state[accountId] ??
+        ref.read(settingsStoreProvider).readCollapsedFolders(accountId);
+  }
+
+  Future<void> toggle(int accountId, int mailboxId) async {
+    final current = Set<int>.from(getForAccount(accountId));
+    if (!current.remove(mailboxId)) {
+      current.add(mailboxId);
+    }
+    state = {...state, accountId: current};
+    await ref
+        .read(settingsStoreProvider)
+        .writeCollapsedFolders(accountId, current);
+  }
+}
+
+final collapsedFoldersProvider =
+    NotifierProvider<CollapsedFoldersNotifier, Map<int, Set<int>>>(
+      CollapsedFoldersNotifier.new,
+    );
 
 // ----------------------------------------------------------------- hesap
 
@@ -214,6 +251,21 @@ final mailboxesForAccountProvider =
     StreamProvider.family<List<MailboxRow>, int>(
       (ref, accountId) => ref.watch(databaseProvider).watchMailboxes(accountId),
     );
+
+/// One account-scoped, reactive hierarchy shared by folder surfaces.
+/// The IMAP delimiter/path is the parent-child identity; no duplicate parent
+/// column or per-screen tree cache is needed.
+final folderTreeForAccountProvider = Provider.family<List<FolderTreeNode>, int>(
+  (ref, accountId) {
+    final mailboxes =
+        ref.watch(mailboxesForAccountProvider(accountId)).value ??
+        const <MailboxRow>[];
+    return buildFolderTree(
+      mailboxes,
+      include: (mailbox) => mailbox.isSelectable,
+    );
+  },
+);
 
 /// Seçili klasör. `null` = sanal "Sabitlenenler" klasörü.
 class SelectedFolder {
@@ -493,7 +545,7 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final mailbox = ref.watch(currentMailboxProvider);
   final folder = ref.watch(selectedFolderProvider);
   final accountId = ref.watch(accountIdProvider);
-  final isSelectionMode = ref.watch(isSelectionModeProvider);
+
   final sort = ref.watch(messageFilterProvider.select((f) => f.sort));
   final filterActive = ref.watch(
     messageFilterProvider.select((f) => f.isActive),
@@ -527,7 +579,6 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
         folder != null &&
         !folder.isFlaggedView &&
         mailbox?.specialUse == SpecialUse.inbox &&
-        !isSelectionMode &&
         !filterActive;
 
     final visible = showPinned
@@ -672,6 +723,20 @@ final pinnedMessagesProvider = StreamProvider<List<MessageRow>>((ref) {
   return ref.watch(databaseProvider).watchFlagged(accountId: accountId);
 });
 
+/// Gelen Kutusu'ndaki Sabitlenenler bölümünün açık/kapalı (expand/collapse) durumu.
+class PinnedSectionExpandedNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+  void setExpanded(bool value) => state = value;
+}
+
+final pinnedSectionExpandedProvider =
+    NotifierProvider<PinnedSectionExpandedNotifier, bool>(
+      PinnedSectionExpandedNotifier.new,
+    );
+
 // ------------------------------------------------------------- seçim modu
 
 class SelectionNotifier extends Notifier<Set<int>> {
@@ -764,21 +829,22 @@ final defaultSignatureProvider = Provider<SignatureRow?>((ref) {
 /// belirli bir hesaba göre — yazma ekranında "Gönderen" olarak başka bir
 /// hesap seçildiğinde (bkz. `ComposeScreen._fromAccountId`) Gelen Kutusu'nun
 /// hesabını değiştirmeden o hesabın imzalarını göstermek için.
-final signaturesForAccountProvider = StreamProvider.family<
-  List<SignatureRow>,
-  int
->((ref, accountId) => ref.watch(databaseProvider).watchSignatures(accountId));
+final signaturesForAccountProvider =
+    StreamProvider.family<List<SignatureRow>, int>(
+      (ref, accountId) =>
+          ref.watch(databaseProvider).watchSignatures(accountId),
+    );
 
 /// [defaultSignatureProvider]'ın hesaba özel biçimi — bkz.
 /// [signaturesForAccountProvider].
-final defaultSignatureForAccountProvider = Provider.family<SignatureRow?, int>(
-  (ref, accountId) {
-    final signatures = ref.watch(signaturesForAccountProvider(accountId)).value;
-    if (signatures == null || signatures.isEmpty) return null;
-    return signatures.where((s) => s.isDefault).firstOrNull ??
-        signatures.first;
-  },
-);
+final defaultSignatureForAccountProvider = Provider.family<SignatureRow?, int>((
+  ref,
+  accountId,
+) {
+  final signatures = ref.watch(signaturesForAccountProvider(accountId)).value;
+  if (signatures == null || signatures.isEmpty) return null;
+  return signatures.where((s) => s.isDefault).firstOrNull ?? signatures.first;
+});
 
 // ---------------------------------------------------------------- kişiler
 
@@ -840,14 +906,12 @@ final messageBodyProvider = StreamProvider.family<MessageBodyRow?, int>(
 /// `autoDispose`: ekrandan çıkılınca (bu `messageId` artık izlenmeyince)
 /// durum hemen atılır — `messageBodyProvider`nin aksine burada canlı
 /// tutmaya değer bir veri yok, sadece bir kerelik işlemin sonucu.
-final bodyFetchProvider = FutureProvider.autoDispose.family<MessageBodyRow?, int>((
-  ref,
-  id,
-) async {
-  final result = await ref.read(mailRepositoryProvider).ensureBody(id);
-  if (result case Err(:final failure)) throw failure;
-  return ref.read(messageBodyProvider(id).future);
-});
+final bodyFetchProvider = FutureProvider.autoDispose
+    .family<MessageBodyRow?, int>((ref, id) async {
+      final result = await ref.read(mailRepositoryProvider).ensureBody(id);
+      if (result case Err(:final failure)) throw failure;
+      return ref.read(messageBodyProvider(id).future);
+    });
 
 final attachmentsProvider = StreamProvider.family<List<AttachmentRow>, int>(
   (ref, id) => ref.watch(databaseProvider).watchAttachments(id),

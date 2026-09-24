@@ -77,16 +77,27 @@ Future<bool> deleteWithConfirmation(
 /// ekranı kaplayan bir alttan panel yerine anında açılan bir popup'ta.
 List<Widget> folderMenuItems(
   WidgetRef ref,
-  ValueChanged<SpecialUse> onSelected,
+  ValueChanged<MailboxRow> onSelected,
 ) {
-  final mailboxes = ref.read(mailboxesProvider).value ?? const <MailboxRow>[];
+  final accountId = ref.watch(accountIdProvider);
+  final tree = accountId == null
+      ? const <FolderTreeNode>[]
+      : ref.watch(folderTreeForAccountProvider(accountId));
+  final currentMailboxId = ref.watch(currentMailboxProvider)?.id;
   return [
-    for (final box in mailboxes.where((m) => m.isSelectable))
-      MenuItemButton(
-        leadingIcon: Icon(folderIcon(box.specialUse), size: IconSize.sm),
-        onPressed: () => onSelected(box.specialUse),
-        child: Text(box.name),
-      ),
+    for (final node in tree)
+      if (node.mailbox.id != currentMailboxId)
+        MenuItemButton(
+          leadingIcon: Icon(
+            folderIcon(node.mailbox.specialUse),
+            size: IconSize.sm,
+          ),
+          onPressed: () => onSelected(node.mailbox),
+          child: Padding(
+            padding: EdgeInsets.only(left: node.depth * Space.lg),
+            child: Text(node.mailbox.name),
+          ),
+        ),
   ];
 }
 

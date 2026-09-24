@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show Color;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../../domain/use_cases/notification_text.dart';
@@ -34,6 +34,54 @@ class NotificationService {
     : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
 
   final FlutterLocalNotificationsPlugin _plugin;
+
+  static const MethodChannel _iosChannel = MethodChannel(
+    'tr.com.pazarlik.kaydet/notifications',
+  );
+  static final StreamController<String> _apnsTokenController =
+      StreamController<String>.broadcast();
+  static bool _apnsHandlerInstalled = false;
+
+  /// APNs token'ı cihazdan uygulama katmanına aktarılır. Backend kayıt
+  /// endpoint'i eklenene kadar bu akış token'ı dışarı göndermez veya saklamaz.
+  static Stream<String> get apnsTokens => _apnsTokenController.stream;
+
+  static void _installApnsHandler() {
+    if (_apnsHandlerInstalled) return;
+    _iosChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onApnsToken' && call.arguments is String) {
+        _apnsTokenController.add(call.arguments as String);
+      }
+    });
+    _apnsHandlerInstalled = true;
+  }
+
+  /// iOS sistem kaydı her uygulama açılışında tazelenebilir; izin verilmemişse
+  /// sessizce atlanır. Android akışına dokunmaz.
+  Future<void> registerForRemoteNotifications() async {
+    if (!Platform.isIOS) return;
+    await initialize();
+    final ios = _plugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
+    final status = await ios?.checkPermissions();
+    if (status?.isEnabled != true) return;
+    _installApnsHandler();
+    await _iosChannel.invokeMethod<void>('registerForRemoteNotifications');
+  }
+
+  /// iOS app icon rozetini mutlak okunmamış sayıya ayarlar; artımlı değildir.
+  Future<void> setAppBadgeCount(int count) async {
+    if (!Platform.isIOS) return;
+    try {
+      await _iosChannel.invokeMethod<void>('setBadgeCount', {
+        'count': count < 0 ? 0 : count,
+      });
+    } on PlatformException catch (_) {
+      // Badge yetkisi kapalı olsa da posta kutusu ve eşitleme çalışmayı sürdürür.
+    }
+  }
 
   // `NotificationService()` her çağrıda yeni bir örnek döner (bkz.
   // `notificationServiceProvider` ve `main.dart`daki ayrı örnek) ama
@@ -145,13 +193,19 @@ class NotificationService {
   Future<bool> requestPermission() async {
     await initialize();
     if (Platform.isIOS) {
-      final ios = _plugin.resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>();
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
       final granted = await ios?.requestPermissions(
         alert: true,
         badge: true,
         sound: true,
       );
+      if (granted == true) {
+        _installApnsHandler();
+        await _iosChannel.invokeMethod<void>('registerForRemoteNotifications');
+      }
       return granted ?? false;
     }
     if (!Platform.isAndroid) return true;
@@ -164,8 +218,10 @@ class NotificationService {
   Future<bool> areEnabled() async {
     await initialize();
     if (Platform.isIOS) {
-      final ios = _plugin.resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>();
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
       final status = await ios?.checkPermissions();
       // `status == null` eklenti henüz sorguya cevap veremedi demektir —
       // kullanıcıyı yanlışlıkla "kapalı" göstermemek için `true` varsayılır.

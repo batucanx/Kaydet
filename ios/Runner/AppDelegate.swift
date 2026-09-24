@@ -1,9 +1,12 @@
 import Flutter
 import UIKit
+import UserNotifications
 import workmanager_apple
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private var notificationChannel: FlutterMethodChannel?
+
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -37,5 +40,65 @@ import workmanager_apple
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "KaydetNotifications")
+    let channel = FlutterMethodChannel(
+      name: "tr.com.pazarlik.kaydet/notifications",
+      binaryMessenger: registrar.messenger()
+    )
+    notificationChannel = channel
+    channel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "registerForRemoteNotifications":
+        DispatchQueue.main.async {
+          UIApplication.shared.registerForRemoteNotifications()
+        }
+        result(nil)
+      case "setBadgeCount":
+        guard
+          let arguments = call.arguments as? [String: Any],
+          let count = arguments["count"] as? Int
+        else {
+          result(FlutterError(code: "invalid_badge_count", message: "Badge count is required", details: nil))
+          return
+        }
+        let badge = max(0, count)
+        if #available(iOS 16.0, *) {
+          UNUserNotificationCenter.current().setBadgeCount(badge) { error in
+            if let error = error {
+              result(FlutterError(code: "badge_update_failed", message: error.localizedDescription, details: nil))
+            } else {
+              result(nil)
+            }
+          }
+        } else {
+          UIApplication.shared.applicationIconBadgeNumber = badge
+          result(nil)
+        }
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+    notificationChannel?.invokeMethod("onApnsToken", arguments: token)
+    #if DEBUG
+      NSLog("APNs device token received")
+    #endif
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+    #if DEBUG
+      NSLog("APNs registration failed: %@", error.localizedDescription)
+    #endif
   }
 }

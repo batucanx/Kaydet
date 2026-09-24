@@ -6,12 +6,12 @@ import '../../core/avatar.dart';
 import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
-import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/label_keywords.dart';
 import '../database/app_database.dart';
 import '../services/imap_service.dart';
 import '../services/secure_store.dart';
 import '../services/smtp_service.dart';
+import 'folder_repository.dart';
 import 'mail_connection.dart';
 
 /// Giriş ekranından gelen ham ayarlar.
@@ -58,13 +58,15 @@ class AccountRepository {
        _secureStore = secureStore,
        _imap = imapService,
        _smtp = smtpService,
-       _connection = connection;
+       _connection = connection,
+       _folders = FolderRepository(database: database, connection: connection);
 
   final AppDatabase _db;
   final SecureStore _secureStore;
   final ImapService _imap;
   final SmtpService _smtp;
   final MailConnection _connection;
+  final FolderRepository _folders;
 
   /// Çıkışta IMAP oturumunun kapanması için beklenen en uzun süre.
   static const Duration _disconnectTimeout = Duration(seconds: 5);
@@ -277,226 +279,50 @@ class AccountRepository {
 
   Future<void> deleteLabel(int labelId) => _db.deleteLabel(labelId);
 
-  // --------------------------------------------------------------- klasörler
-
-  /// Yeni kullanıcı klasörü oluşturur: önce sunucuda, başarılıysa yerelde —
-  /// `_resolveTargetPath`'in Arşiv'i otomatik oluşturduğu desenin aynısı.
-  ///
-  /// [parentMailboxId] verilmezse klasör Gelen Kutusu'nun bir alt klasörü
-  /// olarak açılır (üst düzey "Klasör Oluştur" — bkz.
-  /// `FolderManagementScreen`); verilirse o klasörün alt klasörü olur
-  /// ("Yeni Alt Klasör" — bkz. `_FolderManagementTile`'ın bağlam menüsü).
-  ///
-  /// Ad benzersizliği kasıtlı olarak HESAP GENELİNDE kontrol edilir
-  /// (yalnızca kardeşler arasında değil) — üst düzey oluşturma zaten hep
-  /// böyleydi; alt klasörler eklenince de aynı, tutarlı kural korunur.
+  // Folder mutations live in FolderRepository. These forwarding methods keep
+  // the existing repository API source-compatible for account-level callers.
   Future<Result<MailboxRow>> createFolder({
     required int accountId,
     required String name,
     int? parentMailboxId,
-  }) async {
-    final trimmed = name.trim();
-    if (trimmed.isEmpty) {
-      return const Err(StorageFailure(detail: 'klasör adı boş'));
-    }
+    bool atRoot = false,
+  }) => _folders.createFolder(
+    accountId: accountId,
+    name: name,
+    parentMailboxId: parentMailboxId,
+    atRoot: atRoot,
+  );
 
-    final existing = await _db.mailboxesOf(accountId);
-    final normalized = trLower(trimmed);
-    if (existing.any((m) => trLower(m.name) == normalized)) {
-      return const Err(DuplicateFolderFailure());
-    }
-
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
-    final parent = parentMailboxId == null
-        ? existing.where((m) => m.specialUse == SpecialUse.inbox).firstOrNull
-        : existing.where((m) => m.id == parentMailboxId).firstOrNull;
-    final path = parent == null ? trimmed : parent.childPath(trimmed);
-    final created = await _connection.imap.createMailbox(path);
-    if (created is Err<void>) return Err(created.failure);
-
-    final nextOrder = existing.isEmpty
-        ? 0
-        : existing.map((m) => m.sortOrder).reduce((a, b) => a > b ? a : b) + 1;
-    final id = await _db.upsertMailbox(
-      MailboxesCompanion.insert(
-        accountId: accountId,
-        path: path,
-        name: trimmed,
-        delimiter: Value(parent?.delimiter ?? '.'),
-        sortOrder: Value(nextOrder),
-      ),
-    );
-    final row = await _db.mailboxById(id);
-    return row == null ? const Err(StorageFailure()) : Ok(row);
-  }
-
-  /// Klasörü Sık Kullanılanlar'a ekler/çıkarır — yalnızca yerel bir tercih,
-  /// sunucuya hiç gönderilmez (bkz. `Mailboxes.isFavorite`).
   Future<void> setFolderFavorite(int mailboxId, bool value) =>
-      _db.setMailboxFavorite(mailboxId, value);
+      _folders.setFavorite(mailboxId, value);
 
-  /// Klasörleri [orderedIds] sırasına göre kalıcı olarak yeniden sıralar.
-  ///
-  /// [orderedIds] hesabın TÜM yönetilebilir klasör kimlikleridir —
-  /// sürüklenen bölüm Sık Kullanılanlar'ın bir alt kümesiyse bile
-  /// (`FolderManagementScreen`), ekran önce tam listeyi bu alt kümenin yeni
-  /// sırasına göre birleştirir; buraya her zaman eksiksiz sıralı bir liste
-  /// gelir. Salt yerel bir tercihtir (bkz. `AppDatabase.upsertMailbox` —
-  /// sunucu eşitlemesi bu sütuna dokunmaz).
   Future<void> reorderFolders(List<int> orderedIds) =>
-      _db.reorderMailboxes(orderedIds);
+      _folders.reorderFolders(orderedIds);
 
-  /// Klasörü yeniden adlandırır (aynı üst klasör, yeni son bileşen).
-  ///
-  /// Sistem klasörleri (Gelen Kutusu, Gönderilenler, …) korunur —
-  /// `specialUse != custom` ise reddedilir. Sunucudaki `RENAME` başarılıysa
-  /// yerelde `renameMailboxTree` çağrılır: id korunur, alt klasörler de
-  /// (varsa) sunucuyla birlikte taşınmış sayılır — bkz. o metodun belgesi.
   Future<Result<void>> renameFolder({
     required int accountId,
     required int mailboxId,
     required String newName,
-  }) async {
-    final trimmed = newName.trim();
-    if (trimmed.isEmpty) {
-      return const Err(StorageFailure(detail: 'klasör adı boş'));
-    }
+  }) => _folders.renameFolder(
+    accountId: accountId,
+    mailboxId: mailboxId,
+    newName: newName,
+  );
 
-    final mailbox = await _db.mailboxById(mailboxId);
-    if (mailbox == null) return const Err(MailboxNotFoundFailure());
-    if (mailbox.specialUse != SpecialUse.custom) {
-      return const Err(SystemFolderProtectedFailure());
-    }
-    if (trimmed == mailbox.name) return okVoid;
-
-    final siblings = await _db.mailboxesOf(accountId);
-    final normalized = trLower(trimmed);
-    if (siblings.any(
-      (m) => m.id != mailboxId && trLower(m.name) == normalized,
-    )) {
-      return const Err(DuplicateFolderFailure());
-    }
-
-    final delimiter = mailbox.delimiter;
-    final parentEnd = mailbox.path.lastIndexOf(delimiter);
-    final newPath = parentEnd == -1
-        ? trimmed
-        : '${mailbox.path.substring(0, parentEnd + delimiter.length)}$trimmed';
-
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
-    final renamed = await _connection.imap.renameMailbox(
-      path: mailbox.path,
-      encodedPath: mailbox.encodedPath,
-      delimiter: delimiter,
-      newPath: newPath,
-    );
-    if (renamed is Err<void>) return Err(renamed.failure);
-
-    await _db.renameMailboxTree(
-      mailboxId: mailboxId,
-      oldPath: mailbox.path,
-      newPath: newPath,
-      newName: trimmed,
-      delimiter: delimiter,
-    );
-    return okVoid;
-  }
-
-  /// Klasörü başka bir klasörün altına taşır (aynı son bileşen, yeni üst
-  /// klasör) — [newParentId] `null` ise kök düzeye (Gelen Kutusu ile aynı
-  /// seviyeye) taşınır. Mekanizma [renameFolder] ile birebir aynıdır (IMAP
-  /// `RENAME`); tek fark hedef yolun nasıl hesaplandığıdır.
   Future<Result<void>> moveFolder({
     required int accountId,
     required int mailboxId,
     required int? newParentId,
-  }) async {
-    final mailbox = await _db.mailboxById(mailboxId);
-    if (mailbox == null) return const Err(MailboxNotFoundFailure());
-    if (mailbox.specialUse != SpecialUse.custom) {
-      return const Err(SystemFolderProtectedFailure());
-    }
+  }) => _folders.moveFolder(
+    accountId: accountId,
+    mailboxId: mailboxId,
+    newParentId: newParentId,
+  );
 
-    final delimiter = mailbox.delimiter;
-    final leaf = FolderMapping.leafName(mailbox.path, delimiter);
-    final ownSubtreePrefix = '${mailbox.path}$delimiter';
-
-    String newPath;
-    if (newParentId == null) {
-      newPath = leaf;
-    } else {
-      if (newParentId == mailboxId) {
-        return const Err(InvalidFolderMoveFailure());
-      }
-      final parent = await _db.mailboxById(newParentId);
-      if (parent == null) return const Err(MailboxNotFoundFailure());
-      if (parent.path.startsWith(ownSubtreePrefix)) {
-        return const Err(InvalidFolderMoveFailure());
-      }
-      newPath = parent.childPath(leaf);
-    }
-    if (newPath == mailbox.path) return okVoid;
-
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
-    final renamed = await _connection.imap.renameMailbox(
-      path: mailbox.path,
-      encodedPath: mailbox.encodedPath,
-      delimiter: delimiter,
-      newPath: newPath,
-    );
-    if (renamed is Err<void>) return Err(renamed.failure);
-
-    await _db.renameMailboxTree(
-      mailboxId: mailboxId,
-      oldPath: mailbox.path,
-      newPath: newPath,
-      newName: mailbox.name,
-      delimiter: delimiter,
-    );
-    return okVoid;
-  }
-
-  /// Klasörü kalıcı olarak siler. Sistem klasörleri ve alt klasörü olan
-  /// klasörler korunur — RFC 3501 `DELETE`nin alt klasörleri ne yapacağı
-  /// sunucudan sunucuya değiştiğinden, belirsiz bir sunucu davranışına
-  /// güvenmek yerine yerelde açıkça reddedilir.
   Future<Result<void>> deleteFolder({
     required int accountId,
     required int mailboxId,
-  }) async {
-    final mailbox = await _db.mailboxById(mailboxId);
-    if (mailbox == null) return const Err(MailboxNotFoundFailure());
-    if (mailbox.specialUse != SpecialUse.custom) {
-      return const Err(SystemFolderProtectedFailure());
-    }
-
-    final siblings = await _db.mailboxesOf(accountId);
-    final ownSubtreePrefix = '${mailbox.path}${mailbox.delimiter}';
-    final hasChildren = siblings.any(
-      (m) => m.id != mailboxId && m.path.startsWith(ownSubtreePrefix),
-    );
-    if (hasChildren) return const Err(FolderHasChildrenFailure());
-
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
-    final deleted = await _connection.imap.deleteMailbox(
-      path: mailbox.path,
-      encodedPath: mailbox.encodedPath,
-      delimiter: mailbox.delimiter,
-    );
-    if (deleted is Err<void>) return Err(deleted.failure);
-
-    await _db.deleteMailboxWithMessages(mailboxId);
-    return okVoid;
-  }
-
+  }) => _folders.deleteFolder(accountId: accountId, mailboxId: mailboxId);
   Future<void> _seedDefaultSignature(int accountId, String displayName) =>
       _db.insertSignature(
         SignaturesCompanion.insert(

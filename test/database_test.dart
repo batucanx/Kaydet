@@ -157,6 +157,48 @@ void main() {
       expect(await db.countFlagged(accountId), 1);
     });
 
+    test('tüm hesapların okunmamış toplamını izler', () async {
+      final secondAccountId = await db.insertAccount(
+        AccountsCompanion.insert(
+          email: 'ikinci@ornek.com',
+          username: 'ikinci@ornek.com',
+          imapHost: 'mail.ornek.com',
+          smtpHost: 'mail.ornek.com',
+        ),
+      );
+      final secondInboxId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: secondAccountId,
+          path: 'INBOX',
+          name: 'Gelen Kutusu',
+          specialUse: const Value(SpecialUse.inbox),
+        ),
+      );
+
+      await db.upsertServerMessages([
+        message(uid: 10),
+        message(uid: 11),
+        message(uid: 12, seen: true),
+        message(uid: 13, deleted: true),
+        MessagesCompanion.insert(
+          accountId: secondAccountId,
+          mailboxId: secondInboxId,
+          dateUtc: DateTime.utc(2026, 9, 14),
+          uid: const Value(20),
+        ),
+      ]);
+
+      expect(await db.watchAllUnreadCount().first, 3);
+      final messages = await db
+          .watchMessages(accountId: secondAccountId, mailboxId: secondInboxId)
+          .first;
+      await db.updateMessage(
+        messages.single.id,
+        const MessagesCompanion(isSeen: Value(true)),
+      );
+      expect(await db.watchAllUnreadCount().first, 2);
+    });
+
     test('en düşük ve en yüksek UID bulunur', () async {
       await db.upsertServerMessages([
         message(uid: 42),

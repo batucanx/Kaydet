@@ -140,6 +140,11 @@ class PushTaskHandler extends TaskHandler {
       imapService: imap,
       secureStore: _secureStore!,
       onSynced: _onSynced,
+      onFoldersSynced: (_) async {
+        FlutterForegroundTask.sendDataToMain(
+          PushProtocol.message(PushProtocol.dbChanged),
+        );
+      },
     );
     return _Watched(watcher, imap);
   }

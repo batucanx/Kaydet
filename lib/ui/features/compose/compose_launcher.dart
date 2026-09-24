@@ -39,7 +39,7 @@ Future<void> openCompose(
   ComposeMode mode = ComposeMode.newMessage,
   String? initialTo,
   bool fullscreenDialog = false,
-  KaydetTransitionStyle? transitionStyle,
+  KaydetTransitionStyle transitionStyle = KaydetTransitionStyle.compose,
   double noticeBottomInset = 0,
 }) async {
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -80,6 +80,7 @@ Future<void> openComposeFromNavigator(
   final outcome = await navigator.push<ComposeOutcome>(
     KaydetRoute<ComposeOutcome>(
       builder: (_) => ComposeScreen(replyToId: replyToId, mode: mode),
+      transitionStyle: KaydetTransitionStyle.compose,
     ),
   );
   if (overlay == null) return;

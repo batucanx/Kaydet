@@ -120,32 +120,40 @@ class SyncEngine {
     }
 
     final seenPaths = <String>{};
-    for (final box in remote) {
-      final use = resolvedUses[box.path]!;
-      final leaf = FolderMapping.leafName(box.path, box.delimiter);
-      await _db.upsertMailbox(
-        MailboxesCompanion.insert(
-          accountId: accountId,
-          path: box.path,
-          name: FolderMapping.displayName(use, leaf),
-          encodedPath: Value(box.encodedPath),
-          specialUse: Value(use),
-          delimiter: Value(box.delimiter),
-          isSubscribed: Value(box.isSubscribed),
-          isSelectable: Value(box.isSelectable),
-          sortOrder: Value(FolderMapping.sortOrderFor(use)),
-        ),
-      );
-      seenPaths.add(box.path);
-    }
-
-    // Sunucudan kaldırılmış klasörleri yerelden de sil.
-    final local = await _db.mailboxesOf(accountId);
-    for (final row in local) {
-      if (!seenPaths.contains(row.path)) {
-        await _db.purgeMailboxMessages(row.id);
+    await _db.transaction(() async {
+      for (final box in remote) {
+        final use = resolvedUses[box.path]!;
+        final leaf = FolderMapping.leafName(box.path, box.delimiter);
+        await _db.upsertMailbox(
+          MailboxesCompanion.insert(
+            accountId: accountId,
+            path: box.path,
+            name: FolderMapping.displayName(use, leaf),
+            encodedPath: Value(box.encodedPath),
+            specialUse: Value(use),
+            delimiter: Value(box.delimiter),
+            isSubscribed: Value(box.isSubscribed),
+            isSelectable: Value(box.isSelectable),
+            sortOrder: Value(FolderMapping.sortOrderFor(use)),
+          ),
+        );
+        seenPaths.add(box.path);
       }
-    }
+
+      // Drift watchers now observe one reconciled snapshot, not intermediate
+      // states between individual remote folder rows.
+      if (seenPaths.isNotEmpty) {
+        final local = await _db.mailboxesOf(accountId);
+        for (final row in local) {
+          if (seenPaths.contains(row.path)) continue;
+          await _db.purgeMailboxMessages(row.id);
+          // Keep a folder only when it still owns local-only drafts/outbox.
+          if (!await _db.hasLocalOnlyMessages(row.id)) {
+            await _db.deleteMailboxWithMessages(row.id);
+          }
+        }
+      }
+    });
 
     return Ok(await _db.mailboxesOf(accountId));
   }
@@ -230,9 +238,7 @@ class SyncEngine {
       );
     }
 
-    final fromUid = localHighest != null
-        ? localHighest + 1
-        : mailbox.uidNext!;
+    final fromUid = localHighest != null ? localHighest + 1 : mailbox.uidNext!;
     if (state.uidNext > fromUid) {
       final fetched = await _fetchRangeAndStore(
         accountId,
@@ -495,7 +501,9 @@ class SyncEngine {
           hasAttachments: Value(envelope.hasAttachments),
           sizeBytes: Value(envelope.sizeBytes),
           labelsJson: Value(
-            jsonEncode(_namesForKeywords(envelope.keywords, labelNamesByKeyword)),
+            jsonEncode(
+              _namesForKeywords(envelope.keywords, labelNamesByKeyword),
+            ),
           ),
         ),
       );

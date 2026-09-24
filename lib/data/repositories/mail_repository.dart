@@ -128,16 +128,48 @@ class MailRepository {
     if (rows.isEmpty) return;
 
     final accountId = rows.first.accountId;
+    if (rows.any((row) => row.accountId != accountId)) return;
     final targetBox = await _db.mailboxBySpecialUse(accountId, target);
+    await _moveRowsToMailbox(rows, targetBox, fallbackTarget: target);
+  }
+
+  /// Moves mail to an exact folder identity, including user-created folders.
+  Future<void> moveToFolder({
+    required List<int> messageIds,
+    required int targetMailboxId,
+  }) async {
+    if (messageIds.isEmpty) return;
+    final rows = await _db.messagesByIds(messageIds);
+    if (rows.isEmpty) return;
+    final accountId = rows.first.accountId;
+    if (rows.any((row) => row.accountId != accountId)) return;
+    final target = await _db.mailboxById(targetMailboxId);
+    if (target == null || target.accountId != accountId) return;
+    await _moveRowsToMailbox(rows, target);
+  }
+
+  Future<void> _moveRowsToMailbox(
+    List<MessageRow> rows,
+    MailboxRow? targetBox, {
+    SpecialUse? fallbackTarget,
+  }) async {
+    if (rows.isEmpty) return;
+    final accountId = rows.first.accountId;
+    final actionableRows = rows
+        .where((row) => row.mailboxId != targetBox?.id)
+        .toList();
+    if (actionableRows.isEmpty) return;
 
     // Yerel taslaklar sunucuya hiç gitmemiştir; doğrudan silinir.
-    final localOnly = rows
+    final localOnly = actionableRows
         .where((r) => r.isLocalOnly)
         .map((r) => r.id)
         .toList();
     if (localOnly.isNotEmpty) await _db.deleteMessages(localOnly);
 
-    final remote = rows.where((r) => !r.isLocalOnly && r.uid != null).toList();
+    final remote = actionableRows
+        .where((r) => !r.isLocalOnly && r.uid != null)
+        .toList();
     if (remote.isEmpty) return;
 
     // Kuyruğa ekleme ve yerel silme tek transaction'da: aradaki kesintide
@@ -148,7 +180,8 @@ class MailRepository {
         PendingOpType.move,
         extra: {
           'targetPath': targetBox?.path,
-          'targetSpecialUse': target.index,
+          'targetSpecialUse':
+              targetBox?.specialUse.index ?? fallbackTarget?.index,
         },
       );
       await _db.deleteMessages(remote.map((r) => r.id).toList());

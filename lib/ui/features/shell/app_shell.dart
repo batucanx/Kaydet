@@ -8,6 +8,7 @@ import '../../../app/providers.dart';
 import '../../../app/sync_controller.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/folder_mapping.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/tokens.dart';
@@ -98,6 +99,11 @@ class _AppShellState extends ConsumerState<AppShell>
         // _selectAccountAndOpenInbox`'taki `Future.delayed` ertelemesi) —
         // asıl kare düşürme sebebi buydu, animasyon süresi değil.
         drawer: const FolderDrawer(),
+        onDrawerChanged: (isOpened) {
+          if (isOpened) {
+            ref.read(syncControllerProvider.notifier).syncFolders(force: true);
+          }
+        },
         // Seçim modunda yan menü kaydırmayla açılmaz: liste üzerindeki
         // yatay kaydırma hareketiyle çakışır.
         drawerEnableOpenDragGesture: !isSelectionMode,
@@ -158,10 +164,7 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
   /// yeni bir rota push'u.
   void _manageFolders() {
     Navigator.of(context).pop();
-    context.pushScreen(
-      const FolderManagementScreen(),
-      fullscreenDialog: true,
-    );
+    context.pushScreen(const FolderManagementScreen(), fullscreenDialog: true);
   }
 
   /// Rayda bir avatara dokunma: o hesabı etkinleştirir ve panelinde
@@ -573,7 +576,7 @@ class _AccountFolderPanel extends StatelessWidget {
   }
 }
 
-class _AccountFolderPanelContent extends ConsumerWidget {
+class _AccountFolderPanelContent extends ConsumerStatefulWidget {
   const _AccountFolderPanelContent({
     super.key,
     required this.account,
@@ -586,9 +589,24 @@ class _AccountFolderPanelContent extends ConsumerWidget {
   final VoidCallback onManageFolders;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AccountFolderPanelContent> createState() =>
+      _AccountFolderPanelContentState();
+}
+
+class _AccountFolderPanelContentState
+    extends ConsumerState<_AccountFolderPanelContent> {
+  AccountRow get account => widget.account;
+  ValueChanged<SelectedFolder> get onChooseFolder => widget.onChooseFolder;
+  VoidCallback get onManageFolders => widget.onManageFolders;
+
+  @override
+  Widget build(BuildContext context) {
     final t = context.tokens;
     final selected = ref.watch(selectedFolderProvider);
+    final collapsedMap = ref.watch(collapsedFoldersProvider);
+    final collapsed =
+        collapsedMap[account.id] ??
+        ref.read(settingsStoreProvider).readCollapsedFolders(account.id);
     final mailboxes =
         ref.watch(mailboxesForAccountProvider(account.id)).value ??
         const <MailboxRow>[];
@@ -600,9 +618,21 @@ class _AccountFolderPanelContent extends ConsumerWidget {
     // `FolderManagementScreen`). Sıra da ortak `sortOrder`dan gelir.
     final favorites = folders.where((m) => m.isFavorite).toList();
 
-    Widget folderTile(MailboxRow box) => _FolderTile(
+    // Tree traversal: path + delimiter → parent-child ilişkisi, ek DB alanı
+    // veya migration gerekmez (bkz. `buildFolderTree` açıklaması).
+    final tree = ref.watch(folderTreeForAccountProvider(account.id));
+
+    Widget folderTile(
+      MailboxRow box, {
+      double indent = 0,
+      bool? expanded,
+      VoidCallback? onToggle,
+    }) => _FolderTile(
+      expanded: expanded,
+      onToggle: onToggle,
       icon: folderIcon(box.specialUse),
       label: box.name,
+      indent: indent,
       isSelected: selected?.mailboxId == box.id,
       badge: box.specialUse == SpecialUse.drafts
           ? null
@@ -677,13 +707,27 @@ class _AccountFolderPanelContent extends ConsumerWidget {
                     ).textTheme.labelMedium?.copyWith(color: t.textTertiary),
                   ),
                 ),
+                // Sık Kullanılanlar bölümü kullanıcı tercihi — her zaman flat,
+                // depth gözetilmez (hangi klasörü favorilediği önemli değil).
                 for (final box in favorites) folderTile(box),
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: Space.sm),
                   child: Divider(color: t.divider, height: 1),
                 ),
               ],
-              for (final box in folders) folderTile(box),
+              // Tam liste: depth-first tree sırası + depth-based indent.
+              for (var i = 0; i < tree.length; i++)
+                if (!_isHidden(tree, i, collapsed))
+                  folderTile(
+                    tree[i].mailbox,
+                    indent: tree[i].depth * Space.lg,
+                    expanded: _hasChildren(tree, i)
+                        ? !collapsed.contains(tree[i].mailbox.id)
+                        : null,
+                    onToggle: () => ref
+                        .read(collapsedFoldersProvider.notifier)
+                        .toggle(account.id, tree[i].mailbox.id),
+                  ),
               // Sabitlenenler sanal bir klasördür: IMAP \Flagged bayrağı
               // taşıyan iletiler, hangi klasörde olursa olsun.
               _FolderTile(
@@ -698,6 +742,21 @@ class _AccountFolderPanelContent extends ConsumerWidget {
         ),
       ],
     );
+  }
+
+  bool _hasChildren(List<FolderTreeNode> tree, int i) =>
+      i + 1 < tree.length && tree[i + 1].depth > tree[i].depth;
+
+  /// Atalarından biri daraltılmışsa satır gizlenir.
+  bool _isHidden(List<FolderTreeNode> tree, int i, Set<int> collapsed) {
+    var depth = tree[i].depth;
+    for (var k = i - 1; k >= 0 && depth > 0; k--) {
+      if (tree[k].depth < depth) {
+        depth = tree[k].depth;
+        if (collapsed.contains(tree[k].mailbox.id)) return true;
+      }
+    }
+    return false;
   }
 }
 
@@ -714,13 +773,23 @@ class _FolderTile extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     this.badge,
+    this.indent = 0,
+    this.expanded,
+    this.onToggle,
   });
 
+  /// null = alt klasörü yok; true/false = açık/kapalı (chevron gösterilir).
+  final bool? expanded;
+  final VoidCallback? onToggle;
   final IconData icon;
   final String label;
   final bool isSelected;
   final VoidCallback onTap;
   final int? badge;
+
+  /// Yatay girinti (px) — tree derinliğine göre `buildFolderTree`'den gelir.
+  /// 0 = kök klasör; her ek seviye `Space.lg` (16 dp) ek girinti.
+  final double indent;
 
   @override
   Widget build(BuildContext context) {
@@ -732,9 +801,12 @@ class _FolderTile extends StatelessWidget {
         duration: duration,
         curve: Motion.standard,
         constraints: const BoxConstraints(minHeight: Dimens.touchTarget),
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.lg,
-          vertical: Space.md,
+        padding: EdgeInsets.only(
+          // Seçim göstergesi sol kenara yapışık — indent sol padding'e eklenir.
+          left: Space.lg + indent,
+          right: Space.lg,
+          top: Space.md,
+          bottom: Space.md,
         ),
         decoration: BoxDecoration(
           color: isSelected ? t.accentSubtle : Colors.transparent,
@@ -763,9 +835,31 @@ class _FolderTile extends StatelessWidget {
                   color: isSelected ? t.textPrimary : t.textSecondary,
                   fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                 ),
-                child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ),
+            if (expanded != null)
+              InkWell(
+                onTap: onToggle,
+                borderRadius: BorderRadius.circular(Radii.full),
+                child: Padding(
+                  padding: const EdgeInsets.all(Space.xs),
+                  child: AnimatedRotation(
+                    turns: expanded! ? 0.25 : 0,
+                    duration: duration,
+                    curve: Motion.standard,
+                    child: Icon(
+                      LucideIcons.chevronRight,
+                      size: IconSize.sm,
+                      color: t.textTertiary,
+                    ),
+                  ),
+                ),
+              ),
             if (badge != null && badge! > 0)
               AnimatedContainer(
                 duration: duration,

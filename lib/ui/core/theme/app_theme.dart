@@ -8,13 +8,10 @@ import 'tokens.dart';
 abstract final class AppText {
   static const String family = 'Satoshi';
 
-  /// Tüm yazı boyutlarının ortak çarpanı — kullanıcı isteğiyle uygulama
-  /// genelinde bir miktar büyütüldü. Aşağıdaki rol boyutları tasarım
-  /// belgesindeki özgün değerleriyle yazılıdır; bütün ölçeği tek yerden
-  /// ayarlamak için yalnızca bu sabit değiştirilir. Rollerin dışında elle
-  /// yazılan `fontSize` değerleri de aynı çarpana bağlıdır (`N * AppText.scale`).
-  /// Satır aralıkları oran (`height`) olarak verildiğinden birlikte ölçeklenir.
-  static const double scale = 1.1;
+  /// Tüm yazı boyutlarının ortak çarpanı — kullanıcı isteğiyle gelen kutusunun
+  /// daha ferah ve zarif durması için orijinal 1.0 ölçeğine çekildi.
+  /// Bütün ölçeği tek yerden ayarlamak için yalnızca bu sabit değiştirilir.
+  static const double scale = 1.0;
 
   static const TextStyle titleLarge = TextStyle(
     fontFamily: family,
@@ -52,36 +49,36 @@ abstract final class AppText {
   // (bkz. `Dimens.listRowMinHeight`'daki eşleşen satır yüksekliği).
   static const TextStyle listSenderRead = TextStyle(
     fontFamily: family,
-    fontSize: 14 * scale,
-    height: 18 / 14,
+    fontSize: 15 * scale,
+    height: 19 / 15,
     fontWeight: FontWeight.w500,
   );
 
   static const TextStyle listSenderUnread = TextStyle(
     fontFamily: family,
-    fontSize: 14 * scale,
-    height: 18 / 14,
+    fontSize: 15 * scale,
+    height: 19 / 15,
     fontWeight: FontWeight.w700,
   );
 
   static const TextStyle listSubjectRead = TextStyle(
     fontFamily: family,
-    fontSize: 13 * scale,
-    height: 18 / 13,
-    fontWeight: FontWeight.w400,
+    fontSize: 14 * scale,
+    height: 18 / 14,
+    fontWeight: FontWeight.w500,
   );
 
   static const TextStyle listSubjectUnread = TextStyle(
     fontFamily: family,
-    fontSize: 13 * scale,
-    height: 18 / 13,
+    fontSize: 14 * scale,
+    height: 18 / 14,
     fontWeight: FontWeight.w600,
   );
 
   static const TextStyle listPreview = TextStyle(
     fontFamily: family,
-    fontSize: 12 * scale,
-    height: 16 / 12,
+    fontSize: 13 * scale,
+    height: 18 / 13,
     fontWeight: FontWeight.w400,
   );
 

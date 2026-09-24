@@ -6,9 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/sync_controller.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/folder_mapping.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
@@ -46,6 +48,17 @@ class _FolderManagementScreenState
   /// doğruladığında (bkz. [_reconcileWithProvider]) bu alan `null`a döner ve
   /// ekran tekrar doğrudan akışı izlemeye başlar.
   List<MailboxRow>? _optimisticOrder;
+  int? _optimisticAccountId;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(syncControllerProvider.notifier).syncFolders(force: true);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +82,23 @@ class _FolderManagementScreenState
       );
     }
 
-    final folders = _optimisticOrder ?? selectableFolders;
+    final optimisticOrder = _optimisticAccountId == accountId
+        ? _optimisticOrder
+        : null;
+    final folders = optimisticOrder ?? selectableFolders;
+    final collapsed = accountId == null
+        ? const <int>{}
+        : ref.watch(collapsedFoldersProvider)[accountId] ??
+              ref.read(settingsStoreProvider).readCollapsedFolders(accountId);
+    final folderTree = accountId == null
+        ? const <FolderTreeNode>[]
+        : optimisticOrder == null
+        ? ref.watch(folderTreeForAccountProvider(accountId))
+        : buildFolderTree(folders);
+    final visibleTree = [
+      for (var i = 0; i < folderTree.length; i++)
+        if (!_isHidden(folderTree, i, collapsed)) folderTree[i],
+    ];
     final favorites = folders.where((f) => f.isFavorite).toList();
 
     return Scaffold(
@@ -129,7 +158,6 @@ class _FolderManagementScreenState
                                   onMove: () => _moveFolder(
                                     context,
                                     accountId,
-                                    folders,
                                     favorites[i],
                                   ),
                                   onDelete: () => _deleteFolder(
@@ -149,9 +177,7 @@ class _FolderManagementScreenState
                     icon: const Icon(LucideIcons.plus, size: IconSize.sm),
                     label: const Text('Klasör Oluştur'),
                     style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: Space.sm,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: Space.sm),
                       minimumSize: const Size(0, Dimens.touchTarget - 12),
                     ),
                   ),
@@ -165,26 +191,52 @@ class _FolderManagementScreenState
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
                       onReorderItem: (oldIndex, newIndex) =>
-                          _reorderAll(folders, oldIndex, newIndex),
+                          _reorderAll(folders, visibleTree, oldIndex, newIndex),
                       children: [
-                        for (var i = 0; i < folders.length; i++)
+                        // Tree sırası kullanılır: depth-first DFS — parent →
+                        // children. ReorderableListView global index ister, bu
+                        // yüzden tree'yi `folders` (optimistic) listesi üzerinden
+                        // çözerek doğru index'i birlikte taşırız.
+                        for (var i = 0; i < visibleTree.length; i++)
                           _FolderManagementTile(
-                            key: ValueKey('all-${folders[i].id}'),
+                            key: ValueKey('all-${visibleTree[i].mailbox.id}'),
                             index: i,
-                            folder: folders[i],
-                            onToggleFavorite: () =>
-                                _toggleFavorite(folders, folders[i]),
-                            onRename: () =>
-                                _renameFolder(context, accountId, folders[i]),
+                            expanded:
+                                _hasChildren(
+                                  folderTree,
+                                  folderTree.indexOf(visibleTree[i]),
+                                )
+                                ? !collapsed.contains(visibleTree[i].mailbox.id)
+                                : null,
+                            onToggleExpanded: () => ref
+                                .read(collapsedFoldersProvider.notifier)
+                                .toggle(accountId, visibleTree[i].mailbox.id),
+                            folder: visibleTree[i].mailbox,
+                            depth: visibleTree[i].depth,
+                            onToggleFavorite: () => _toggleFavorite(
+                              folders,
+                              visibleTree[i].mailbox,
+                            ),
+                            onRename: () => _renameFolder(
+                              context,
+                              accountId,
+                              visibleTree[i].mailbox,
+                            ),
                             onNewSubfolder: () => _createFolder(
                               context,
                               accountId,
-                              parentMailboxId: folders[i].id,
+                              parentMailboxId: visibleTree[i].mailbox.id,
                             ),
-                            onMove: () =>
-                                _moveFolder(context, accountId, folders, folders[i]),
-                            onDelete: () =>
-                                _deleteFolder(context, accountId, folders[i]),
+                            onMove: () => _moveFolder(
+                              context,
+                              accountId,
+                              visibleTree[i].mailbox,
+                            ),
+                            onDelete: () => _deleteFolder(
+                              context,
+                              accountId,
+                              visibleTree[i].mailbox,
+                            ),
                           ),
                       ],
                     ),
@@ -220,80 +272,290 @@ class _FolderManagementScreenState
     if (sameOrder) setState(() => _optimisticOrder = null);
   }
 
-  void _persist(List<MailboxRow> next) {
-    setState(() => _optimisticOrder = next);
-    unawaited(
-      ref
-          .read(accountRepositoryProvider)
-          .reorderFolders(next.map((f) => f.id).toList()),
-    );
-  }
-
   void _toggleFavorite(List<MailboxRow> folders, MailboxRow folder) {
     final updated = folder.copyWith(isFavorite: !folder.isFavorite);
     final next = [
       for (final f in folders)
         if (f.id == folder.id) updated else f,
     ];
-    setState(() => _optimisticOrder = next);
+    setState(() {
+      _optimisticAccountId = ref.read(accountIdProvider);
+      _optimisticOrder = next;
+    });
     unawaited(
-      ref
-          .read(accountRepositoryProvider)
-          .setFolderFavorite(folder.id, updated.isFavorite),
+      _saveOptimistic(
+        () => ref
+            .read(folderRepositoryProvider)
+            .setFavorite(folder.id, updated.isFavorite),
+      ),
     );
   }
 
-  /// Sık Kullanılanlar bölümünde sürükleme — yalnızca yıldızlı alt kümenin
-  /// göreli sırası değişir; yıldızsız klasörler tam listedeki kendi
-  /// konumlarında kalır (bkz. sınıf başı açıklaması — tek `sortOrder`
-  /// alanı iki bölüm arasında paylaşılır).
-  void _reorderFavorites(List<MailboxRow> folders, int oldIndex, int newIndex) {
-    final favorites = folders.where((f) => f.isFavorite).toList();
-    final moved = favorites.removeAt(oldIndex);
-    favorites.insert(newIndex, moved);
-
-    var cursor = 0;
-    final merged = [
-      for (final folder in folders)
-        if (folder.isFavorite) favorites[cursor++] else folder,
-    ];
-    _persist(merged);
+  Future<void> _saveOptimistic(Future<void> Function() save) async {
+    try {
+      await save();
+    } on Object catch (_) {
+      if (!mounted) return;
+      setState(() => _optimisticOrder = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Klasör değişikliği kaydedilemedi.')),
+      );
+    }
   }
 
-  void _reorderAll(List<MailboxRow> folders, int oldIndex, int newIndex) {
-    final list = [...folders];
-    final moved = list.removeAt(oldIndex);
-    list.insert(newIndex, moved);
-    _persist(list);
+  /// Favori satırlarını yalnızca aynı IMAP parent altındaysa yeniden sıralar.
+  void _reorderFavorites(List<MailboxRow> folders, int oldIndex, int newIndex) {
+    final favorites = folders.where((f) => f.isFavorite).toList();
+    if (oldIndex < 0 || oldIndex >= favorites.length) return;
+    final moved = favorites[oldIndex];
+    final afterRemoval = [...favorites]..removeAt(oldIndex);
+    final targetIndex = newIndex.clamp(0, afterRemoval.length);
+    if (afterRemoval.isEmpty) return;
+    final target = afterRemoval[targetIndex.clamp(0, afterRemoval.length - 1)];
+    final parentPath = _parentPath(moved);
+    if (_parentPath(target) != parentPath) return;
+    final siblings = buildFolderTree(folders)
+        .map((node) => node.mailbox)
+        .where((mailbox) => _parentPath(mailbox) == parentPath)
+        .toList();
+    siblings.removeWhere((mailbox) => mailbox.id == moved.id);
+    final targetSibling = siblings.indexWhere(
+      (mailbox) => mailbox.id == target.id,
+    );
+    siblings.insert(targetSibling.clamp(0, siblings.length), moved);
+    _persistSiblingOrder(folders, siblings, parentPath);
+  }
+
+  bool _hasChildren(List<FolderTreeNode> tree, int index) =>
+      index + 1 < tree.length && tree[index + 1].depth > tree[index].depth;
+
+  bool _isHidden(List<FolderTreeNode> tree, int index, Set<int> collapsed) {
+    var depth = tree[index].depth;
+    for (var i = index - 1; i >= 0 && depth > 0; i--) {
+      if (tree[i].depth < depth) {
+        depth = tree[i].depth;
+        if (collapsed.contains(tree[i].mailbox.id)) return true;
+      }
+    }
+    return false;
+  }
+
+  void _reorderAll(
+    List<MailboxRow> folders,
+    List<FolderTreeNode> visibleTree,
+    int oldIndex,
+    int newIndex,
+  ) {
+    if (oldIndex < 0 ||
+        oldIndex >= visibleTree.length ||
+        visibleTree.length < 2) {
+      return;
+    }
+    final moved = visibleTree[oldIndex].mailbox;
+    final afterRemoval = [...visibleTree]..removeAt(oldIndex);
+    final insertionIndex = newIndex.clamp(0, afterRemoval.length);
+    final target = insertionIndex < afterRemoval.length
+        ? afterRemoval[insertionIndex].mailbox
+        : afterRemoval.last.mailbox;
+    final parentPath = _parentPath(moved);
+    if (_parentPath(target) != parentPath) return;
+
+    final siblings = buildFolderTree(folders)
+        .map((node) => node.mailbox)
+        .where((mailbox) => _parentPath(mailbox) == parentPath)
+        .toList();
+    siblings.removeWhere((m) => m.id == moved.id);
+    final siblingTargetIndex = siblings.indexWhere((m) => m.id == target.id);
+    final at = siblingTargetIndex.clamp(0, siblings.length);
+    siblings.insert(at, moved);
+
+    _persistSiblingOrder(folders, siblings, parentPath);
+  }
+
+  void _persistSiblingOrder(
+    List<MailboxRow> folders,
+    List<MailboxRow> siblings,
+    String? parentPath,
+  ) {
+    final ranks = {for (var i = 0; i < siblings.length; i++) siblings[i].id: i};
+    final next =
+        folders
+            .map(
+              (m) => ranks.containsKey(m.id)
+                  ? m.copyWith(sortOrder: ranks[m.id]!)
+                  : m,
+            )
+            .toList()
+          ..sort((a, b) {
+            final byOrder = a.sortOrder.compareTo(b.sortOrder);
+            return byOrder != 0 ? byOrder : a.name.compareTo(b.name);
+          });
+    final accountId = ref.read(accountIdProvider);
+    if (accountId == null ||
+        (parentPath != null && folders.every((m) => m.path != parentPath))) {
+      return;
+    }
+    setState(() {
+      _optimisticAccountId = accountId;
+      _optimisticOrder = next;
+    });
+    unawaited(
+      _saveOptimistic(
+        () => ref
+            .read(folderRepositoryProvider)
+            .reorderSiblings(
+              accountId: accountId,
+              parentMailboxId: parentPath == null
+                  ? null
+                  : folders.where((m) => m.path == parentPath).firstOrNull?.id,
+              orderedIds: siblings.map((m) => m.id).toList(),
+            ),
+      ),
+    );
+  }
+
+  String? _parentPath(MailboxRow mailbox) {
+    if (mailbox.delimiter.isEmpty) return null;
+    final index = mailbox.path.lastIndexOf(mailbox.delimiter);
+    return index <= 0 ? null : mailbox.path.substring(0, index);
   }
 
   /// Üst düzey "Klasör Oluştur" (bkz. `SectionHeader` trailing) VE
   /// bağlam menüsündeki "Yeni Alt Klasör" (bkz. `_FolderContextMenu`) AYNI
-  /// diyaloğu paylaşır — [parentMailboxId] `null` ise klasör Gelen
-  /// Kutusu'nun altında, verilirse o klasörün altında açılır (bkz.
-  /// `AccountRepository.createFolder`).
+  /// diyaloğu paylaşır: klasör adı + "Dizin" (üst klasör) seçimi.
+  /// [parentMailboxId] verilirse dizin o klasörle, verilmezse Gelen Kutusu ile
+  /// başlar; kullanıcı açılır listeden herhangi bir klasörü ya da "Kök
+  /// klasör"ü seçebilir. Seçim `AccountRepository.createFolder`a aktarılır.
   Future<void> _createFolder(
     BuildContext context,
     int accountId, {
     int? parentMailboxId,
   }) {
+    // Yalnızca AKTİF hesabın klasörleri (kimlikler hesaba özgüdür).
+    final all =
+        ref.read(mailboxesForAccountProvider(accountId)).value ??
+        const <MailboxRow>[];
+    final options = _parentOptions(
+      ref.read(folderTreeForAccountProvider(accountId)),
+    );
+    final inboxId = all
+        .where((m) => m.specialUse == SpecialUse.inbox)
+        .map((m) => m.id)
+        .firstOrNull;
+    var selectedParent = parentMailboxId ?? inboxId ?? _rootParent;
+    if (!options.any((o) => o.id == selectedParent)) {
+      selectedParent = _rootParent;
+    }
+
     return _showFolderNameDialog(
       context,
       title: parentMailboxId == null ? 'Yeni klasör' : 'Yeni alt klasör',
       confirmLabel: 'Oluştur',
       busyLabel: 'Oluşturuluyor…',
+      extraBuilder: (dialogContext, setDialogState, busy) => Consumer(
+        builder: (context, ref, _) {
+          final currentOptions = _parentOptions(
+            ref.watch(folderTreeForAccountProvider(accountId)),
+          );
+          final effectiveParent =
+              currentOptions.any((option) => option.id == selectedParent)
+              ? selectedParent
+              : _rootParent;
+          return DropdownButtonFormField<int>(
+            key: ValueKey(effectiveParent),
+            initialValue: effectiveParent,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Dizin'),
+            items: [
+              for (final o in currentOptions)
+                DropdownMenuItem<int>(
+                  value: o.id,
+                  child: Padding(
+                    padding: EdgeInsets.only(left: o.depth * Space.lg),
+                    child: Row(
+                      children: [
+                        Icon(o.icon, size: IconSize.sm),
+                        const SizedBox(width: Space.sm),
+                        Expanded(
+                          child: Text(
+                            o.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+            selectedItemBuilder: (_) => [
+              for (final o in currentOptions)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    o.breadcrumb,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: busy
+                ? null
+                : (value) {
+                    if (value != null) selectedParent = value;
+                    setDialogState(() {});
+                  },
+          );
+        },
+      ),
       onSubmit: (name) async {
         final result = await ref
-            .read(accountRepositoryProvider)
+            .read(folderRepositoryProvider)
             .createFolder(
               accountId: accountId,
               name: name,
-              parentMailboxId: parentMailboxId,
+              parentMailboxId: selectedParent == _rootParent
+                  ? null
+                  : selectedParent,
+              atRoot: selectedParent == _rootParent,
             );
         if (result case Err(:final failure)) return failure;
+        ref.read(syncControllerProvider.notifier).syncFolders(force: true);
         return null;
       },
     );
+  }
+
+  /// "Kök klasör" seçeneğinin sahte kimliği (gerçek satır kimlikleri ≥ 1).
+  static const int _rootParent = -1;
+
+  /// Dizin listesi: "Kök klasör" + depth-first klasör ağacı. Ağaç, `path`/
+  /// delimiter tabanlı ortak Riverpod tree'sinden gelir.
+  List<_ParentOption> _parentOptions(List<FolderTreeNode> tree) {
+    final result = <_ParentOption>[
+      const _ParentOption(
+        id: _rootParent,
+        label: 'Kök klasör',
+        breadcrumb: 'Kök klasör',
+        depth: 0,
+        icon: LucideIcons.home,
+      ),
+    ];
+    final names = <String>[];
+    for (final node in tree) {
+      names.length = node.depth;
+      names.add(node.mailbox.name);
+      result.add(
+        _ParentOption(
+          id: node.mailbox.id,
+          label: node.mailbox.name,
+          breadcrumb: names.join(' > '),
+          depth: node.depth,
+          icon: folderIcon(node.mailbox.specialUse),
+        ),
+      );
+    }
+    return result;
   }
 
   Future<void> _renameFolder(
@@ -309,13 +571,14 @@ class _FolderManagementScreenState
       initialValue: folder.name,
       onSubmit: (name) async {
         final result = await ref
-            .read(accountRepositoryProvider)
+            .read(folderRepositoryProvider)
             .renameFolder(
               accountId: accountId,
               mailboxId: folder.id,
               newName: name,
             );
         if (result case Err(:final failure)) return failure;
+        ref.read(syncControllerProvider.notifier).syncFolders(force: true);
         return null;
       },
     );
@@ -331,11 +594,18 @@ class _FolderManagementScreenState
     required String confirmLabel,
     required String busyLabel,
     String initialValue = '',
+    Widget Function(
+      BuildContext context,
+      void Function(VoidCallback) setDialogState,
+      bool busy,
+    )?
+    extraBuilder,
     required Future<AppFailure?> Function(String trimmedName) onSubmit,
   }) {
     final controller = TextEditingController(text: initialValue);
     final messenger = ScaffoldMessenger.of(context);
     var busy = false;
+    String? nameError;
 
     return showDialog<void>(
       context: context,
@@ -344,8 +614,14 @@ class _FolderManagementScreenState
           Future<void> submit() async {
             if (busy) return;
             final name = controller.text.trim();
-            if (name.isEmpty) return;
-            setState(() => busy = true);
+            if (name.isEmpty) {
+              setState(() => nameError = 'Klasör adı boş bırakılamaz.');
+              return;
+            }
+            setState(() {
+              nameError = null;
+              busy = true;
+            });
             final failure = await onSubmit(name);
             if (failure != null) {
               setState(() => busy = false);
@@ -359,13 +635,31 @@ class _FolderManagementScreenState
 
           return AlertDialog(
             title: Text(title),
-            content: TextField(
-              controller: controller,
-              autofocus: true,
-              enabled: !busy,
-              textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(hintText: 'Klasör adı'),
-              onSubmitted: (_) => submit(),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    enabled: !busy,
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      labelText: 'Klasör adı',
+                      errorText: nameError,
+                    ),
+                    onChanged: (_) {
+                      if (nameError != null) setState(() => nameError = null);
+                    },
+                    onSubmitted: (_) => submit(),
+                  ),
+                  if (extraBuilder != null) ...[
+                    const SizedBox(height: Space.lg),
+                    extraBuilder(dialogContext, setState, busy),
+                  ],
+                ],
+              ),
             ),
             actionsAlignment: MainAxisAlignment.center,
             actions: [
@@ -394,56 +688,69 @@ class _FolderManagementScreenState
   Future<void> _moveFolder(
     BuildContext context,
     int accountId,
-    List<MailboxRow> allFolders,
     MailboxRow folder,
   ) async {
     final ownSubtreePrefix = '${folder.path}${folder.delimiter}';
-    final candidates = allFolders
-        .where((m) => m.id != folder.id && !m.path.startsWith(ownSubtreePrefix))
-        .toList();
     final messenger = ScaffoldMessenger.of(context);
 
     final selected = await showDialog<(bool, int?)>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Klasörü taşı'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView(
-            shrinkWrap: true,
-            children: [
-              ListTile(
-                leading: const Icon(LucideIcons.home, size: IconSize.md),
-                title: const Text('Kök klasör'),
-                onTap: () => Navigator.of(dialogContext).pop((true, null)),
-              ),
-              for (final candidate in candidates)
-                ListTile(
-                  leading: Icon(
-                    folderIcon(candidate.specialUse),
-                    size: IconSize.md,
+      builder: (dialogContext) => Consumer(
+        builder: (context, ref, _) {
+          final candidates = ref
+              .watch(folderTreeForAccountProvider(accountId))
+              .where(
+                (node) =>
+                    node.mailbox.id != folder.id &&
+                    !node.mailbox.path.startsWith(ownSubtreePrefix),
+              )
+              .toList();
+          return AlertDialog(
+            title: const Text('Klasörü taşı'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  ListTile(
+                    leading: const Icon(LucideIcons.home, size: IconSize.md),
+                    title: const Text('Kök klasör'),
+                    onTap: () => Navigator.of(dialogContext).pop((true, null)),
                   ),
-                  title: Text(candidate.name),
-                  onTap: () =>
-                      Navigator.of(dialogContext).pop((true, candidate.id)),
-                ),
+                  for (final candidate in candidates)
+                    ListTile(
+                      leading: Icon(
+                        folderIcon(candidate.mailbox.specialUse),
+                        size: IconSize.md,
+                      ),
+                      contentPadding: EdgeInsets.only(
+                        left: Space.lg + candidate.depth * Space.lg,
+                        right: Space.lg,
+                      ),
+                      title: Text(candidate.mailbox.name),
+                      onTap: () => Navigator.of(
+                        dialogContext,
+                      ).pop((true, candidate.mailbox.id)),
+                    ),
+                ],
+              ),
+            ),
+            actionsAlignment: MainAxisAlignment.center,
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Vazgeç'),
+              ),
             ],
-          ),
-        ),
-        actionsAlignment: MainAxisAlignment.center,
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Vazgeç'),
-          ),
-        ],
+          );
+        },
       ),
     );
     if (selected == null) return;
     final (_, newParentId) = selected;
 
     final result = await ref
-        .read(accountRepositoryProvider)
+        .read(folderRepositoryProvider)
         .moveFolder(
           accountId: accountId,
           mailboxId: folder.id,
@@ -451,6 +758,8 @@ class _FolderManagementScreenState
         );
     if (result case Err(:final failure)) {
       messenger.showSnackBar(SnackBar(content: Text(failure.userMessage)));
+    } else {
+      ref.read(syncControllerProvider.notifier).syncFolders(force: true);
     }
   }
 
@@ -472,10 +781,12 @@ class _FolderManagementScreenState
     if (confirmed != true) return;
 
     final result = await ref
-        .read(accountRepositoryProvider)
+        .read(folderRepositoryProvider)
         .deleteFolder(accountId: accountId, mailboxId: folder.id);
     if (result case Err(:final failure)) {
       messenger.showSnackBar(SnackBar(content: Text(failure.userMessage)));
+    } else {
+      ref.read(syncControllerProvider.notifier).syncFolders(force: true);
     }
   }
 }
@@ -543,6 +854,9 @@ class _FolderManagementTile extends StatelessWidget {
     required this.onNewSubfolder,
     required this.onMove,
     required this.onDelete,
+    this.depth = 0,
+    this.expanded,
+    this.onToggleExpanded,
   });
 
   final int index;
@@ -552,15 +866,37 @@ class _FolderManagementTile extends StatelessWidget {
   final VoidCallback onNewSubfolder;
   final VoidCallback onMove;
   final VoidCallback onDelete;
+  final bool? expanded;
+  final VoidCallback? onToggleExpanded;
+
+  /// Tree derinliği — [buildFolderTree]'den gelir; sol padding'e dönüştürülür.
+  final int depth;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
     return Container(
       constraints: const BoxConstraints(minHeight: Dimens.touchTarget + 8),
-      padding: const EdgeInsets.symmetric(horizontal: Space.md),
+      padding: EdgeInsets.only(
+        left: Space.md + depth * Space.lg,
+        right: Space.md,
+      ),
       child: Row(
         children: [
+          if (expanded == null)
+            const SizedBox(width: Dimens.touchTarget - 8)
+          else
+            IconButton(
+              tooltip: expanded!
+                  ? 'Alt klasörleri daralt'
+                  : 'Alt klasörleri aç',
+              onPressed: onToggleExpanded,
+              visualDensity: VisualDensity.compact,
+              icon: Icon(
+                expanded! ? LucideIcons.chevronDown : LucideIcons.chevronRight,
+                size: IconSize.sm,
+              ),
+            ),
           _FavoriteStarButton(
             isFavorite: folder.isFavorite,
             onTap: onToggleFavorite,
@@ -661,10 +997,7 @@ class _FolderContextMenu extends StatelessWidget {
         ),
         if (!isSystemFolder) ...[
           MenuItemButton(
-            leadingIcon: const Icon(
-              LucideIcons.folderInput,
-              size: IconSize.sm,
-            ),
+            leadingIcon: const Icon(LucideIcons.folderInput, size: IconSize.sm),
             onPressed: onMove,
             child: const Text('Klasörü Taşı'),
           ),
@@ -681,8 +1014,7 @@ class _FolderContextMenu extends StatelessWidget {
         ],
       ],
       builder: (context, controller, child) => InkWell(
-        onTap: () =>
-            controller.isOpen ? controller.close() : controller.open(),
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: Space.md),
           child: Text(
@@ -711,7 +1043,9 @@ class _FavoriteStarButton extends StatelessWidget {
     final t = context.tokens;
     return Semantics(
       button: true,
-      label: isFavorite ? 'Sık kullanılanlardan çıkar' : 'Sık kullanılanlara ekle',
+      label: isFavorite
+          ? 'Sık kullanılanlardan çıkar'
+          : 'Sık kullanılanlara ekle',
       child: InkResponse(
         onTap: onTap,
         radius: Dimens.touchTarget / 2,
@@ -731,4 +1065,21 @@ class _FavoriteStarButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// "Dizin" açılır listesindeki bir satır (bkz. `_createFolder`).
+class _ParentOption {
+  const _ParentOption({
+    required this.id,
+    required this.label,
+    required this.breadcrumb,
+    required this.depth,
+    required this.icon,
+  });
+
+  final int id;
+  final String label;
+  final String breadcrumb;
+  final int depth;
+  final IconData icon;
 }

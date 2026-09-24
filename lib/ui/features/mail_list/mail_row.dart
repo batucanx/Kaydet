@@ -10,11 +10,11 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 
-/// Liste satırı: avatar + (gönderen | tarih) + (konu — özet), sağda sabitle.
+/// Liste satırı: avatar + (gönderen | tarih) + konu + 2 satırlık önizleme.
 ///
-/// Gerçek Gmail/Outlook uygulamalarındaki gibi iki satıra sıkıştırılır:
-/// konu ve önizleme aynı satırda, tek satır taşmayla kısaltılır. Sabitleme
-/// (Gmail'in yıldızı) satırın sağında, kendi dokunma alanıyla durur.
+/// Yandex Mail benzeri yoğun, kompakt ve net tipografi hiyerarşisi:
+/// Gönderen ve konu belirgin (Semibold/Medium), altında en fazla 2 satırlık
+/// içerik önizlemesi yer alır.
 class MailRow extends StatelessWidget {
   const MailRow({
     super.key,
@@ -25,7 +25,6 @@ class MailRow extends StatelessWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
-    required this.onFlagTap,
   });
 
   final MessageRow message;
@@ -35,7 +34,6 @@ class MailRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
-  final VoidCallback onFlagTap;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -115,6 +113,7 @@ class MailRow extends StatelessWidget {
     final unread = !message.isSeen;
     final labelNames = _labelNames;
     final outbox = message.outboxState;
+    final previewText = message.preview.trim();
 
     return Semantics(
       selected: isSelected,
@@ -126,36 +125,50 @@ class MailRow extends StatelessWidget {
           duration: context.motion(Motion.fast),
           constraints: const BoxConstraints(minHeight: Dimens.listRowMinHeight),
           decoration: BoxDecoration(
-            // Sabitlenmiş bir ileti seçili değilse bile hafif bir vurgu
-            // alır — "SABİTLENENLER" başlığı olmadan da neden en üstte
-            // olduğu anlaşılsın diye (bkz. `_PinnedSection`).
-            color: isSelected
-                ? t.accentSubtle
-                : message.isFlagged
-                ? t.accent.withValues(alpha: 0.06)
-                : Colors.transparent,
+            color: isSelected ? t.accentSubtle : Colors.transparent,
             border: Border(
-              bottom: BorderSide(color: t.divider),
               left: BorderSide(
                 color: isSelected ? t.accent : Colors.transparent,
                 width: 3,
               ),
             ),
           ),
-          padding: const EdgeInsets.fromLTRB(
-            Space.md,
-            Space.sm,
-            Space.sm,
-            Space.sm,
+          padding: const EdgeInsets.symmetric(
+            horizontal: Space.md,
+            vertical: Space.sm,
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              BrandAvatar(
-                name: _displayName,
-                email: _avatarKey,
-                isSelected: isSelected,
-                onTap: onAvatarTap,
+              // Okunmamış noktayı avatarın üzerine al: her satırda boş
+              // gösterge rayı ayırmadan metin alanına yer kazandırır.
+              SizedBox(
+                width: Dimens.touchTarget,
+                height: Dimens.touchTarget,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    BrandAvatar(
+                      name: _displayName,
+                      email: _avatarKey,
+                      isSelected: isSelected,
+                      onTap: onAvatarTap,
+                    ),
+                    if (unread)
+                      Positioned(
+                        left: -6,
+                        top: (Dimens.touchTarget - 7) / 2,
+                        child: Container(
+                          width: 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: t.accent,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
               ),
               const SizedBox(width: Space.sm),
               Expanded(
@@ -163,9 +176,13 @@ class MailRow extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    _headerRow(context, unread),
+                    _senderLine(context, unread),
                     const SizedBox(height: 2),
                     _subjectLine(context, unread),
+                    if (previewText.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      _previewLine(context, previewText, unread),
+                    ],
                     if (labelNames.isNotEmpty) ...[
                       const SizedBox(height: Space.xs),
                       Wrap(
@@ -193,7 +210,8 @@ class MailRow extends StatelessWidget {
                   ],
                 ),
               ),
-              _FlagButton(isFlagged: message.isFlagged, onTap: onFlagTap),
+              const SizedBox(width: Space.sm),
+              _trailingDate(context, unread),
             ],
           ),
         ),
@@ -201,41 +219,47 @@ class MailRow extends StatelessWidget {
     );
   }
 
-  Widget _headerRow(BuildContext context, bool unread) {
+  Widget _senderLine(BuildContext context, bool unread) {
     final t = context.tokens;
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            _displayName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: (unread ? AppText.listSenderUnread : AppText.listSenderRead)
-                .copyWith(color: unread ? t.textPrimary : t.textSecondary),
-          ),
-        ),
-        const SizedBox(width: Space.sm),
-        if (message.hasAttachments)
-          Padding(
-            padding: const EdgeInsets.only(right: Space.xs),
-            child: Icon(LucideIcons.paperclip, size: 13, color: t.textTertiary),
-          ),
-        Text(
-          formatListDate(message.dateUtc),
-          style: AppText.labelSmall.copyWith(
-            color: unread ? t.accent : t.textTertiary,
-            fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
-          ),
-        ),
-      ],
+    return Text(
+      _displayName,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: (unread ? AppText.listSenderUnread : AppText.listSenderRead)
+          .copyWith(color: unread ? t.textPrimary : t.textSecondary),
     );
   }
 
-  /// Konu ve özet Gmail/Outlook'taki gibi tek satırda, "—" ile ayrılmış.
-  ///
-  /// Okunmamış durumu burada da tek başına renkle değil, konu bölümünün
-  /// yazı kalınlığıyla (üst satırdaki gönderen adı gibi) belirtilir; özet
-  /// her zaman soluk kalır — Gmail'de de öyle.
+  Widget _trailingDate(BuildContext context, bool unread) {
+    final t = context.tokens;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (message.hasAttachments)
+            Padding(
+              padding: const EdgeInsets.only(right: Space.xs),
+              child: Icon(LucideIcons.paperclip, size: 13, color: t.textTertiary),
+            ),
+          Text(
+            formatListDate(
+              message.dateUtc,
+              locale: Localizations.localeOf(context).languageCode,
+            ),
+            style: AppText.labelMedium.copyWith(
+              color: unread ? t.accent : t.textTertiary,
+              fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Konu satırı — tek satır, taşma durumunda "..." ile kısaltılır.
+  /// Yanıtla/İlet ikonları varsa konudan hemen önce yer alır.
   Widget _subjectLine(BuildContext context, bool unread) {
     final t = context.tokens;
     final subjectStyle =
@@ -252,15 +276,24 @@ class MailRow extends StatelessWidget {
           if (message.isAnswered) _statusIconSpan(LucideIcons.reply, t),
           if (message.isForwarded) _statusIconSpan(LucideIcons.forward, t),
           TextSpan(text: subjectText, style: subjectStyle),
-          if (message.preview.isNotEmpty)
-            TextSpan(
-              text: '  —  ${message.preview}',
-              style: AppText.listPreview.copyWith(color: t.textTertiary),
-            ),
         ],
       ),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  /// Önizleme okunmamış iletide biraz daha kalın, fakat ikincil tonda kalır.
+  Widget _previewLine(BuildContext context, String previewText, bool unread) {
+    final t = context.tokens;
+    return Text(
+      previewText,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: AppText.listPreview.copyWith(
+        color: unread ? t.textSecondary : t.textTertiary,
+        fontWeight: unread ? FontWeight.w600 : FontWeight.normal,
+      ),
     );
   }
 
@@ -305,38 +338,6 @@ class MailRow extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Sağdaki sabitleme (Gmail'in yıldızı) düğmesi — kendi dokunma alanıyla
-/// satırın geri kalanından bağımsız çalışır.
-class _FlagButton extends StatelessWidget {
-  const _FlagButton({required this.isFlagged, required this.onTap});
-
-  final bool isFlagged;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return Semantics(
-      button: true,
-      label: isFlagged ? 'Sabitlemeyi kaldır' : 'Sabitle',
-      child: InkResponse(
-        onTap: onTap,
-        radius: Dimens.touchTarget / 2,
-        containedInkWell: false,
-        child: SizedBox(
-          width: 36,
-          height: Dimens.avatarSize,
-          child: Icon(
-            LucideIcons.pin,
-            size: 17,
-            color: isFlagged ? t.accent : t.textTertiary.withValues(alpha: 0.5),
-          ),
-        ),
-      ),
     );
   }
 }

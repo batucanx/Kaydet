@@ -295,6 +295,7 @@ class ServerCapabilities {
     required this.supportsCondStore,
     required this.supportsQresync,
     required this.supportsUidPlus,
+    this.supportsNotify = false,
   });
 
   final List<String> raw;
@@ -303,6 +304,7 @@ class ServerCapabilities {
   final bool supportsCondStore;
   final bool supportsQresync;
   final bool supportsUidPlus;
+  final bool supportsNotify;
 
   static const ServerCapabilities unknown = ServerCapabilities(
     raw: [],
@@ -311,6 +313,7 @@ class ServerCapabilities {
     supportsCondStore: false,
     supportsQresync: false,
     supportsUidPlus: false,
+    supportsNotify: false,
   );
 }
 
