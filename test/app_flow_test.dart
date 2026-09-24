@@ -64,7 +64,7 @@ void main() {
   /// önizlemeyi tek `Text.rich` içinde gösterir; tam eşleşme yerine içerme
   /// aranır ve filtre çipleri gibi başka yerlerdeki aynı metinle karışmasın
   /// diye yalnızca `MailRow` içinde aranır.
-  Finder _rowText(String subject) => find.descendant(
+  Finder rowText(String subject) => find.descendant(
     of: find.byType(MailRow),
     matching: find.textContaining(subject),
   );
@@ -533,7 +533,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await tester.tap(_rowText('Fiyat teklifi'));
+      await tester.tap(rowText('Fiyat teklifi'));
       await settle(tester);
 
       expect(find.text('Teklifimiz ektedir, iyi çalışmalar.'), findsOneWidget);
@@ -549,7 +549,7 @@ void main() {
       await pumpApp(tester);
       await settle(tester);
 
-      await tester.tap(_rowText('Okunmamış'));
+      await tester.tap(rowText('Okunmamış'));
       // Sayfa geçişi birkaç kare sürer (320 ms). Okundu gecikmesini
       // (1500 ms) doldurmadan detay ekranına varılmalı.
       for (var i = 0; i < 5; i++) {

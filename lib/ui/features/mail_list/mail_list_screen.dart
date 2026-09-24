@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -221,7 +222,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       padding: const EdgeInsets.only(bottom: 88),
       // Varsayılan 250px'lik ön-inşa alanı hızlı kaydırmada avatar/logoların
       // "pop-in" etmesine yol açıyordu; ~3 ekran yüksekliği önden inşa edilir.
-      cacheExtent: 1200,
+      scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
       itemCount: items.length + (hasMore || isLoadingMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= items.length) {

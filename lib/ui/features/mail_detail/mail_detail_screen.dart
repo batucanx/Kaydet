@@ -1117,8 +1117,8 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
               child: Transform(
                 alignment: Alignment.center,
                 transform: Matrix4.identity()
-                  ..translate(_offset.dx, _offset.dy)
-                  ..scale(_scale),
+                  ..translateByDouble(_offset.dx, _offset.dy, 0, 1)
+                  ..scaleByDouble(_scale, _scale, _scale, 1),
                 child: widget.child,
               ),
             ),
