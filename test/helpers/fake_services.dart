@@ -16,6 +16,9 @@ class FakeImapService implements ImapService {
   /// Ayarlanırsa `connect` bu hatayla döner (giriş hatası senaryoları).
   AppFailure? failOnConnect;
 
+  /// Ayarlanırsa `moveMessages` bu hatayla döner (taşıma başarısızlığı).
+  AppFailure? failMove;
+
   bool _connected = false;
   String? selectedPath;
   final StreamController<void> _changes = StreamController<void>.broadcast();
@@ -219,8 +222,12 @@ class FakeImapService implements ImapService {
   Future<Result<void>> moveMessages({
     required List<int> uids,
     required String targetPath,
+    String? sourcePath,
   }) async {
+    if (sourcePath != null) selectedPath = sourcePath;
     commandLog.add('move:$selectedPath->$targetPath:$uids');
+    final failure = failMove;
+    if (failure != null) return Err(failure);
     final source = _box(selectedPath ?? 'INBOX');
     final target = _box(targetPath);
     final nextUid = target.keys.isEmpty

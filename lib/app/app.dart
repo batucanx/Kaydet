@@ -21,6 +21,10 @@ class KaydetApp extends ConsumerWidget {
 
     return MaterialApp(
       navigatorKey: rootNavigatorKey,
+      // Platformun verdiği başlangıç rotası (ör. iOS'ta uygulamayı uyandıran bir
+      // URL) yok sayılır: uygulamanın adlandırılmış rotası yok, bilinmeyen bir
+      // rota açmaya çalışmak hata verirdi (bkz. `ShareNavigator`).
+      initialRoute: Navigator.defaultRouteName,
       title: 'Kaydet',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),

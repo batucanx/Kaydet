@@ -2,6 +2,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -69,10 +70,14 @@ void main() {
     matching: find.textContaining(subject),
   );
 
-  Future<void> pumpApp(WidgetTester tester) async {
+  Future<void> pumpApp(
+    WidgetTester tester, {
+    Duration undoWindow = const Duration(milliseconds: 1),
+  }) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          mailUndoWindowProvider.overrideWithValue(undoWindow),
           databaseProvider.overrideWithValue(db),
           secureStoreProvider.overrideWithValue(secureStore),
           imapServiceProvider.overrideWithValue(imap),
@@ -105,6 +110,25 @@ void main() {
     for (var i = 0; i < 12; i++) {
       await tester.pump(const Duration(milliseconds: 120));
     }
+  }
+
+  /// Arşivle/sil sunucu işleminin "Geri al" penceresinin (bkz.
+  /// `mailUndoWindow`) ve bildirimin kapanmasını bekler.
+  Future<void> pastUndoWindow(
+    WidgetTester tester, {
+    Duration wait = const Duration(seconds: 8),
+  }) async {
+    await tester.pump(wait);
+    await settle(tester);
+  }
+
+  /// İlk satırı fiziksel olarak sağa (arşivle) ya da sola (sil) kaydırır.
+  Future<void> swipeFirstRow(WidgetTester tester, {required bool right}) async {
+    await tester.drag(
+      find.byType(MailRow).first,
+      Offset(right ? 500 : -500, 0),
+    );
+    await settle(tester);
   }
 
   /// Ayarlar'a geçer. Modül geçişi artık alt gezinme çubuğunda değil,
@@ -377,6 +401,7 @@ void main() {
 
       expect(find.text('Silinecek'), findsNothing);
       expect(find.text('Kalacak'), findsOneWidget);
+      await pastUndoWindow(tester);
     });
 
     appTest('silinen ileti sunucuda Çöp Kutusu\'na taşınır',
@@ -391,6 +416,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Sil'));
       await settle(tester);
+      await pastUndoWindow(tester);
 
       // Kalıcı silme DEĞİL, taşıma olmalı: veri kaybı riski yok.
       expect(
@@ -402,6 +428,142 @@ void main() {
         imap.commandLog.any((c) => c.startsWith('expunge')),
         isFalse,
       );
+    });
+
+
+    appTest("sağa kaydırma arşivler: Gelen Kutusu'ndan çıkar, Arşiv'e taşınır",
+        (tester) async {
+      await seedAccount();
+      imap.seedInbox([
+        envelope(uid: 1, subject: 'Arşivlenecek'),
+        envelope(uid: 2, subject: 'Kalacak'),
+      ]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await swipeFirstRow(tester, right: true);
+
+      // Butona basmak gerekmeden liste güncellenir ve geri alma teklif edilir.
+      expect(find.text('Arşivle'), findsNothing);
+      expect(find.text('İleti arşivlendi'), findsOneWidget);
+      expect(find.text('Geri al'), findsOneWidget);
+
+      await pastUndoWindow(tester);
+
+      // Gerçek sunucu taşıması: Arşiv klasörüne, doğru kaynak klasörden.
+      expect(
+        imap.commandLog.any((c) => c.startsWith('move:INBOX->INBOX.Archive')),
+        isTrue,
+        reason: 'komutlar: ${imap.commandLog}',
+      );
+      expect(imap.store['INBOX.Archive']?.length, 1);
+      expect(imap.store['INBOX']?.length, 1);
+      // Kalıcı silme değil.
+      expect(imap.commandLog.any((c) => c.startsWith('expunge')), isFalse);
+
+      // Yerelde Gelen Kutusu'ndan çıkmış, gerçek bir taşıma olmuştur.
+      final rows = await db.select(db.messages).get();
+      expect(rows.length, 1);
+    });
+
+    appTest("sola kaydırma siler: Çöp Kutusu'na taşınır", (tester) async {
+      await seedAccount();
+      imap.seedInbox([envelope(uid: 1, subject: 'Silinecek')]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await swipeFirstRow(tester, right: false);
+      expect(find.text('İleti silindi'), findsOneWidget);
+      await pastUndoWindow(tester);
+
+      expect(
+        imap.commandLog.any((c) => c.startsWith('move:INBOX->INBOX.Trash')),
+        isTrue,
+        reason: 'komutlar: ${imap.commandLog}',
+      );
+      expect(imap.store['INBOX.Trash']?.length, 1);
+      expect(imap.store['INBOX.Archive']?.length ?? 0, 0);
+    });
+
+    appTest('kısa kaydırma eşiği aşmaz: hiçbir eylem çalışmaz', (tester) async {
+      await seedAccount();
+      imap.seedInbox([envelope(uid: 1, subject: 'Yerinde kalır')]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await tester.drag(find.byType(MailRow).first, const Offset(60, 0));
+      await settle(tester);
+      await pastUndoWindow(tester);
+
+      expect(rowText('Yerinde kalır'), findsOneWidget);
+      expect(imap.commandLog.any((c) => c.startsWith('move:')), isFalse);
+    });
+
+    appTest('arşivlenen ileti Arşiv klasöründe görünür ve eşitlemeden sonra da kalır',
+        (tester) async {
+      await seedAccount();
+      imap.seedInbox([envelope(uid: 1, subject: 'Arşivdeki ileti')]);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await swipeFirstRow(tester, right: true);
+      await pastUndoWindow(tester);
+      expect(rowText('Arşivdeki ileti'), findsNothing);
+
+      await tester.tap(find.byTooltip('Klasörler'));
+      await settle(tester);
+      await tester.tap(
+        find.descendant(of: find.byType(Drawer), matching: find.text('Arşiv')),
+      );
+      await settle(tester);
+      await pastUndoWindow(tester);
+
+      expect(rowText('Arşivdeki ileti'), findsOneWidget);
+    });
+
+    appTest('sunucu taşımayı reddederse ileti geri gelir ve kullanıcı bilgilendirilir',
+        (tester) async {
+      await seedAccount();
+      imap.seedInbox([envelope(uid: 1, subject: 'Geri gelecek')]);
+      imap.failMove = const ServerFailure(detail: 'NO', isPermanent: true);
+
+      await pumpApp(tester);
+      await settle(tester);
+
+      await swipeFirstRow(tester, right: true);
+
+      // Kuyruk işlenir, sunucu reddeder: kullanıcıya hata gösterilir (3 sn
+      // görünür) ve ileti sunucudan geri yüklenip Gelen Kutusu'nda belirir.
+      await tester.pump(const Duration(seconds: 1));
+      await settle(tester);
+      expect(find.textContaining('arşivlenemedi'), findsOneWidget);
+      expect(rowText('Geri gelecek'), findsOneWidget);
+      expect(imap.store['INBOX']?.length, 1);
+      await pastUndoWindow(tester);
+    });
+
+    appTest('Geri al sunucu durumunu da korur: taşıma hiç yapılmaz', (tester) async {
+      await seedAccount();
+      imap.seedInbox([envelope(uid: 1, subject: 'Vazgeçilen')]);
+
+      // Uzun pencere: sunucu işlemi kuyrukta bekler ve iptal edilebilir.
+      await pumpApp(tester, undoWindow: const Duration(seconds: 30));
+      await settle(tester);
+
+      await swipeFirstRow(tester, right: true);
+      expect(rowText('Vazgeçilen'), findsNothing);
+
+      await tester.tap(find.text('Geri al'));
+      await settle(tester);
+      await pastUndoWindow(tester, wait: const Duration(seconds: 31));
+
+      expect(rowText('Vazgeçilen'), findsOneWidget);
+      expect(imap.commandLog.any((c) => c.startsWith('move:')), isFalse);
+      expect(imap.store['INBOX']?.length, 1);
     });
 
     appTest('okundu işaretleme sunucuya \\Seen gönderir', (tester) async {
@@ -649,6 +811,72 @@ void main() {
         isTrue,
         reason: 'komutlar: ${imap.commandLog}',
       );
+    });
+
+    appTest('kişi önerisi seçilince avatarlı çipe dönüşür ve gönderilir',
+        (tester) async {
+      final accountId = await seedAccount();
+      await db.upsertContact(
+        accountId: accountId,
+        email: 'ayse@ornek.com',
+        name: 'Ayşe Yılmaz',
+      );
+      await pumpApp(tester);
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Yeni ileti'));
+      await settle(tester);
+
+      await tester.enterText(find.byType(TextField).at(0), 'ays');
+      await tester.pump(const Duration(milliseconds: 50));
+      // Öneri: başlık ad, alt satır adres.
+      expect(find.text('Ayşe Yılmaz'), findsOneWidget);
+      expect(find.text('ayse@ornek.com'), findsOneWidget);
+
+      await tester.tap(find.text('Ayşe Yılmaz'));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // Seçilen kişi çip olarak kalır, öneri listesi kapanır.
+      expect(find.text('Ayşe Yılmaz'), findsOneWidget);
+      expect(find.text('ayse@ornek.com'), findsNothing);
+
+      await tester.enterText(find.byType(TextField).at(0), 'ikinci@ornek.com,');
+      await tester.enterText(find.byType(TextField).at(1), 'Çipler');
+      await tester.pump();
+      expect(find.text('Ikinci'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Gönder'));
+      await settle(tester);
+
+      expect(smtp.sent, hasLength(1));
+      expect(
+        smtp.sent.single.to.map((a) => a.email),
+        ['ayse@ornek.com', 'ikinci@ornek.com'],
+      );
+      expect(smtp.sent.single.to.first.name, 'Ayşe Yılmaz');
+    });
+
+    appTest('boş alanda geri tuşu son çipi siler', (tester) async {
+      await seedAccount();
+      await pumpApp(tester);
+      await settle(tester);
+
+      await tester.tap(find.byTooltip('Yeni ileti'));
+      await settle(tester);
+
+      await tester.enterText(find.byType(TextField).at(0), 'a@b.com, c@d.com,');
+      await tester.pump();
+      expect(find.text('A'), findsOneWidget);
+      expect(find.text('C'), findsOneWidget);
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+
+      await tester.tap(find.byTooltip('Gönder'));
+      await tester.pump();
+      expect(find.text('En az bir alıcı girin.'), findsOneWidget);
     });
 
     /// "Yeni ileti" ile yazma ekranını açar, alıcı yazıp X ile kapatır.
@@ -1144,6 +1372,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('Kalıcı olarak silinsin mi?'), findsNothing);
+      await pastUndoWindow(tester);
     });
   });
 }

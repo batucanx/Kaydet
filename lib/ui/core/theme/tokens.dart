@@ -237,37 +237,58 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
 
   /// Koyu tema — varsayılan.
   ///
-  /// App bar/üst çubuk, navigasyon drawer'ı ve liste ekranları aynı yumuşak
-  /// antrasit tonunu kullanır; yükseltilmiş yüzeyler bunun biraz üzerindedir.
+  /// Gmail'in Material 3 "tonal" koyu temasından esinlenen, hafif soğuk bir
+  /// nötr palet: saf siyah/beyaz yok, yüzeyler tek bir nötr rampada basamak
+  /// basamak açılır (yükseltilmiş = daha açık) ve derinliği gölge değil ton
+  /// farkı verir.
+  ///
+  /// Yüzey hiyerarşisi:
+  ///   bg / appBarBg (#131314)         → Zemin, liste, üst çubuk
+  ///   readingBg (#2A2A2A)             → Yalnızca mail okuma bölmesi (aşağı bkz.)
+  ///   surface / surfaceDeep (#1E1F20) → Drawer, alan ve kart zemini
+  ///   surfaceElevated (#282A2C)       → Diyalog, alt sayfa, araç çubuğu
+  ///
+  /// Vurgu ikiye ayrılır — koyu zeminde tek renk hem dolgu hem metin olamaz:
+  ///   accent (#A8C7FA)     → metin, ikon, gösterge; zeminde 10,8:1
+  ///   accentFill (#0B57D0) → dolgu (düğme, seçili avatar); üstünde beyaz 6,4:1
+  ///
+  /// Ölçülen kontrastlar (WCAG, bg üzerinde): ana metin 14,5:1, ikincil 10,9:1,
+  /// üçüncül 5,8:1 (yükseltilmiş yüzeyde 4,5:1), danger 7,8:1, success 9,5:1,
+  /// warning 13,2:1. `dangerFill` üzerinde beyaz 5,8:1.
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
-    bg: Color(0xFF242629), // Gelen kutusu / liste ekranları
-    appBarBg: Color(0xFF242629), // Üst çubuk — liste ile aynı gri tonda
-    readingBg: Color(0xFF242629), // Mail detayının okuma bölmesi
-    surface: Color(0xFF242629),
-    surfaceElevated: Color(0xFF34373A),
-    surfaceDeep: Color(
-      0xFF242629,
-    ), // Drawer zemini — liste ve app bar ile aynı gri tonda
-    textPrimary: Color(0xFFFFFFFF),
-    // beyaz %62/%42 opaklık, readingBg (1C1C1E) üzerine düz renk karşılığı
-    textSecondary: Color(0xFFA9A9AA),
-    textTertiary: Color(0xFF8A8D90),
-    accent: Color(0xFF0078D4), // Fluent marka mavisi
-    accentFill: Color(0xFF0078D4),
+    bg: Color(0xFF131314),
+    appBarBg: Color(0xFF131314),
+    // Uzun metin okunan tek yüzey: uygulamanın near-black zemininde açık
+    // renkli metin parlar (halation) ve uzun okumada yorar. Nötr, orta-koyu
+    // bir gri bunu yumuşatır. WebView zemini, iskelet ve mail renk dönüşümü
+    // (bkz. `MailHtmlDocument`, `mail_render.js`) bu token'a uyar. Üzerinde
+    // ana metin 11,2:1, ikincil 8,4:1, üçüncül 4,5:1 — bundan açık bir gri
+    // (#2E2E2E+) tarih/metadata metnini 4,5:1'in altına düşürür.
+    readingBg: Color(0xFF2A2A2A),
+    surface: Color(0xFF1E1F20),
+    surfaceElevated: Color(0xFF282A2C),
+    surfaceDeep: Color(0xFF1E1F20),
+    textPrimary: Color(0xFFE3E3E3),
+    textSecondary: Color(0xFFC4C7C5),
+    textTertiary: Color(0xFF8E918F),
+    accent: Color(0xFFA8C7FA),
+    accentFill: Color(0xFF0B57D0),
     onAccentFill: Color(0xFFFFFFFF),
     // Seçili klasör/liste satırının arka planı — bkz. `FolderDrawer`
-    // içindeki `_FolderTile` ve `listTileTheme.selectedColor`.
-    accentSubtle: Color(0xFF172336),
-    danger: Color(0xFFEC5A5F),
-    dangerFill: Color(0xFFC62A2F),
-    success: Color(0xFF30A46C),
-    warning: Color(0xFFF5A623),
-    // `readingBg` (1C1C1E) üzerinde görünür kalması için beyaz %12
-    // opaklığın düz renk karşılığına çekildi (saf siyah `bg` üzerinde de
-    // fazlasıyla kontrastlı kalır).
-    divider: Color(0xFF3D4043),
-    border: Color(0xFF414448),
+    // içindeki `_FolderTile` ve `listTileTheme.selectedColor`. Üzerinde
+    // `accent` 7,2:1, ana metin 9,7:1.
+    accentSubtle: Color(0xFF1A3556),
+    danger: Color(0xFFF28B82),
+    dangerFill: Color(0xFFC5221F),
+    success: Color(0xFF81C995),
+    warning: Color(0xFFFDD663),
+    // Yükseltilmiş yüzeyde de (diyalog, alt sayfa, araç çubuğu üst çizgisi)
+    // seçilebilsin diye zeminde 1,6:1 — daha koyusu (#2E3032) orada 1,1:1'e
+    // düşüp kayboluyordu.
+    divider: Color(0xFF37393B),
+    // Alan çerçevesi, onay kutusu, sheet tutamacı: ayraçtan bir basamak belirgin.
+    border: Color(0xFF444746),
     scrim: Color(0x8C000000),
     avatarTones: _darkAvatarTones,
   );

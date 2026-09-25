@@ -1541,7 +1541,6 @@ class _ActionBar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
-    final repository = ref.read(mailRepositoryProvider);
 
     Future<void> startCompose(ComposeMode mode) => openCompose(
       context,
@@ -1577,7 +1576,7 @@ class _ActionBar extends ConsumerWidget {
                 icon: const Icon(LucideIcons.archive),
                 tooltip: 'Arşivle',
                 onPressed: () async {
-                  await repository.archive([message.id]);
+                  await archiveMessages(context, ref, [message.id]);
                   if (context.mounted) Navigator.of(context).pop();
                 },
               ),

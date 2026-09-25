@@ -19,6 +19,7 @@ import '../data/services/app_settings.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
+import '../data/services/share_intake_service.dart';
 import '../data/services/smtp_service.dart';
 import 'sync_controller.dart';
 
@@ -52,6 +53,14 @@ final smtpServiceProvider = Provider<SmtpService>(
 final notificationServiceProvider = Provider<NotificationService>(
   (ref) => NotificationService(),
 );
+
+/// Sistem "Paylaş" menüsünden gelen dosyaların native katmandan alınması
+/// (bkz. `ShareNavigator`).
+final shareIntakeServiceProvider = Provider<ShareIntakeService>((ref) {
+  final service = ShareIntakeService();
+  ref.onDispose(service.dispose);
+  return service;
+});
 
 final mailConnectionProvider = Provider<MailConnection>((ref) {
   final connection = MailConnection(
@@ -90,6 +99,17 @@ final mailRepositoryProvider = Provider<MailRepository>((ref) {
         unawaited(notifications.cancelMessages(ids).catchError((Object _) {})),
   );
 });
+
+/// Arşivle/sil sunucu işleminin "Geri al" için bekletildiği süre. Testler
+/// kısaltmak için geçersiz kılar.
+final mailUndoWindowProvider = Provider<Duration>(
+  (ref) => const Duration(seconds: 6),
+);
+
+/// Sunucuda başarısız olup yerelde geri alınan arşivle/sil/taşı eylemleri.
+final mailActionFailuresProvider = StreamProvider<MailActionFailure>(
+  (ref) => ref.watch(mailRepositoryProvider).actionFailures,
+);
 
 final accountRepositoryProvider = Provider<AccountRepository>(
   (ref) => AccountRepository(
@@ -178,6 +198,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setSyncFrequency(SyncFrequency frequency) =>
       _save(state.copyWith(syncFrequency: frequency));
+
+  Future<void> setRemotePush(bool value) =>
+      _save(state.copyWith(remotePushEnabled: value));
 
   Future<void> setConfirmBeforeDelete(bool value) =>
       _save(state.copyWith(confirmBeforeDelete: value));
@@ -488,16 +511,24 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
     return const Stream<List<MessageRow>>.empty();
   }
 
+  // Çöp Kutusu'nda iletiler orijinal gönderi tarihine göre değil,
+  // sildikten sonra çöp kutusuna taşınma sırasına göre (en son silinen
+  // en üstte) gösterilir; bunun için `id DESC` proxy olarak kullanılır.
+  final isTrash =
+      ref.watch(currentMailboxProvider)?.specialUse == SpecialUse.trash;
+
   final Stream<List<MessageRow>> source = folder.isFlaggedView
       ? db.watchFlagged(accountId: accountId)
       : db.watchMessages(
           accountId: accountId,
           mailboxId: folder.mailboxId!,
           limit: ref.watch(pageLimitProvider),
+          orderById: isTrash,
         );
 
   return source.map(filter.apply);
 });
+
 
 /// Liste ekranında gösterilecek tek bir öğe: tarih başlığı, ileti, boş
 /// durum ya da Sabitlenenler bölümünün kendisi.

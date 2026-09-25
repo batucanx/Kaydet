@@ -240,11 +240,15 @@ class SyncEngine {
 
     final fromUid = localHighest != null ? localHighest + 1 : mailbox.uidNext!;
     if (state.uidNext > fromUid) {
+      // Taşıma/silme sunucuya henüz işlenmemiş iletiler (kullanıcı az önce
+      // arşivledi/sildi) sunucuda hâlâ durur; yerelde en yüksek UID onlar
+      // olduğu için aralık çekimi onları listeye geri getirirdi.
       final fetched = await _fetchRangeAndStore(
         accountId,
         mailbox,
         fromUid: fromUid,
         toUid: state.uidNext - 1,
+        skipUids: await _lockedUids(accountId, mailbox.id),
       );
       if (fetched is Err<List<int>>) return Err(fetched.failure);
       newIds = (fetched as Ok<List<int>>).value;
@@ -445,19 +449,46 @@ class SyncEngine {
     MailboxRow mailbox, {
     required int fromUid,
     required int toUid,
+    Set<int> skipUids = const {},
   }) async {
     final fetched = await _connection.imap.fetchEnvelopeRange(
       fromUid: fromUid,
       toUid: toUid,
     );
     if (fetched is Err<List<FetchedEnvelope>>) return Err(fetched.failure);
+    final envelopes = (fetched as Ok<List<FetchedEnvelope>>).value;
     return Ok(
       await _storeEnvelopes(
         accountId,
         mailbox,
-        (fetched as Ok<List<FetchedEnvelope>>).value,
+        skipUids.isEmpty
+            ? envelopes
+            : envelopes.where((e) => !skipUids.contains(e.uid)).toList(),
       ),
     );
+  }
+
+  /// Yerelden iyimser olarak kaldırılmış iletileri sunucudan geri yükler.
+  ///
+  /// Taşıma/silme geri alındığında ya da sunucuda başarısız olduğunda
+  /// kullanılır: UID'ler hâlâ [mailbox]'ta duruyorsa zarfları yeniden
+  /// çekilir. Artımlı eşitleme (`localHighest + 1`) silinmiş satırı kendiliğinden
+  /// geri getirmez. Sunucuda artık olmayan UID'ler sessizce atlanır.
+  Future<Result<int>> restoreMessages({
+    required int accountId,
+    required MailboxRow mailbox,
+    required List<int> uids,
+  }) async {
+    if (uids.isEmpty) return const Ok(0);
+    final connected = await _connection.ensureConnected(accountId);
+    if (connected is Err<void>) return Err(connected.failure);
+
+    final selected = await _connection.imap.selectMailbox(mailbox.path);
+    if (selected is Err<MailboxState>) return Err(selected.failure);
+
+    final fetched = await _fetchAndStore(accountId, mailbox, uids);
+    if (fetched is Err<List<int>>) return Err(fetched.failure);
+    return Ok((fetched as Ok<List<int>>).value.length);
   }
 
   Future<List<int>> _storeEnvelopes(

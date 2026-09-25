@@ -31,6 +31,15 @@ android {
         versionName = flutter.versionName
     }
 
+    testOptions {
+        unitTests.all {
+            // Robolectric, yerel kütüphane adını `os.name.toLowerCase()` ile kurar;
+            // Türkçe yerelde "windows" → "wındows" (noktasız ı) olur ve
+            // `conscrypt_openjdk_jni-wındows-x86_64` bulunamaz.
+            it.jvmArgs("-Duser.language=en", "-Duser.country=US")
+        }
+    }
+
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
@@ -48,6 +57,14 @@ kotlin {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+
+    // Paylaşım gelen kutusu (bkz. ShareInbox.kt, ShareFileName.kt) JVM'de
+    // sınanır. `org.json`, Android'de framework'ten gelir; birim testlerinde
+    // ise gerçek uygulaması gerekir (framework'ün "stub"ı hep boş döner).
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
+    // ShareIntake'in (ContentResolver → dosya kopyalama) cihazsız sınanması için.
+    testImplementation("org.robolectric:robolectric:4.16")
 }
 
 flutter {

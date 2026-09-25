@@ -24,6 +24,9 @@ import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import 'quick_contacts_strip.dart';
+import 'recipient_chip_layout.dart';
+import 'recipient_details_sheet.dart';
 
 /// Yazma ekranının açılış biçimi.
 enum ComposeMode { newMessage, reply, replyAll, forward }
@@ -59,6 +62,9 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.replyToId,
     this.mode = ComposeMode.newMessage,
     this.initialTo,
+    this.initialAttachmentPaths = const [],
+    this.initialSubject,
+    this.initialBody,
   });
 
   /// Var olan taslağı düzenlemek için.
@@ -72,6 +78,16 @@ class ComposeScreen extends ConsumerStatefulWidget {
   /// Kişiler sekmesinden "yaz" ile açıldığında Kime alanına önceden
   /// doldurulacak adres (bkz. `ContactsScreen`).
   final String? initialTo;
+
+  /// Sistem "Paylaş" menüsünden gelen dosyalar (bkz. `ShareNavigator`) —
+  /// yalnızca YENİ iletide, ek listesine seçicilerle eklenmiş gibi girer.
+  final List<String> initialAttachmentPaths;
+
+  /// Paylaşan uygulamanın verdiği konu (ör. tarayıcıdaki sayfa başlığı).
+  final String? initialSubject;
+
+  /// Paylaşılan düz metin/bağlantı; imzanın ÜSTÜNE, gövdenin başına konur.
+  final String? initialBody;
 
   @override
   ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
@@ -285,11 +301,25 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       }
     } else {
       if (widget.initialTo != null) _to.text = widget.initialTo!;
-      _setPlainBody(_defaultSignatureBody);
+      if (widget.initialSubject != null) _subject.text = widget.initialSubject!;
+      _attachments.addAll(widget.initialAttachmentPaths);
+      _setPlainBody(_initialNewBody());
     }
 
     if (!mounted) return;
     setState(() => _initialised = true);
+    // Paylaşımdan gelen dosyalar henüz hiçbir yerde kayıtlı değil; ilk
+    // kullanıcı dokunuşunu beklemeden otomatik kaydetmeyi başlat ki uygulama
+    // hemen kapanırsa da taslak (ve ek) kaybolmasın.
+    if (_attachments.isNotEmpty) _onChanged();
+  }
+
+  /// Yeni iletinin ilk gövdesi: paylaşılan metin varsa başa, imza altına.
+  String _initialNewBody() {
+    final shared = widget.initialBody?.trim() ?? '';
+    final signature = _defaultSignatureBody;
+    if (shared.isEmpty) return signature;
+    return signature.isEmpty ? shared : '$shared\n\n$signature';
   }
 
   /// Kaydedilmiş gövdeyi düzenleyiciye yükler.
@@ -434,8 +464,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String get _defaultSignatureBody {
     final accountId = _fromAccountId;
     if (accountId == null) return '';
-    return ref.read(defaultSignatureForAccountProvider(accountId))?.body ??
-        '';
+    return ref.read(defaultSignatureForAccountProvider(accountId))?.body ?? '';
   }
 
   Future<void> _persistDraft() async {
@@ -528,7 +557,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // kaybolurdu; kullanıcı yazdıklarıyla ekranda kalır ve yeniden dener.
     if (messageId < 0) {
       setState(() => _sending = false);
-      _showError('İleti gönderilemedi. Lütfen birkaç saniye sonra tekrar deneyin.');
+      _showError(
+        'İleti gönderilemedi. Lütfen birkaç saniye sonra tekrar deneyin.',
+      );
       return;
     }
 
@@ -541,10 +572,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   void _showError(String message) {
-    KaydetNotice.show(
-      Overlay.of(context, rootOverlay: true),
-      message: message,
-    );
+    KaydetNotice.show(Overlay.of(context, rootOverlay: true), message: message);
   }
 
   Future<bool?> _confirmNoSubject() => showDialog<bool>(
@@ -586,9 +614,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final draftId = await _saveDraftOnExit();
     if (!mounted) return;
     setState(() => _readyToPop = true);
-    Navigator.of(context).pop<ComposeOutcome>(
-      draftId == null ? null : ComposeDraftSaved(draftId),
-    );
+    Navigator.of(
+      context,
+    ).pop<ComposeOutcome>(draftId == null ? null : ComposeDraftSaved(draftId));
   }
 
   /// Ek kaynağı seçildikten sonra (bkz. `_AttachMenuButton`) ilgili
@@ -835,8 +863,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               borderRadius: BorderRadius.circular(Radii.sm),
               onTap: allAccounts.length < 2
                   ? null
-                  : () =>
-                        controller.isOpen ? controller.close() : controller.open(),
+                  : () => controller.isOpen
+                        ? controller.close()
+                        : controller.open(),
               child: Row(
                 children: [
                   BrandAvatar(
@@ -914,7 +943,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 padding: EdgeInsets.zero,
                 // Kullanıcı gövdeyi kaydırmaya başlar başlamaz klavye
                 // kapanır — aşağıdaki alanlar (ekler, imza) görünür olur.
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 children: [
                   _RecipientField(
                     label: 'Kime',
@@ -1025,6 +1055,8 @@ TextStyle _composeCustomStyle(Attribute attribute) {
   return TextStyle(height: spacing?.height);
 }
 
+/// Kime/Bilgi/Gizli/Konu satırı. Konu düz metindir; adres satırları
+/// [_RecipientChipsField] ile Outlook gibi "avatar + ad" çipleri çizer.
 class _RecipientField extends StatelessWidget {
   const _RecipientField({
     required this.label,
@@ -1057,6 +1089,15 @@ class _RecipientField extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!isSubject) {
+      return _RecipientChipsField(
+        label: label,
+        controller: controller,
+        focusNode: focusNode!,
+        accountId: accountId,
+        trailing: trailing,
+      );
+    }
     final t = context.tokens;
     return Container(
       decoration: BoxDecoration(
@@ -1074,140 +1115,592 @@ class _RecipientField extends StatelessWidget {
               ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
             ),
           ),
-          Expanded(child: isSubject ? _plainField(context) : _emailField()),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              focusNode: focusNode,
+              keyboardType: TextInputType.text,
+              textCapitalization: TextCapitalization.sentences,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              decoration: _fieldDecoration,
+            ),
+          ),
           ?trailing,
         ],
       ),
     );
   }
-
-  Widget _plainField(BuildContext context) => TextField(
-    controller: controller,
-    focusNode: focusNode,
-    keyboardType: TextInputType.text,
-    textCapitalization: TextCapitalization.sentences,
-    style: Theme.of(
-      context,
-    ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
-    decoration: _fieldDecoration,
-  );
-
-  /// Kime/Bilgi/Gizli — kişi defterinden otomatik tamamlama. Alan birden
-  /// çok virgülle ayrılmış adres tutabildiği için `Autocomplete`'in seçim
-  /// davranışı elle yönetilir: yalnızca metnin SON parçası (son virgülden
-  /// sonrası) eşleştirilir/değiştirilir, öncesindeki tamamlanmış adreslere
-  /// dokunulmaz (bkz. [_ContactAutocomplete._lastFragment]).
-  Widget _emailField() => _ContactAutocomplete(
-    controller: controller,
-    focusNode: focusNode!,
-    decoration: _fieldDecoration,
-    accountId: accountId,
-  );
 }
 
-/// [_RecipientField]'ın Kime/Bilgi/Gizli alanlarını sarar: kullanıcı
-/// yazarken seçili "Gönderen" hesabın kişi defterindeki eşleşenleri küçük bir
-/// açılır listede önerir. Liste zaten en son kullanılana göre sıralı
-/// geldiğinden (bkz. `AppDatabase.watchContacts`), tek bir harf yazıldığı
-/// anda en üstte "en son/en çok kullanılan" eşleşme çıkar — ayrı bir "Son
-/// Kullanılanlar" görünümüne gerek bırakmadan aynı amaca hizmet eder.
-class _ContactAutocomplete extends ConsumerWidget {
-  const _ContactAutocomplete({
+/// Kime/Bilgi/Gizli alanı: tamamlanmış adresler "avatar + ad" çipi olarak,
+/// yazılmakta olan parça ise çiplerin yanındaki satır içi metin alanında
+/// durur; yazarken seçili "Gönderen" hesabın kişi defterindeki eşleşenler
+/// alanın altında tam genişlikte (avatar + ad + adres) önerilir.
+///
+/// Gerçeğin kaynağı hâlâ [controller]'ın metnidir (`ad <adres>, adres, …`):
+/// taslak, gönderim ve ön-doldurma kodu bu metni okur/yazar. Çipler bu
+/// metnin ayrıştırılmış görünümüdür; alan her değişiklikte metni geri yazar,
+/// dışarıdan (ön-doldurma, taslak yükleme) yazılan metni ise yeniden
+/// ayrıştırıp çiplere çevirir.
+///
+/// Öneri listesi zaten en son kullanılana göre sıralı geldiğinden (bkz.
+/// `AppDatabase.watchContacts`), tek bir harf yazıldığı anda en üstte
+/// "en son/en çok kullanılan" eşleşme çıkar.
+class _RecipientChipsField extends ConsumerStatefulWidget {
+  const _RecipientChipsField({
+    required this.label,
     required this.controller,
     required this.focusNode,
-    required this.decoration,
     this.accountId,
+    this.trailing,
   });
 
+  final String label;
   final TextEditingController controller;
   final FocusNode focusNode;
-  final InputDecoration decoration;
   final int? accountId;
+  final Widget? trailing;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final id = accountId;
+  ConsumerState<_RecipientChipsField> createState() =>
+      _RecipientChipsFieldState();
+}
+
+class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
+  static const _maxSuggestions = 8;
+
+  /// Hızlı Kişiler şeridinin en fazla kaç kişi göstereceği — arama
+  /// ekranındaki şeritle aynı (bkz. `AppDatabase.watchRecentContacts`).
+  static const _maxQuickContacts = 12;
+  static final _separators = RegExp(r'[,;\n]');
+
+  /// Yazılmakta olan (henüz çipe dönmemiş) parça.
+  final _input = TextEditingController();
+  List<EmailAddress> _chips = [];
+
+  /// Kendi yazdığımız değişikliği dış değişiklikten ayırır.
+  bool _writing = false;
+
+  /// Öneri katmanı `Overlay`'de çizildiği için alanın genişliğini buradan
+  /// öğrenir (bkz. `LayoutBuilder` aşağıda).
+  double _fieldWidth = 360;
+
+  @override
+  void initState() {
+    super.initState();
+    _chips = _dedupe(EmailAddress.parseInput(widget.controller.text));
+    widget.controller.addListener(_onExternalChange);
+    widget.focusNode.addListener(_onFocusChange);
+    widget.focusNode.onKeyEvent = _onKeyEvent;
+  }
+
+  @override
+  void didUpdateWidget(_RecipientChipsField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller.removeListener(_onExternalChange);
+      widget.controller.addListener(_onExternalChange);
+      _chips = _dedupe(EmailAddress.parseInput(widget.controller.text));
+      _input.clear();
+    }
+    if (oldWidget.focusNode != widget.focusNode) {
+      oldWidget.focusNode
+        ..removeListener(_onFocusChange)
+        ..onKeyEvent = null;
+      widget.focusNode
+        ..addListener(_onFocusChange)
+        ..onKeyEvent = _onKeyEvent;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onExternalChange);
+    widget.focusNode
+      ..removeListener(_onFocusChange)
+      ..onKeyEvent = null;
+    _input.dispose();
+    super.dispose();
+  }
+
+  // ---- Model <-> metin ----
+
+  static List<EmailAddress> _dedupe(List<EmailAddress> list) {
+    final seen = <String>{};
+    return [
+      for (final a in list)
+        if (seen.add(a.email.toLowerCase())) a,
+    ];
+  }
+
+  void _writeBack() {
+    final parts = [
+      for (final chip in _chips) chip.formatted,
+      if (_input.text.trim().isNotEmpty) _input.text.trim(),
+    ];
+    _writing = true;
+    try {
+      widget.controller.text = parts.join(', ');
+    } finally {
+      _writing = false;
+    }
+  }
+
+  /// Ön-doldurma / taslak yükleme gibi dışarıdan yazılan metin.
+  void _onExternalChange() {
+    if (_writing || !mounted) return;
+    setState(() {
+      _chips = _dedupe(EmailAddress.parseInput(widget.controller.text));
+      _input.clear();
+    });
+  }
+
+  // ---- Çip işlemleri ----
+
+  void _addChips(Iterable<EmailAddress> addresses) {
+    final next = _dedupe([..._chips, ...addresses]);
+    setState(() => _chips = next);
+    _writeBack();
+  }
+
+  void _removeChip(EmailAddress address) {
+    setState(
+      () => _chips = [
+        for (final c in _chips)
+          if (c != address) c,
+      ],
+    );
+    _writeBack();
+  }
+
+  /// Yazılmakta olan parça geçerli bir adresse çipe çevirir.
+  bool _commitFragment({bool onlyIfValid = true}) {
+    final text = _input.text.trim();
+    if (text.isEmpty) return false;
+    final parsed = EmailAddress.parseInput(text);
+    if (onlyIfValid && (parsed.isEmpty || parsed.any((a) => !a.isValid))) {
+      return false;
+    }
+    _input.clear();
+    _addChips(parsed);
+    return true;
+  }
+
+  void _onInputChanged(String value) {
+    final sep = value.lastIndexOf(_separators);
+    if (sep != -1) {
+      // Virgül/noktalı virgül/satır sonu (ya da çok adresli yapıştırma):
+      // ayırıcıya kadarki kısım çip olur, sonrası yeni parça olarak kalır.
+      final head = value.substring(0, sep);
+      final tail = value.substring(sep + 1).trimLeft();
+      _input.value = TextEditingValue(
+        text: tail,
+        selection: TextSelection.collapsed(offset: tail.length),
+      );
+      _addChips(EmailAddress.parseInput(head));
+      return;
+    }
+    // Boşluk: yazılan şey tam bir adresse çipe çevir (Outlook gibi).
+    if (value.endsWith(' ') && EmailAddress.isValidEmail(value)) {
+      _commitFragment();
+      return;
+    }
+    _writeBack();
+  }
+
+  void _onFocusChange() {
+    if (!widget.focusNode.hasFocus) _commitFragment();
+  }
+
+  /// Boş alanda geri tuşu son çipi siler. `TextField` bu tuşu boş metinde
+  /// tükettiği için düğümün kendi `onKeyEvent`'i üzerinden yakalanır.
+  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.backspace ||
+        _input.text.isNotEmpty ||
+        _chips.isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    _removeChip(_chips.last);
+    return KeyEventResult.handled;
+  }
+
+  void _onEditingComplete() {
+    if (_input.text.trim().isEmpty) {
+      FocusScope.of(context).nextFocus();
+      return;
+    }
+    _commitFragment();
+  }
+
+  /// Çipe dokunma: kişi ayrıntılarını açar. Klavye önce kapatılır ki sheet
+  /// klavyeyle yarışmasın (bkz. `_handleAttachSource`'taki aynı gerekçe);
+  /// yazılmakta olan geçerli bir parça varsa odak kaybıyla çipe döner
+  /// (bkz. [_onFocusChange]).
+  Future<void> _showDetails(EmailAddress address) {
+    FocusScope.of(context).unfocus();
+    return showRecipientDetails(
+      context,
+      address: address,
+      accountId: widget.accountId,
+    );
+  }
+
+  // ---- Öneriler ----
+
+  /// Hızlı Kişiler şeridi: en son kullanılan kişiler (bkz.
+  /// `AppDatabase.watchContacts` sırası), bu alanda zaten çip olanlar hariç —
+  /// otomatik tamamlamadaki [_optionsFor] ile aynı kural, böylece bir kişi
+  /// aynı alana iki kez eklenemez.
+  List<EmailAddress> _quickContacts(List<ContactRow> contacts) {
+    final taken = {for (final c in _chips) c.email.toLowerCase()};
+    return contacts
+        .where((c) => !taken.contains(c.email.toLowerCase()))
+        .take(_maxQuickContacts)
+        .map(
+          (c) => EmailAddress(
+            email: c.email,
+            name: c.name.isEmpty ? null : c.name,
+          ),
+        )
+        .toList();
+  }
+
+  Iterable<ContactRow> _optionsFor(String text, List<ContactRow> contacts) {
+    final fragment = foldForSearch(text.trim());
+    if (fragment.isEmpty) return const [];
+    final taken = {for (final c in _chips) c.email.toLowerCase()};
+    return contacts
+        .where(
+          (c) =>
+              !taken.contains(c.email.toLowerCase()) &&
+              (foldForSearch(c.email).contains(fragment) ||
+                  (c.name.isNotEmpty &&
+                      foldForSearch(c.name).contains(fragment))),
+        )
+        .take(_maxSuggestions);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final id = widget.accountId;
     final contacts = id == null
         ? const <ContactRow>[]
         : ref.watch(contactsForAccountProvider(id)).value ??
               const <ContactRow>[];
 
-    return Autocomplete<ContactRow>(
-      textEditingController: controller,
-      focusNode: focusNode,
-      displayStringForOption: (contact) => EmailAddress(
-        email: contact.email,
-        name: contact.name.isEmpty ? null : contact.name,
-      ).formatted,
+    final field = RawAutocomplete<ContactRow>(
+      textEditingController: _input,
+      focusNode: widget.focusNode,
+      // Seçim metni değiştirmez: çip eklenir, parça temizlenir.
+      displayStringForOption: (_) => '',
       optionsBuilder: (value) => _optionsFor(value.text, contacts),
-      onSelected: (contact) => _applySuggestion(controller, contact),
-      optionsViewBuilder: (context, onSelected, options) =>
-          _ContactOptionsList(options: options, onSelected: onSelected),
-      fieldViewBuilder:
-          (context, fieldController, fieldFocusNode, onFieldSubmitted) =>
-              TextField(
-                controller: fieldController,
-                focusNode: fieldFocusNode,
-                keyboardType: TextInputType.emailAddress,
-                style: Theme.of(context).textTheme.bodyMedium,
-                decoration: decoration,
+      onSelected: (contact) {
+        _input.clear();
+        _addChips([
+          EmailAddress(
+            email: contact.email,
+            name: contact.name.isEmpty ? null : contact.name,
+          ),
+        ]);
+      },
+      optionsViewBuilder: (context, onSelected, options) => _ContactOptionsList(
+        options: options,
+        onSelected: onSelected,
+        width: _fieldWidth,
+      ),
+      fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            _fieldWidth = constraints.maxWidth;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: focusNode.requestFocus,
+              child: Container(
+                constraints: const BoxConstraints(minHeight: 48),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: t.divider)),
+                ),
+                padding: const EdgeInsets.only(left: Space.lg, right: Space.sm),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 52,
+                      height: 48,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          widget.label,
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(color: t.textTertiary),
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: Space.sm),
+                        // Çipler sığmayan satırda alt satıra atlamak yerine,
+                        // yeterli yer kalıyorsa kısaltılıp yan yana konur
+                        // (bkz. `RecipientChipLayout`).
+                        child: LayoutBuilder(
+                          builder: (context, box) {
+                            final maxWidths = RecipientChipLayout.maxWidths(
+                              naturalWidths: [
+                                for (final chip in _chips)
+                                  _RecipientChip.naturalWidth(context, chip),
+                              ],
+                              available: box.maxWidth,
+                              spacing: Space.xs,
+                              minShrunkWidth: _RecipientChip.minShrunkWidth,
+                            );
+                            return Wrap(
+                              spacing: Space.xs,
+                              runSpacing: Space.xs,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                // Çip döngüde yakalanır: geri çağrılar dokunma
+                                // anında `_chips[i]`ye değil, çizildiği andaki
+                                // çipe bağlı kalır (aynı karede silinse bile
+                                // aralık hatası olmaz).
+                                for (final (i, chip) in _chips.indexed)
+                                  _RecipientChip(
+                                    address: chip,
+                                    maxWidth: maxWidths[i],
+                                    onTap: () => _showDetails(chip),
+                                    onRemove: () => _removeChip(chip),
+                                  ),
+                                IntrinsicWidth(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      minWidth: 120,
+                                    ),
+                                    child: TextField(
+                                      controller: controller,
+                                      focusNode: focusNode,
+                                      keyboardType: TextInputType.emailAddress,
+                                      textInputAction: TextInputAction.next,
+                                      onChanged: _onInputChanged,
+                                      onEditingComplete: _onEditingComplete,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium,
+                                      decoration: _RecipientField
+                                          ._fieldDecoration
+                                          .copyWith(
+                                            contentPadding:
+                                                const EdgeInsets.symmetric(
+                                                  vertical: Space.sm,
+                                                ),
+                                          ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    if (widget.trailing != null)
+                      SizedBox(height: 48, child: widget.trailing),
+                  ],
+                ),
               ),
+            );
+          },
+        );
+      },
     );
-  }
 
-  static Iterable<ContactRow> _optionsFor(
-    String text,
-    List<ContactRow> contacts,
-  ) {
-    final fragment = foldForSearch(_lastFragment(text));
-    if (fragment.isEmpty) return const [];
-    return contacts
-        .where(
-          (c) =>
-              foldForSearch(c.email).contains(fragment) ||
-              (c.name.isNotEmpty && foldForSearch(c.name).contains(fragment)),
-        )
-        .take(5);
-  }
-
-  static void _applySuggestion(
-    TextEditingController controller,
-    ContactRow contact,
-  ) {
-    final text = controller.text;
-    final sepIndex = _lastSeparatorIndex(text);
-    final prefix = sepIndex == -1 ? '' : '${text.substring(0, sepIndex + 1)} ';
-    final formatted = EmailAddress(
-      email: contact.email,
-      name: contact.name.isEmpty ? null : contact.name,
-    ).formatted;
-    final newText = '$prefix$formatted, ';
-    controller.value = TextEditingValue(
-      text: newText,
-      selection: TextSelection.collapsed(offset: newText.length),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        field,
+        // Alan odaktayken ve yazılan parça boşken Hızlı Kişiler; yazmaya
+        // başlanınca yerini otomatik tamamlama alır. Seçilen kişi bu alana
+        // (Kime/Bilgi/Gizli — hangisi odaktaysa) çip olarak eklenir.
+        ListenableBuilder(
+          listenable: Listenable.merge([_input, widget.focusNode]),
+          builder: (context, _) {
+            final show = widget.focusNode.hasFocus && _input.text.isEmpty;
+            final quick = show
+                ? _quickContacts(contacts)
+                : const <EmailAddress>[];
+            return AnimatedSize(
+              duration: context.motion(Motion.base),
+              curve: Motion.standard,
+              alignment: Alignment.topCenter,
+              child: quick.isEmpty
+                  ? const SizedBox(width: double.infinity)
+                  : QuickContactsStrip(
+                      contacts: quick,
+                      onSelected: (address) => _addChips([address]),
+                    ),
+            );
+          },
+        ),
+      ],
     );
-  }
-
-  /// "ali@x.com, meh" -> "meh" (son virgül/noktalı virgülden sonrası).
-  static String _lastFragment(String text) {
-    final idx = _lastSeparatorIndex(text);
-    return (idx == -1 ? text : text.substring(idx + 1)).trim();
-  }
-
-  static int _lastSeparatorIndex(String text) {
-    for (var i = text.length - 1; i >= 0; i--) {
-      if (text[i] == ',' || text[i] == ';') return i;
-    }
-    return -1;
   }
 }
 
-/// Otomatik tamamlama açılır listesi — her kişi avatarı + ad + e-posta.
+/// Tamamlanmış alıcı: küçük avatar + görünen ad. Geçersiz adres kırmızı
+/// çerçeveyle işaretlenir (gönderimde zaten reddedilir).
+///
+/// İki AYRI dokunma hedefi vardır ve birbirini gölgelemez: gövde (avatar + ad)
+/// kişi ayrıntılarını açar ([onTap]), sağdaki "x" alıcıyı siler
+/// ([onRemove]). Çipin tamamı tek bir `InkWell` olsaydı "x"e dokunmak da
+/// ayrıntıları açardı; bu yüzden "x" gövdenin dışındadır.
+class _RecipientChip extends StatelessWidget {
+  const _RecipientChip({
+    required this.address,
+    required this.maxWidth,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  final EmailAddress address;
+
+  /// Bu çipin alabileceği en geniş ölçü (bkz. `RecipientChipLayout`); adı
+  /// buna sığmazsa "…" ile kısalır.
+  final double maxWidth;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  static const double _avatarSize = 20;
+  static const double _removeIconSize = 14;
+
+  /// Tek başına duran çipin en fazla ne kadar genişleyeceği.
+  static const double _maxNaturalWidth = 260;
+
+  /// Kalan yer bundan azsa çip daraltılıp yan yana konmaz, alt satıra geçer:
+  /// avatar + "x" + birkaç harf bundan az yerde okunmaz.
+  static const double minShrunkWidth = 110;
+
+  /// Metin DIŞINDA kalan yatay ölçü: gövde iç boşluğu + avatar + avatar-ad
+  /// boşluğu + "x" alanı + sağ boşluk (bkz. `build`).
+  static const double _chrome =
+      Space.xs * 2 +
+      _avatarSize +
+      Space.sm +
+      (_removeIconSize + Space.xs * 2) +
+      Space.xs;
+
+  static TextStyle? _textStyle(BuildContext context) =>
+      Theme.of(context).textTheme.bodyMedium;
+
+  /// Çipin kısaltılmadan istediği genişlik: adın gerçek ölçüsü + [_chrome].
+  static double naturalWidth(BuildContext context, EmailAddress address) {
+    final painter = TextPainter(
+      text: TextSpan(text: address.display, style: _textStyle(context)),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final width = painter.width;
+    painter.dispose();
+    return (_chrome + width).ceilToDouble().clamp(0, _maxNaturalWidth);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final valid = address.isValid;
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: maxWidth),
+      child: Material(
+        color: t.isDark ? t.surfaceElevated : t.surfaceDeep,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.sm),
+          side: valid ? BorderSide.none : BorderSide(color: t.danger),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Flexible(
+              child: Semantics(
+                button: true,
+                label: '${address.display}, ${address.email}',
+                hint: 'Kişi ayrıntılarını aç',
+                excludeSemantics: true,
+                onTap: onTap,
+                child: InkWell(
+                  onTap: onTap,
+                  child: Padding(
+                    padding: const EdgeInsets.all(Space.xs),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        BrandAvatar(
+                          name: address.name,
+                          email: address.email,
+                          size: _avatarSize,
+                        ),
+                        const SizedBox(width: Space.sm),
+                        Flexible(
+                          child: Text(
+                            address.display,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: _textStyle(context)?.copyWith(
+                              color: valid ? t.textPrimary : t.danger,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Semantics(
+              button: true,
+              label: 'Alıcıyı kaldır',
+              excludeSemantics: true,
+              onTap: onRemove,
+              child: InkResponse(
+                onTap: onRemove,
+                radius: 14,
+                child: Padding(
+                  padding: const EdgeInsets.all(Space.xs),
+                  child: Icon(
+                    LucideIcons.x,
+                    size: _removeIconSize,
+                    color: t.textTertiary,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: Space.xs),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Otomatik tamamlama açılır listesi — alanın altında tam genişlikte;
+/// her satırda küçük avatar, başlık (ad ya da adres) ve alt satırda adres.
+/// Satırlar bilerek sıkı tutulur: liste yazma alanının üstüne biner ve
+/// büyük satırlar iki-üç öneride ekranın yarısını kaplıyordu.
 class _ContactOptionsList extends StatelessWidget {
-  const _ContactOptionsList({required this.options, required this.onSelected});
+  const _ContactOptionsList({
+    required this.options,
+    required this.onSelected,
+    required this.width,
+  });
 
   final Iterable<ContactRow> options;
   final AutocompleteOnSelected<ContactRow> onSelected;
+  final double width;
+
+  static const double _avatarSize = 28;
 
   @override
   Widget build(BuildContext context) {
@@ -1218,35 +1711,68 @@ class _ContactOptionsList extends StatelessWidget {
       child: Material(
         elevation: 4,
         color: t.surfaceElevated,
-        borderRadius: BorderRadius.circular(Radii.md),
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 240, maxWidth: 360),
-          child: ListView.builder(
+          constraints: BoxConstraints(
+            maxHeight: 336,
+            minWidth: width,
+            maxWidth: width,
+          ),
+          child: ListView.separated(
             padding: EdgeInsets.zero,
             shrinkWrap: true,
             itemCount: list.length,
+            separatorBuilder: (_, _) => Divider(
+              height: 1,
+              thickness: 1,
+              indent: Space.lg + _avatarSize + Space.md,
+              color: t.divider,
+            ),
             itemBuilder: (context, index) {
               final contact = list[index];
-              return ListTile(
-                dense: true,
-                leading: BrandAvatar(
-                  name: contact.name,
-                  email: contact.email,
-                  size: 28,
-                ),
-                title: Text(
-                  contact.name.isEmpty ? contact.email : contact.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: contact.name.isEmpty
-                    ? null
-                    : Text(
-                        contact.email,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+              final hasName = contact.name.isNotEmpty;
+              return InkWell(
                 onTap: () => onSelected(contact),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Space.lg,
+                    vertical: Space.sm,
+                  ),
+                  child: Row(
+                    children: [
+                      BrandAvatar(
+                        name: contact.name,
+                        email: contact.email,
+                        size: _avatarSize,
+                      ),
+                      const SizedBox(width: Space.md),
+                      Expanded(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              hasName ? contact.name : contact.email,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.bodyMedium.copyWith(
+                                color: t.textPrimary,
+                              ),
+                            ),
+                            if (hasName)
+                              Text(
+                                contact.email,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: AppText.labelMedium.copyWith(
+                                  color: t.textTertiary,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               );
             },
           ),
@@ -1577,7 +2103,8 @@ class _FormatToolbarRow extends StatelessWidget {
                   _OptionMenuButton<ComposeLineSpacing>(
                     icon: LucideIcons.alignVerticalSpaceAround,
                     label: 'Satır aralığı',
-                    isActive: _currentLineSpacing() != ComposeLineSpacing.normal,
+                    isActive:
+                        _currentLineSpacing() != ComposeLineSpacing.normal,
                     options: _lineSpacingLabels,
                     current: _currentLineSpacing(),
                     onSelected: _applyLineSpacing,

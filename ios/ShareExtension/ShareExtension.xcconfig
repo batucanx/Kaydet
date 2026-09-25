@@ -1,0 +1,5 @@
+// Uzantı, ana uygulamayla AYNI sürüm numaralarını taşımalıdır (App Store
+// doğrulaması); bunlar Flutter'ın ürettiği Generated.xcconfig'ten gelir.
+// Flutter/Debug.xcconfig yerine yalnızca bu dosya dahil edilir: uzantı Flutter'a
+// ya da CocoaPods bağımlılıklarına bağlı değildir.
+#include "../Flutter/Generated.xcconfig"

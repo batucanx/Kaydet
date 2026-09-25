@@ -6,6 +6,11 @@
 	<true/>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>tr</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Kaydet</string>
 	<key>CFBundleExecutable</key>
@@ -52,6 +57,27 @@
 	<array>
 		<string>kaydet.periodic.sync</string>
 	</array>
+	<!-- Share Extension, paylasimi App Group'a yazdiktan sonra ana uygulamayi
+	     kaydetshare://open ile uyandirir (bkz. ShareExtension/
+	     ShareViewController.swift). URL veri tasimaz. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>tr.com.pazarlik.kaydet.share</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kaydetshare</string>
+			</array>
+		</dict>
+	</array>
+	<!-- Uygulamanin derin baglantisi yok: motor URL'leri rota olarak iletmesin.
+	     Aksi halde kaydetshare://open, WidgetsApp'te bilinmeyen bir rotaya
+	     acilmaya calisilirdi (bkz. lib/app/share_navigator.dart). -->
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

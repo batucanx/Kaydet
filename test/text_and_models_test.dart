@@ -151,6 +151,43 @@ void main() {
       expect(list.single.name, 'Yılmaz, Ahmet');
     });
 
+    test('formatted ↔ parseInput gidiş-dönüşü ad ile adresi karıştırmaz', () {
+      // Taslak açma ve yanıtlama bu metni yeniden ayrıştırır: tırnaksız
+      // "Yılmaz, Ahmet <a@x.com>" geçersiz "Yılmaz" + "Ahmet" olarak bölünürdü.
+      const names = [
+        'Ahmet Yılmaz',
+        'Yılmaz, Ahmet',
+        'Ahmet; Yılmaz',
+        'Ahmet "Ahmo" Yılmaz',
+        'A <B>',
+      ];
+      for (final name in names) {
+        final original = EmailAddress(email: 'a@x.com', name: name);
+        final parsed = EmailAddress.parseInput(original.formatted);
+        expect(parsed, hasLength(1), reason: original.formatted);
+        expect(parsed.single.email, 'a@x.com', reason: original.formatted);
+        expect(parsed.single.isValid, isTrue, reason: original.formatted);
+        // Tırnak karakterinin kendisi ad içinde korunamaz, düşer.
+        expect(parsed.single.name, name.replaceAll('"', ''));
+      }
+    });
+
+    test('formatted: ad yoksa yalnızca adres, sade ad tırnaksız', () {
+      expect(const EmailAddress(email: 'a@x.com').formatted, 'a@x.com');
+      expect(
+        const EmailAddress(email: 'a@x.com', name: '  ').formatted,
+        'a@x.com',
+      );
+      expect(
+        const EmailAddress(email: 'a@x.com', name: 'Ali Veli').formatted,
+        'Ali Veli <a@x.com>',
+      );
+      expect(
+        const EmailAddress(email: 'a@x.com', name: 'Yılmaz, Ali').formatted,
+        '"Yılmaz, Ali" <a@x.com>',
+      );
+    });
+
     test('noktalı virgül de ayraç sayılır', () {
       expect(EmailAddress.parseInput('a@x.com; b@y.com'), hasLength(2));
     });

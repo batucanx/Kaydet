@@ -66,10 +66,20 @@ class EmailAddress {
     return displayNameFromEmail(email);
   }
 
+  static final RegExp _nameNeedsQuotes = RegExp(r'[,;"<>]');
+
   /// RFC 5322 biçimi: `Ad Soyad <adres@alan.com>`
+  ///
+  /// Ad `,` `;` `"` `<` `>` içeriyorsa tırnaklanır: [parseInput] virgülü
+  /// yalnızca tırnak içindeyse korur, tırnaksız yazılan
+  /// `Yılmaz, Ahmet <a@x.com>` iki ayrı alıcıya (geçersiz `Yılmaz` + `Ahmet`)
+  /// bölünürdü. Taslak yeniden açılırken ve yanıtlarken bu metin ayrıştırılır.
   String get formatted {
     final n = name?.trim();
     if (n == null || n.isEmpty) return email;
+    if (_nameNeedsQuotes.hasMatch(n)) {
+      return '"${n.replaceAll('"', '')}" <$email>';
+    }
     return '$n <$email>';
   }
 

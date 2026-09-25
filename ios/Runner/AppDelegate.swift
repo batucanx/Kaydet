@@ -6,6 +6,7 @@ import workmanager_apple
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var notificationChannel: FlutterMethodChannel?
+  private var shareChannel: ShareChannel?
 
   override func application(
     _ application: UIApplication,
@@ -46,6 +47,14 @@ import workmanager_apple
       binaryMessenger: registrar.messenger()
     )
     notificationChannel = channel
+
+    // Share Extension'in App Group'a biraktigi paylasimlari Flutter'a acar
+    // (bkz. ShareChannel.swift, lib/app/share_navigator.dart). Paylasim
+    // Flutter'a itilmez; Flutter hazir olunca CEKER — bu yuzden motorun bu
+    // noktada hazir olmasi gerekmez.
+    shareChannel = ShareChannel(
+      messenger: engineBridge.pluginRegistry.registrar(forPlugin: "KaydetShare").messenger()
+    )
     channel.setMethodCallHandler { call, result in
       switch call.method {
       case "registerForRemoteNotifications":
