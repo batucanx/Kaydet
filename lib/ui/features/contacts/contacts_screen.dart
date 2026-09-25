@@ -233,7 +233,7 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
               SlidableAction(
                 onPressed: (_) => _confirmDelete(contact),
                 backgroundColor: t.dangerFill,
-                foregroundColor: Colors.white,
+                foregroundColor: t.onAccentFill,
                 icon: LucideIcons.trash2,
                 label: 'Sil',
               ),

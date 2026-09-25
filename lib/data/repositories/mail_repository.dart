@@ -17,6 +17,49 @@ import '../services/smtp_service.dart';
 import 'mail_connection.dart';
 import 'sync_engine.dart';
 
+/// Kullanıcı eyleminin türü — başarısızlık bildirimindeki metni belirler.
+enum MailActionKind { archive, delete, move }
+
+/// Sunucuya işlenemeyen ve yerelde geri alınan (rollback) bir taşıma/silme.
+class MailActionFailure {
+  const MailActionFailure({
+    required this.kind,
+    required this.count,
+    required this.failure,
+  });
+
+  final MailActionKind kind;
+  final int count;
+  final AppFailure failure;
+}
+
+/// Arşivle/sil/taşı eyleminin geri alma kolu.
+///
+/// Geri alma yalnızca yerel listeyi değil GERÇEK sunucu durumunu korur:
+/// sunucu işlemi geri alma penceresi dolana kadar kuyrukta bekletilir,
+/// geri alınınca kuyruktan silinir ve iletiler sunucudan geri yüklenir.
+class MailActionHandle {
+  const MailActionHandle(this._undo);
+
+  final Future<bool> Function() _undo;
+
+  /// Geri alma başarılıysa `true`; işlem zaten sunucuya işlendiyse ya da
+  /// iletiler geri yüklenemediyse `false`.
+  Future<bool> undo() => _undo();
+
+  static MailActionHandle? combine(List<MailActionHandle> handles) {
+    if (handles.isEmpty) return null;
+    if (handles.length == 1) return handles.single;
+    return MailActionHandle(() async {
+      var ok = true;
+      for (final handle in handles) {
+        ok = await handle.undo() && ok;
+      }
+      return ok;
+    });
+  }
+}
+
 /// Kullanıcı eylemleri, bekleyen işlem kuyruğu ve giden kutusu.
 ///
 /// Her eylem önce yerel veritabanına yazılır (arayüz anında tepki verir),
@@ -53,6 +96,18 @@ class MailRepository {
 
   bool _processing = false;
   Future<void>? _activeRun;
+
+  /// Taşıma/silme kuyruğa alınırken olan iletiler — aynı iletiye art arda
+  /// gelen (hızlı çift swipe, seçim çubuğu + swipe) isteklerin ikinci kez
+  /// kuyruğa girmesini engeller.
+  final Set<int> _movesInFlight = {};
+
+  final StreamController<MailActionFailure> _actionFailures =
+      StreamController<MailActionFailure>.broadcast();
+
+  /// Sunucuda başarısız olup yerelde geri alınan taşıma/silme işlemleri.
+  /// Arayüz bunu dinleyip kullanıcıyı bilgilendirir.
+  Stream<MailActionFailure> get actionFailures => _actionFailures.stream;
 
   /// Kuyruğu arka planda hemen işlemeye çalışır.
   ///
@@ -119,88 +174,171 @@ class MailRepository {
   /// bir UID'si olur, eski UID'yi taşımak yanlış iletiye işlem yapılmasına
   /// yol açar. Sunucu işlemi başarısız olursa kaynak klasörün bir sonraki
   /// eşitlemesi satırı geri getirir — sistem kendini onarır.
-  Future<void> moveToMailbox({
+  ///
+  /// [undoWindow] sıfırdan büyükse sunucu işlemi o süre kadar bekletilir ve
+  /// dönen [MailActionHandle] ile gerçekten geri alınabilir.
+  Future<MailActionHandle?> moveToMailbox({
     required List<int> messageIds,
     required SpecialUse target,
+    MailActionKind action = MailActionKind.move,
+    Duration undoWindow = Duration.zero,
   }) async {
-    if (messageIds.isEmpty) return;
+    if (messageIds.isEmpty) return null;
     final rows = await _db.messagesByIds(messageIds);
-    if (rows.isEmpty) return;
+    if (rows.isEmpty) return null;
 
     final accountId = rows.first.accountId;
-    if (rows.any((row) => row.accountId != accountId)) return;
+    if (rows.any((row) => row.accountId != accountId)) return null;
     final targetBox = await _db.mailboxBySpecialUse(accountId, target);
-    await _moveRowsToMailbox(rows, targetBox, fallbackTarget: target);
+    return _moveRowsToMailbox(
+      rows,
+      targetBox,
+      fallbackTarget: target,
+      action: action,
+      undoWindow: undoWindow,
+    );
   }
 
   /// Moves mail to an exact folder identity, including user-created folders.
-  Future<void> moveToFolder({
+  Future<MailActionHandle?> moveToFolder({
     required List<int> messageIds,
     required int targetMailboxId,
   }) async {
-    if (messageIds.isEmpty) return;
+    if (messageIds.isEmpty) return null;
     final rows = await _db.messagesByIds(messageIds);
-    if (rows.isEmpty) return;
+    if (rows.isEmpty) return null;
     final accountId = rows.first.accountId;
-    if (rows.any((row) => row.accountId != accountId)) return;
+    if (rows.any((row) => row.accountId != accountId)) return null;
     final target = await _db.mailboxById(targetMailboxId);
-    if (target == null || target.accountId != accountId) return;
-    await _moveRowsToMailbox(rows, target);
+    if (target == null || target.accountId != accountId) return null;
+    return _moveRowsToMailbox(rows, target, action: MailActionKind.move);
   }
 
-  Future<void> _moveRowsToMailbox(
+  Future<MailActionHandle?> _moveRowsToMailbox(
     List<MessageRow> rows,
     MailboxRow? targetBox, {
     SpecialUse? fallbackTarget,
+    required MailActionKind action,
+    Duration undoWindow = Duration.zero,
   }) async {
-    if (rows.isEmpty) return;
+    if (rows.isEmpty) return null;
     final accountId = rows.first.accountId;
     final actionableRows = rows
-        .where((row) => row.mailboxId != targetBox?.id)
+        .where(
+          (row) =>
+              row.mailboxId != targetBox?.id && !_movesInFlight.contains(row.id),
+        )
         .toList();
-    if (actionableRows.isEmpty) return;
+    if (actionableRows.isEmpty) return null;
 
-    // Yerel taslaklar sunucuya hiç gitmemiştir; doğrudan silinir.
-    final localOnly = actionableRows
-        .where((r) => r.isLocalOnly)
-        .map((r) => r.id)
-        .toList();
-    if (localOnly.isNotEmpty) await _db.deleteMessages(localOnly);
+    final claimedIds = actionableRows.map((r) => r.id).toList();
+    _movesInFlight.addAll(claimedIds);
+    try {
+      // Yerel taslaklar sunucuya hiç gitmemiştir; doğrudan silinir.
+      final localOnly = actionableRows
+          .where((r) => r.isLocalOnly)
+          .map((r) => r.id)
+          .toList();
+      if (localOnly.isNotEmpty) await _db.deleteMessages(localOnly);
 
-    final remote = actionableRows
-        .where((r) => !r.isLocalOnly && r.uid != null)
-        .toList();
-    if (remote.isEmpty) return;
+      final remote = actionableRows
+          .where((r) => !r.isLocalOnly && r.uid != null)
+          .toList();
+      if (remote.isEmpty) return null;
 
-    // Kuyruğa ekleme ve yerel silme tek transaction'da: aradaki kesintide
-    // taşıma işlemi hiç kuyruğa girmeden mesaj yerelden kaybolmaz.
-    await _db.transaction(() async {
-      await _enqueueByMailbox(
-        remote,
-        PendingOpType.move,
-        extra: {
-          'targetPath': targetBox?.path,
-          'targetSpecialUse':
-              targetBox?.specialUse.index ?? fallbackTarget?.index,
-        },
-      );
-      await _db.deleteMessages(remote.map((r) => r.id).toList());
+      final notBefore = undoWindow > Duration.zero
+          ? DateTime.now().toUtc().add(undoWindow)
+          : null;
+
+      // Kuyruğa ekleme ve yerel silme tek transaction'da: aradaki kesintide
+      // taşıma işlemi hiç kuyruğa girmeden mesaj yerelden kaybolmaz.
+      final operationIds = await _db.transaction(() async {
+        final ids = await _enqueueByMailbox(
+          remote,
+          PendingOpType.move,
+          notBefore: notBefore,
+          extra: {
+            'action': action.name,
+            'targetPath': targetBox?.path,
+            'targetSpecialUse':
+                targetBox?.specialUse.index ?? fallbackTarget?.index,
+          },
+        );
+        await _db.deleteMessages(remote.map((r) => r.id).toList());
+        return ids;
+      });
+      onMessagesHandled?.call(remote.map((r) => r.id).toList());
+      _scheduleKick(accountId, undoWindow);
+
+      if (undoWindow <= Duration.zero || operationIds.isEmpty) return null;
+      return _undoHandle(accountId, remote, operationIds);
+    } finally {
+      _movesInFlight.removeAll(claimedIds);
+    }
+  }
+
+  /// Bekleme süresi varsa sunucu işlemi o süre dolunca kuyruğu tetikler.
+  void _scheduleKick(int accountId, Duration delay) {
+    if (delay <= Duration.zero) {
+      kickQueue(accountId);
+      return;
+    }
+    Timer(delay + const Duration(milliseconds: 300), () => kickQueue(accountId));
+  }
+
+  MailActionHandle _undoHandle(
+    int accountId,
+    List<MessageRow> removed,
+    List<int> operationIds,
+  ) {
+    final uidsByMailbox = <int, List<int>>{};
+    for (final row in removed) {
+      uidsByMailbox.putIfAbsent(row.mailboxId, () => []).add(row.uid!);
+    }
+    return MailActionHandle(() async {
+      // Önce iletiler sunucudan geri yüklenir; bağlantı yoksa işlem kuyrukta
+      // kalır (sunucu durumu değişmez) ve geri alma başarısız sayılır.
+      for (final entry in uidsByMailbox.entries) {
+        final mailbox = await _db.mailboxById(entry.key);
+        if (mailbox == null) return false;
+        final restored = await _sync.restoreMessages(
+          accountId: accountId,
+          mailbox: mailbox,
+          uids: entry.value,
+        );
+        if (restored is Err<int>) return false;
+      }
+      final cancelled = await _db.cancelPendingOperations(operationIds);
+      if (cancelled == operationIds.length) return true;
+
+      // Bekleme süresi tam bu sırada doldu ve işlem sunucuya gitti: geri
+      // yüklenen satırlar artık bayat UID taşıyor, kaldırılır (ileti
+      // yeni klasöründe eşitlemeyle görünür).
+      for (final entry in uidsByMailbox.entries) {
+        await _db.deleteMessagesByUid(entry.key, entry.value);
+      }
+      return false;
     });
-    onMessagesHandled?.call(remote.map((r) => r.id).toList());
-    kickQueue(accountId);
   }
 
   /// Siler: normal klasörde Çöp Kutusu'na taşır, Çöp Kutusu'nda kalıcı siler.
-  Future<void> deleteMessages(List<int> messageIds) async {
-    if (messageIds.isEmpty) return;
+  ///
+  /// Çöp Kutusu'na taşıma [undoWindow] ile geri alınabilir; kalıcı silme
+  /// geri alınamaz (dönüş `null`).
+  Future<MailActionHandle?> deleteMessages(
+    List<int> messageIds, {
+    Duration undoWindow = Duration.zero,
+  }) async {
+    if (messageIds.isEmpty) return null;
     final rows = await _db.messagesByIds(messageIds);
-    if (rows.isEmpty) return;
+    if (rows.isEmpty) return null;
 
     final byMailbox = <int, List<MessageRow>>{};
     for (final row in rows) {
       byMailbox.putIfAbsent(row.mailboxId, () => []).add(row);
     }
 
+    final handles = <MailActionHandle>[];
     for (final entry in byMailbox.entries) {
       final mailbox = await _db.mailboxById(entry.key);
       final permanent =
@@ -209,12 +347,16 @@ class MailRepository {
       if (permanent) {
         await deletePermanently(entry.value.map((r) => r.id).toList());
       } else {
-        await moveToMailbox(
+        final handle = await moveToMailbox(
           messageIds: entry.value.map((r) => r.id).toList(),
           target: SpecialUse.trash,
+          action: MailActionKind.delete,
+          undoWindow: undoWindow,
         );
+        if (handle != null) handles.add(handle);
       }
     }
+    return MailActionHandle.combine(handles);
   }
 
   /// Kalıcı siler — geri dönüşü yoktur, çağıran onay almalıdır.
@@ -226,7 +368,11 @@ class MailRepository {
     final remote = rows.where((r) => !r.isLocalOnly && r.uid != null).toList();
     await _db.transaction(() async {
       if (remote.isNotEmpty) {
-        await _enqueueByMailbox(remote, PendingOpType.deletePermanently);
+        await _enqueueByMailbox(
+          remote,
+          PendingOpType.deletePermanently,
+          extra: {'action': MailActionKind.delete.name},
+        );
       }
       await _db.deleteMessages(rows.map((r) => r.id).toList());
     });
@@ -234,8 +380,17 @@ class MailRepository {
     kickQueue(rows.first.accountId);
   }
 
-  Future<void> archive(List<int> messageIds) =>
-      moveToMailbox(messageIds: messageIds, target: SpecialUse.archive);
+  /// Arşivler: iletiyi sunucuda gerçekten Arşiv klasörüne taşır. Swipe, seçim
+  /// çubuğu, detay ekranı ve bildirim eylemi bu tek yolu kullanır.
+  Future<MailActionHandle?> archive(
+    List<int> messageIds, {
+    Duration undoWindow = Duration.zero,
+  }) => moveToMailbox(
+    messageIds: messageIds,
+    target: SpecialUse.archive,
+    action: MailActionKind.archive,
+    undoWindow: undoWindow,
+  );
 
   Future<void> markSpam(List<int> messageIds) =>
       moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
@@ -770,10 +925,34 @@ class MailRepository {
     AppFailure failure,
   ) async {
     final attempt = op.attemptCount + 1;
-    final permanent =
+    var permanent =
         (failure is ServerFailure && failure.isPermanent) ||
         failure is RecipientRejectedFailure ||
+        // Hedef klasör çözülemedi/oluşturulamadı: tekrar denemek sonucu
+        // değiştirmez, kullanıcı hemen bilgilendirilmeli.
+        (op.type == PendingOpType.move && failure is MailboxNotFoundFailure) ||
         attempt >= maxAttempts;
+
+    // Kullanıcının arşivle/sil eylemi sunucuda kalıcı olarak başarısız: ileti
+    // yerelden iyimser olarak kaldırılmıştı, sunucudan geri yüklenir (aksi
+    // hâlde ileti kalıcı olarak kaybolmuş görünür) ve kullanıcı bilgilendirilir.
+    final removalKind = _removalKindOf(op);
+    if (permanent && removalKind != null) {
+      final restored = await _restoreRemovedMessages(op);
+      if (restored) {
+        _actionFailures.add(
+          MailActionFailure(
+            kind: removalKind,
+            count: _removedUidsOf(op).length,
+            failure: failure,
+          ),
+        );
+      } else {
+        // Geri yükleyemedik (ör. bağlantı yok): işlem kalıcı hata sayılmaz,
+        // ileti gizli kalır ve işlem yeniden denenir.
+        permanent = false;
+      }
+    }
 
     // Geçici hatalarda gecikme: 30 sn, 5 dk, 30 dk, 2 sa.
     const delays = [
@@ -805,6 +984,37 @@ class MailRepository {
         );
       }
     }
+  }
+
+  /// Yerelden iyimser olarak kaldırılan iletiler için kullanıcı eylemi türü;
+  /// bu tür bir işlem değilse `null`.
+  MailActionKind? _removalKindOf(PendingOperationRow op) {
+    if (op.type != PendingOpType.move &&
+        op.type != PendingOpType.deletePermanently) {
+      return null;
+    }
+    final name = _payloadOf(op)['action'];
+    for (final kind in MailActionKind.values) {
+      if (kind.name == name) return kind;
+    }
+    return null;
+  }
+
+  List<int> _removedUidsOf(PendingOperationRow op) =>
+      (_payloadOf(op)['uids'] as List?)?.whereType<int>().toList() ?? const [];
+
+  /// Başarısız işlemin kaynak klasöründen iletileri sunucudan geri yükler.
+  Future<bool> _restoreRemovedMessages(PendingOperationRow op) async {
+    final mailboxId = _payloadOf(op)['mailboxId'];
+    if (mailboxId is! int) return true;
+    final mailbox = await _db.mailboxById(mailboxId);
+    if (mailbox == null) return true;
+    final restored = await _sync.restoreMessages(
+      accountId: op.accountId,
+      mailbox: mailbox,
+      uids: _removedUidsOf(op),
+    );
+    return restored is Ok<int>;
   }
 
   Map<String, dynamic> _payloadOf(PendingOperationRow op) {
@@ -893,6 +1103,7 @@ class MailRepository {
           return _connection.imap.moveMessages(
             uids: uids,
             targetPath: targetPath,
+            sourcePath: mailboxPath,
           );
         });
 
@@ -1198,11 +1409,13 @@ class MailRepository {
   // ------------------------------------------------------------- yardımcı
 
   /// İletileri klasörlerine göre gruplayıp tek komut hâlinde kuyruğa alır.
-  Future<void> _enqueueByMailbox(
+  Future<List<int>> _enqueueByMailbox(
     List<MessageRow> rows,
     PendingOpType type, {
     Map<String, dynamic> extra = const {},
+    DateTime? notBefore,
   }) async {
+    final operationIds = <int>[];
     final byMailbox = <int, List<MessageRow>>{};
     for (final row in rows) {
       if (row.uid == null) continue;
@@ -1212,10 +1425,11 @@ class MailRepository {
     for (final entry in byMailbox.entries) {
       final mailbox = await _db.mailboxById(entry.key);
       if (mailbox == null) continue;
-      await _db.enqueue(
+      final id = await _db.enqueue(
         PendingOperationsCompanion.insert(
           accountId: entry.value.first.accountId,
           type: type,
+          nextAttemptAt: Value(notBefore),
           payloadJson: Value(
             jsonEncode({
               'mailboxId': entry.key,
@@ -1227,6 +1441,8 @@ class MailRepository {
           ),
         ),
       );
+      operationIds.add(id);
     }
+    return operationIds;
   }
 }

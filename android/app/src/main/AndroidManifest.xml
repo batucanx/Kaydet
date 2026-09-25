@@ -32,10 +32,13 @@
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
         android:enableOnBackInvokedCallback="true">
+        <!-- `singleTask`: paylaşım Intent'i, Sharesheet'i açan uygulamanın (Galeri)
+             görevinde İKİNCİ bir MainActivity/Flutter motoru başlatmasın; hep
+             tek örneğe `onNewIntent` ile gelsin ve uygulama öne getirilsin. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
@@ -47,6 +50,31 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- Sistem "Paylaş" menüsünde (Galeri, Dosyalar…) "Kaydet" hedef
+                 olarak görünür; paylaşılan dosyalar Yeni İleti'ye ek olarak
+                 eklenir (bkz. MainActivity.kt, lib/app/share_navigator.dart).
+                 Etiket, uygulama etiketinden ("Kaydet") ve simge
+                 @mipmap/ic_launcher'dan gelir. Tek dosya için SEND, çoklu seçim
+                 için SEND_MULTIPLE. Yalnızca `content://` URI'leri okunur
+                 (bkz. ShareIntake.kt) — depolama izni gerekmez. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="application/pdf"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/*"/>
+                <data android:mimeType="*/*"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="image/*"/>
+                <data android:mimeType="application/pdf"/>
+                <data android:mimeType="text/*"/>
+                <data android:mimeType="application/*"/>
+                <data android:mimeType="*/*"/>
             </intent-filter>
         </activity>
         <!-- Anlık bildirim servisinin durum çubuğu simgesi

@@ -61,9 +61,15 @@ abstract class ImapService {
   });
 
   /// İletileri başka klasöre taşır.
+  ///
+  /// [sourcePath] verilirse SELECT ve MOVE aynı kilit altında, tek adımda
+  /// yapılır: UID'ler klasöre özgüdür, araya giren başka bir eşitleme farklı
+  /// klasörü SELECT ederse `UID MOVE` yanlış klasörde çalışır ve sunucu yine
+  /// de "OK" döner (iletiler taşınmaz).
   Future<Result<void>> moveMessages({
     required List<int> uids,
     required String targetPath,
+    String? sourcePath,
   });
 
   /// İletileri kalıcı olarak siler (yalnızca Çöp Kutusu içinde kullanılır).
@@ -546,10 +552,15 @@ class EnoughMailImapService implements ImapService {
   Future<Result<void>> moveMessages({
     required List<int> uids,
     required String targetPath,
+    String? sourcePath,
   }) => _guard(() async {
     if (uids.isEmpty) return;
     final sequence = em.MessageSequence.fromIds(uids, isUid: true);
     final client = _requireClient;
+    if (sourcePath != null && _selectedPath != sourcePath) {
+      await client.selectMailboxByPath(sourcePath);
+      _selectedPath = sourcePath;
+    }
     if (client.serverInfo.supportsMove) {
       await client.uidMove(sequence, targetMailboxPath: targetPath);
       return;

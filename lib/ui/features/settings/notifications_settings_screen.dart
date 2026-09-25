@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/remote_push_controller.dart';
 import '../../../data/services/app_settings.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_notice.dart';
@@ -63,6 +64,25 @@ class _NotificationsSettingsScreenState
     await _refreshSystemState();
   }
 
+  /// Anlık bildirim için IMAP şifresi push sunucusuna gönderileceğinden
+  /// açmadan önce açıkça onay istenir; kapatmak sunucudaki kayıtları siler.
+  Future<void> _setRemotePush(bool value) async {
+    if (value) {
+      final confirmed = await confirmDialog(
+        context,
+        title: 'Anlık bildirim',
+        message:
+            'Mailler sunucuya düştüğü anda bildirim gelebilmesi için e-posta '
+            'hesap bilgileriniz (şifre dahil) Kaydet push sunucusuna şifreli '
+            'olarak kaydedilir. İstediğiniz zaman kapatabilirsiniz; kapatınca '
+            'bu bilgiler sunucudan silinir.',
+        confirmLabel: 'Aç',
+      );
+      if (confirmed != true) return;
+    }
+    await ref.read(settingsProvider.notifier).setRemotePush(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -93,6 +113,18 @@ class _NotificationsSettingsScreenState
                   onChanged: _setNotifications,
                 ),
               ),
+              if (ref.watch(remotePushSyncProvider) != null)
+                SettingsTile(
+                  icon: LucideIcons.zap,
+                  title: 'Anlık bildirim',
+                  subtitle:
+                      'Uygulama kapalıyken de yeni iletiyi hemen bildir. '
+                      'Hesap bilgileriniz push sunucusuna gönderilir.',
+                  trailing: Switch(
+                    value: settings.remotePushEnabled,
+                    onChanged: _setRemotePush,
+                  ),
+                ),
               // İzin reddedilmişse ya da sistem ayarlarından kapatılmışsa
               // uygulamanın anahtarı açık olsa bile hiçbir bildirim düşmez;
               // sebebi ve çözümü açıkça gösterilir.

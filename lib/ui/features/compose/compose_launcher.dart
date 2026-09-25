@@ -68,18 +68,30 @@ Future<void> openCompose(
 /// Elinde bir `BuildContext`/`WidgetRef` olmayan çağıranlar için [openCompose]
 /// ile aynı akıştır: kök `Navigator`ın kendisi verilir, kök `Overlay` ondan
 /// alınır.
+///
+/// [attachmentPaths], [subject] ve [body] sistem "Paylaş" menüsünden gelen
+/// içeriği yeni iletiye taşır (bkz. `ShareNavigator`).
 Future<void> openComposeFromNavigator(
   NavigatorState navigator, {
   required MailRepository repository,
   int? replyToId,
   ComposeMode mode = ComposeMode.newMessage,
+  List<String> attachmentPaths = const [],
+  String? subject,
+  String? body,
 }) async {
   final overlay = navigator.overlay;
   KaydetNotice.dismiss();
 
   final outcome = await navigator.push<ComposeOutcome>(
     KaydetRoute<ComposeOutcome>(
-      builder: (_) => ComposeScreen(replyToId: replyToId, mode: mode),
+      builder: (_) => ComposeScreen(
+        replyToId: replyToId,
+        mode: mode,
+        initialAttachmentPaths: attachmentPaths,
+        initialSubject: subject,
+        initialBody: body,
+      ),
       transitionStyle: KaydetTransitionStyle.compose,
     ),
   );

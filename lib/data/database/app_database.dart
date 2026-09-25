@@ -521,11 +521,16 @@ class AppDatabase extends _$AppDatabase {
 
   // ----------------------------------------------------------------- iletiler
 
-  /// Klasördeki iletiler, tarihe göre yeniden eskiye.
+  /// Klasördeki iletiler.
+  ///
+  /// [orderById] `true` olduğunda kayıt ekleme sırası (`id DESC`) kullanılır —
+  /// Çöp Kutusu'nda son silinen (= en son eklenen) iletinin en üstte görünmesi
+  /// için. Diğer klasörlerde varsayılan `dateUtc DESC` sırası korunur.
   Stream<List<MessageRow>> watchMessages({
     required int accountId,
     required int mailboxId,
     int limit = 100,
+    bool orderById = false,
   }) =>
       (select(messages)
             ..where(
@@ -535,8 +540,9 @@ class AppDatabase extends _$AppDatabase {
                   m.isDeleted.equals(false),
             )
             ..orderBy([
-              (m) =>
-                  OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+              (m) => orderById
+                  ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
+                  : OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
             ])
             ..limit(limit))
           .watch();
@@ -920,6 +926,18 @@ class AppDatabase extends _$AppDatabase {
 
   Future<int> addAttachment(AttachmentsCompanion row) =>
       into(attachments).insert(row);
+
+  /// Yazma ekranından iliştirilmiş (`isOutgoing`) ve cihazda yolu bilinen tüm
+  /// ek dosyalarının yolları. Paylaşım gelen kutusunun süpürücüsü, bunlara
+  /// bağlı dizinleri silmemek için kullanır (bkz.
+  /// `ShareIntakeService.sweep`).
+  Future<Set<String>> outgoingAttachmentPaths() async {
+    final rows =
+        await (select(attachments)
+              ..where((a) => a.isOutgoing.equals(true) & a.localPath.isNotNull()))
+            .get();
+    return {for (final row in rows) row.localPath!};
+  }
 
   Future<void> setAttachmentPath(int id, String path) =>
       (update(attachments)..where((a) => a.id.equals(id))).write(
@@ -1349,6 +1367,18 @@ class AppDatabase extends _$AppDatabase {
           ))
         .map((row) => row.read(count) ?? 0)
         .watchSingle();
+  }
+
+  /// Henüz sahiplenilmemiş (`pending`) işlemleri kuyruktan siler; silinen
+  /// işlem sayısını döner. `running`/tamamlanmış işlemler geri alınamaz —
+  /// döndürülen sayı [ids] uzunluğundan azsa geri alma başarısızdır.
+  Future<int> cancelPendingOperations(List<int> ids) {
+    if (ids.isEmpty) return Future.value(0);
+    return (delete(pendingOperations)..where(
+          (p) =>
+              p.id.isIn(ids) & p.status.equalsValue(PendingOpStatus.pending),
+        ))
+        .go();
   }
 
   Future<void> completeOperation(int id) =>

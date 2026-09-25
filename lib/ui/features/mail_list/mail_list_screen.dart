@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_slidable/flutter_slidable.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
@@ -241,7 +241,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             label,
             showDivider: true,
           ),
-          MessageItem(:final message) => _SlidableRow(
+          MessageItem(:final message) => _SwipeRow(
             key: ValueKey(message.id),
             message: message,
             labels: labels,
@@ -433,7 +433,14 @@ class _ComposeFab extends StatelessWidget {
   }
 }
 
-/// Kaydırma hareketleriyle arşivle / sil.
+/// Kaydırma hareketleriyle arşivle / sil — tek harekette, ikinci bir
+/// dokunuş gerektirmeden.
+///
+/// FİZİKSEL yönler: sağa kaydır → arşivle, sola kaydır → sil. `Dismissible`ın
+/// yönleri metin yönüne göredir (RTL'de `startToEnd` sola kaydırmadır); bu
+/// yüzden eşleme `Directionality`'ye bakılarak yapılır. Eşik aşılıp bırakılınca
+/// eylem çalışır ve satır yumuşakça daralarak kaybolur; eşik aşılmadan
+/// bırakılırsa satır yerine döner (açık kalan bir eylem paneli yoktur).
 ///
 /// Seçim durumunu kendi diliminden (`selectionProvider.select`) okur —
 /// ebeveynden parametre olarak almaz. Böylece bir satır seçildiğinde/
@@ -442,8 +449,8 @@ class _ComposeFab extends StatelessWidget {
 ///
 /// Kaydırma eylemleri arşivle/sil ile sınırlıdır; sabitleme mail detayındaki
 /// kontrol ve seçim araç çubuğundan kullanılmaya devam eder.
-class _SlidableRow extends ConsumerStatefulWidget {
-  const _SlidableRow({
+class _SwipeRow extends ConsumerStatefulWidget {
+  const _SwipeRow({
     super.key,
     required this.message,
     required this.labels,
@@ -461,57 +468,180 @@ class _SlidableRow extends ConsumerStatefulWidget {
   final VoidCallback onLongPress;
 
   @override
-  ConsumerState<_SlidableRow> createState() => _SlidableRowState();
+  ConsumerState<_SwipeRow> createState() => _SwipeRowState();
 }
 
-class _SlidableRowState extends ConsumerState<_SlidableRow> {
+class _SwipeRowState extends ConsumerState<_SwipeRow> {
+  /// Satır genişliğinin bu oranı aşılıp bırakılınca eylem tetiklenir.
+  static const double _threshold = 0.35;
+
+  /// Eylem başladı ve satır daralıyor; `Dismissible` ağaçtan çıkmak ZORUNDA
+  /// (aksi hâlde Flutter hata verir) — veri akışının satırı kaldırmasını
+  /// beklemeden yerine boş bir kutu konur.
+  bool _removed = false;
+
+  /// Parmak eşiği aştı: bırakılırsa eylem çalışır (geri bildirim için).
+  bool _armed = false;
+
+  void _onUpdate(DismissUpdateDetails details) {
+    if (details.reached == _armed) return;
+    setState(() => _armed = details.reached);
+    if (details.reached) HapticFeedback.selectionClick();
+  }
+
+  /// Kalıcı silme onay ister (bkz. `confirmDelete`); reddedilirse satır
+  /// yerine döner. Arşivde onay yoktur.
+  Future<bool> _confirm(bool isArchive) {
+    if (isArchive) return Future.value(true);
+    return confirmDelete(context, ref, [widget.message.id]);
+  }
+
+  Future<void> _onDismissed(bool isArchive) async {
+    setState(() {
+      _removed = true;
+      _armed = false;
+    });
+    final id = widget.message.id;
+    final database = ref.read(databaseProvider);
+
+    if (isArchive) {
+      await archiveMessages(
+        context,
+        ref,
+        [id],
+        bottomInset: _ComposeFab.footprint,
+      );
+    } else {
+      await deleteMessagesWithUndo(
+        context,
+        ref,
+        [id],
+        bottomInset: _ComposeFab.footprint,
+      );
+    }
+
+    // Eylem satırı gerçekten kaldırmadıysa (ör. sunucu karşılığı olmayan
+    // ileti) satır gizli kalıp "kaybolmuş" görünmesin — yerine döner.
+    if (!mounted) return;
+    if (await database.messageById(id) != null && mounted) {
+      setState(() => _removed = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_removed) return const SizedBox.shrink();
+
     final t = context.tokens;
-    final repository = ref.read(mailRepositoryProvider);
     final isSelected = ref.watch(
       selectionProvider.select(
         (selection) => selection.contains(widget.message.id),
       ),
     );
+    final mailbox = ref.watch(currentMailboxProvider);
 
-    return Slidable(
-      key: ValueKey('slide-${widget.message.id}'),
-      startActionPane: ActionPane(
-        motion: const DrawerMotion(),
-        extentRatio: 0.28,
-        children: [
-          SlidableAction(
-            onPressed: (_) => repository.archive([widget.message.id]),
-            backgroundColor: t.success,
-            foregroundColor: Colors.white,
-            icon: LucideIcons.archive,
-            label: 'Arşivle',
-          ),
-        ],
-      ),
-      endActionPane: ActionPane(
-        motion: const DrawerMotion(),
-        extentRatio: 0.28,
-        children: [
-          SlidableAction(
-            onPressed: (_) =>
-                deleteWithConfirmation(context, ref, [widget.message.id]),
-            backgroundColor: t.dangerFill,
-            foregroundColor: Colors.white,
-            icon: LucideIcons.trash2,
-            label: 'Sil',
-          ),
-        ],
-      ),
+    final ltr = Directionality.of(context) == TextDirection.ltr;
+    final archiveDirection = ltr
+        ? DismissDirection.startToEnd
+        : DismissDirection.endToStart;
+    final deleteDirection = ltr
+        ? DismissDirection.endToStart
+        : DismissDirection.startToEnd;
+
+    // Arşivde/taslaklarda arşivleme anlamsız (zaten orada / sunucuya hiç
+    // gitmemiş yerel kayıt) — yalnızca sil yönü açık kalır.
+    final message = widget.message;
+    final canArchive =
+        mailbox?.specialUse != SpecialUse.archive &&
+        mailbox?.specialUse != SpecialUse.drafts &&
+        !message.isDraft &&
+        !message.isLocalOnly;
+
+    final archivePane = _SwipeBackground(
+      color: t.success,
+      icon: LucideIcons.archive,
+      label: 'Arşivle',
+      alignment: Alignment.centerLeft,
+      armed: _armed,
+    );
+    final deletePane = _SwipeBackground(
+      color: t.dangerFill,
+      icon: LucideIcons.trash2,
+      label: 'Sil',
+      alignment: Alignment.centerRight,
+      armed: _armed,
+    );
+
+    return Dismissible(
+      key: ValueKey('swipe-${message.id}'),
+      direction: canArchive ? DismissDirection.horizontal : deleteDirection,
+      dismissThresholds: {
+        archiveDirection: _threshold,
+        deleteDirection: _threshold,
+      },
+      resizeDuration: context.motion(Motion.slow),
+      movementDuration: context.motion(Motion.base),
+      // `background` startToEnd, `secondaryBackground` endToStart içindir.
+      background: ltr ? archivePane : deletePane,
+      secondaryBackground: ltr ? deletePane : archivePane,
+      onUpdate: _onUpdate,
+      confirmDismiss: (direction) => _confirm(direction == archiveDirection),
+      onDismissed: (direction) => _onDismissed(direction == archiveDirection),
       child: MailRow(
-        message: widget.message,
+        message: message,
         labels: widget.labels,
         isSelected: isSelected,
         isSentFolder: widget.isSentFolder,
         onTap: widget.onTap,
         onAvatarTap: widget.onAvatarTap,
         onLongPress: widget.onLongPress,
+      ),
+    );
+  }
+}
+
+/// Kaydırırken satırın arkasında açılan renkli alan: simge + etiket. Eşik
+/// aşılınca simge hafifçe büyüyerek "bırakırsan çalışır" der.
+class _SwipeBackground extends StatelessWidget {
+  const _SwipeBackground({
+    required this.color,
+    required this.icon,
+    required this.label,
+    required this.alignment,
+    required this.armed,
+  });
+
+  final Color color;
+  final IconData icon;
+  final String label;
+  final Alignment alignment;
+  final bool armed;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      color: color,
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: Space.xxl),
+      child: AnimatedScale(
+        scale: armed ? 1.15 : 1,
+        duration: context.motion(Motion.fast),
+        curve: Motion.standard,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: IconSize.lg, color: t.onAccentFill),
+            const SizedBox(height: Space.xs),
+            Text(
+              label,
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: t.onAccentFill,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -702,7 +832,7 @@ class _SelectionActionBar extends ConsumerWidget {
                 icon: LucideIcons.archive,
                 label: 'Arşivle',
                 onTap: () async {
-                  await repository.archive(ids);
+                  await archiveMessages(context, ref, ids);
                   done();
                 },
               ),

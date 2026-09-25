@@ -321,8 +321,9 @@ class _SearchIdleView extends ConsumerWidget {
                 for (final contact in recentContacts)
                   Padding(
                     padding: const EdgeInsets.only(right: Space.sm),
-                    child: _RecentContactAvatar(
-                      contact: contact,
+                    child: QuickContactAvatar(
+                      name: contact.name,
+                      email: contact.email,
                       onTap: () => onSelectTerm(
                         contact.name.trim().isNotEmpty
                             ? contact.name
@@ -344,67 +345,6 @@ class _SearchIdleView extends ConsumerWidget {
             ),
         ],
       ],
-    );
-  }
-}
-
-class _RecentContactAvatar extends StatelessWidget {
-  const _RecentContactAvatar({required this.contact, required this.onTap});
-
-  final ContactRow contact;
-  final VoidCallback onTap;
-
-  /// Outlook'un "Hızlı Kişiler" şeridindeki gibi büyük avatarlar.
-  static const double _avatarSize = 64;
-  static const double _width = 76;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final label = contact.name.trim().isNotEmpty
-        ? contact.name.trim()
-        : contact.email;
-    // Outlook'taki gibi ilk sözcük üst satırda, kalanı (kısaltılarak) alt
-    // satırda. Adı olmayan kişide e-posta adresi tek satırda kalır.
-    final split = label.indexOf(RegExp(r'\s'));
-    final firstLine = split < 0 ? label : label.substring(0, split);
-    final secondLine = split < 0 ? '' : label.substring(split).trim();
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(Radii.md),
-      child: SizedBox(
-        width: _width,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Gelen kutusuyla aynı avatar: tanınan marka alan adlarında (ör.
-            // LinkedIn) gerçek logo, kişisel adreslerde ve logo
-            // yüklenemediğinde renkli baş harf (bkz. `BrandAvatar`).
-            BrandAvatar(
-              name: contact.name,
-              email: contact.email,
-              size: _avatarSize,
-            ),
-            const SizedBox(height: Space.sm),
-            Text(
-              firstLine,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
-              style: AppText.bodyMedium.copyWith(color: t.textPrimary),
-            ),
-            if (secondLine.isNotEmpty)
-              Text(
-                secondLine,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: AppText.bodyMedium.copyWith(color: t.textSecondary),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

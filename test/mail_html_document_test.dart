@@ -59,11 +59,20 @@ void main() {
         tokens: KaydetTokens.dark,
         body: '<p id="x">Selam</p>',
       );
+      // Beklenti palete gömülmez: okuma zemini `readingBg` token'ından gelir
+      // (palet değişince test de değişmesin).
+      final argb = KaydetTokens.dark.readingBg.toARGB32();
+      final hex = (argb & 0xFFFFFF).toRadixString(16).padLeft(6, '0');
       expect(
         html,
-        contains('html { background: #242629; overflow-x: hidden; }'),
+        contains('html { background: #$hex; overflow-x: hidden; }'),
       );
-      expect(html, contains('"bg":[36,38,41]'));
+      expect(
+        html,
+        contains(
+          '"bg":[${(argb >> 16) & 0xFF},${(argb >> 8) & 0xFF},${argb & 0xFF}]',
+        ),
+      );
       expect(
         html,
         contains('<body><kd-root><p id="x">Selam</p></kd-root></body>'),

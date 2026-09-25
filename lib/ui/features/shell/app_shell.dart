@@ -75,6 +75,13 @@ class _AppShellState extends ConsumerState<AppShell>
 
   @override
   Widget build(BuildContext context) {
+    // Sunucuda başarısız olan arşivle/sil eylemi yerelde geri alındığında
+    // kullanıcıya haber verilir — hangi ekranda olursa olsun (kök overlay).
+    ref.listen(mailActionFailuresProvider, (_, next) {
+      final event = next.value;
+      if (event == null) return;
+      showMailActionFailure(Overlay.of(context, rootOverlay: true), event);
+    });
     final isSelectionMode = ref.watch(isSelectionModeProvider);
     final tab = ref.watch(activeTabProvider);
     final isAtRoot = ref.watch(isAtRootDestinationProvider);

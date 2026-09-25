@@ -152,6 +152,67 @@ class BrandAvatar extends StatelessWidget {
   }
 }
 
+/// "Hızlı Kişiler" şeridindeki bir kişi: Outlook'taki gibi büyük avatar,
+/// altında ilk sözcük üst satırda ve kalanı (kısaltılarak) alt satırda ad.
+/// Adı olmayan kişide e-posta adresi tek satırda kalır.
+///
+/// Şerit hem arama ekranında (dokununca aranır) hem yazma ekranında
+/// (dokununca alıcı eklenir) aynı görünümdedir; ne olacağını çağıran verir.
+class QuickContactAvatar extends StatelessWidget {
+  const QuickContactAvatar({
+    super.key,
+    required this.name,
+    required this.email,
+    required this.onTap,
+  });
+
+  final String name;
+  final String email;
+  final VoidCallback onTap;
+
+  static const double _avatarSize = 40;
+  static const double _width = 54;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final label = name.trim().isNotEmpty ? name.trim() : email;
+    final split = label.indexOf(RegExp(r'\s'));
+    final firstLine = split < 0 ? label : label.substring(0, split);
+    final secondLine = split < 0 ? '' : label.substring(split).trim();
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Radii.md),
+      child: SizedBox(
+        width: _width,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            BrandAvatar(name: name, email: email, size: _avatarSize),
+            const SizedBox(height: Space.xs),
+            Text(
+              firstLine,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              textAlign: TextAlign.center,
+              style: AppText.labelMedium.copyWith(color: t.textPrimary),
+            ),
+            if (secondLine.isNotEmpty)
+              Text(
+                secondLine,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: AppText.labelMedium.copyWith(color: t.textSecondary),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Etiket rozeti.
 class LabelChip extends StatelessWidget {
   const LabelChip({

@@ -1,12 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/repositories/mail_repository.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/folder_mapping.dart';
+import '../../../core/result.dart';
 import '../theme/tokens.dart';
+import '../widgets/kaydet_notice.dart';
 import '../widgets/kaydet_widgets.dart';
 
 /// Mesaj listesi ve mesaj detayı ekranlarının paylaştığı eylemler.
@@ -15,9 +20,80 @@ import '../widgets/kaydet_widgets.dart';
 /// bağımlı olmasın diye (döngüsel import) bu ortak eylemler `ui/core`'a
 /// taşınmıştır — ikisi de burayı import eder, birbirini değil.
 
+/// Bildirimin ekranda kalma süresi — geri alma penceresinden
+/// (bkz. `mailUndoWindowProvider`, 6 sn) kısa tutulur ki görünen "Geri al"
+/// düğmesi her zaman hâlâ geçerli olsun. Sunucu işlemi pencere boyunca
+/// bekletilir; "Geri al" bu pencerede gerçek sunucu durumunu korur.
+const Duration _undoNoticeDuration = Duration(seconds: 5);
+
+/// Arşivle: swipe, seçim çubuğu ve detay ekranının ortak, TEK yolu.
+///
+/// İleti listeden hemen çıkar (iyimser), sunucu taşıması kuyrukta işlenir;
+/// başarısız olursa iletiler geri yüklenir ve kullanıcı bilgilendirilir
+/// (bkz. [showMailActionFailure]).
+Future<void> archiveMessages(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (messageIds.isEmpty) return;
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final handle = await ref
+      .read(mailRepositoryProvider)
+      .archive(messageIds, undoWindow: ref.read(mailUndoWindowProvider));
+  if (handle == null || !overlay.mounted) return;
+  _showUndoNotice(
+    overlay,
+    message: messageIds.length == 1
+        ? 'İleti arşivlendi'
+        : '${messageIds.length} ileti arşivlendi',
+    handle: handle,
+    bottomInset: bottomInset,
+  );
+}
+
 /// Siler: kalıcı silme gerektiren klasörlerde (Çöp Kutusu/İstenmeyen/
-/// Taslaklar) onay ister.
+/// Taslaklar) onay ister; Çöp Kutusu'na taşıma "Geri al" ile geri alınabilir.
 Future<bool> deleteWithConfirmation(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (!await confirmDelete(context, ref, messageIds)) return false;
+  if (!context.mounted) return false;
+  await deleteMessagesWithUndo(context, ref, messageIds, bottomInset: bottomInset);
+  return true;
+}
+
+/// Onay istemeden siler (onay çağıranda alınmıştır — bkz. [confirmDelete]);
+/// Çöp Kutusu'na taşıma "Geri al" ile geri alınabilir.
+Future<void> deleteMessagesWithUndo(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (messageIds.isEmpty) return;
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final handle = await ref
+      .read(mailRepositoryProvider)
+      .deleteMessages(messageIds, undoWindow: ref.read(mailUndoWindowProvider));
+  if (handle == null || !overlay.mounted) return;
+  _showUndoNotice(
+    overlay,
+    message: messageIds.length == 1
+        ? 'İleti silindi'
+        : '${messageIds.length} ileti silindi',
+    handle: handle,
+    bottomInset: bottomInset,
+  );
+}
+
+/// Silmeden önce gerekiyorsa (kalıcı silme + ayar açık) onay ister. Onay
+/// gerekmiyorsa ya da verildiyse `true`.
+Future<bool> confirmDelete(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds,
@@ -68,9 +144,54 @@ Future<bool> deleteWithConfirmation(
     );
     if (confirmed != true) return false;
   }
-
-  await ref.read(mailRepositoryProvider).deleteMessages(messageIds);
   return true;
+}
+
+void _showUndoNotice(
+  OverlayState overlay, {
+  required String message,
+  required MailActionHandle handle,
+  required double bottomInset,
+}) {
+  KaydetNotice.show(
+    overlay,
+    message: message,
+    actionLabel: 'Geri al',
+    bottomInset: bottomInset,
+    duration: _undoNoticeDuration,
+    onAction: () => unawaited(_undo(overlay, handle, bottomInset)),
+  );
+}
+
+Future<void> _undo(
+  OverlayState overlay,
+  MailActionHandle handle,
+  double bottomInset,
+) async {
+  final restored = await handle.undo();
+  if (restored || !overlay.mounted) return;
+  KaydetNotice.show(
+    overlay,
+    message: 'İşlem geri alınamadı.',
+    bottomInset: bottomInset,
+  );
+}
+
+/// Sunucuda başarısız olup yerelde geri alınan arşivle/sil/taşı eylemini
+/// kullanıcıya bildirir (bkz. `MailRepository.actionFailures`).
+void showMailActionFailure(OverlayState overlay, MailActionFailure event) {
+  final plural = event.count > 1;
+  final subject = plural ? 'İletiler' : 'İleti';
+  final message = switch ((event.kind, event.failure)) {
+    (MailActionKind.archive, MailboxNotFoundFailure()) =>
+      'Arşiv klasörü bulunamadı veya oluşturulamadı. '
+          '$subject geri getirildi.',
+    (MailActionKind.archive, _) =>
+      '$subject arşivlenemedi. Lütfen tekrar deneyin.',
+    (MailActionKind.delete, _) => '$subject silinemedi. Lütfen tekrar deneyin.',
+    (MailActionKind.move, _) => '$subject taşınamadı. Lütfen tekrar deneyin.',
+  };
+  KaydetNotice.show(overlay, message: message);
 }
 
 /// "Taşı" popup'ının menü öğeleri — bkz. bellek: kısa seçim listeleri tam

@@ -41,16 +41,21 @@ class NotificationService {
   static final StreamController<String> _apnsTokenController =
       StreamController<String>.broadcast();
   static bool _apnsHandlerInstalled = false;
+  static String? _latestApnsToken;
 
-  /// APNs token'ı cihazdan uygulama katmanına aktarılır. Backend kayıt
-  /// endpoint'i eklenene kadar bu akış token'ı dışarı göndermez veya saklamaz.
+  /// Bu oturumda alınan son APNs token'ı; akışı geç dinleyen için.
+  static String? get latestApnsToken => _latestApnsToken;
+
+  /// APNs token'ı cihazdan uygulama katmanına aktarılır; push sunucusuna
+  /// kaydı `RemotePushController` yapar.
   static Stream<String> get apnsTokens => _apnsTokenController.stream;
 
   static void _installApnsHandler() {
     if (_apnsHandlerInstalled) return;
     _iosChannel.setMethodCallHandler((call) async {
       if (call.method == 'onApnsToken' && call.arguments is String) {
-        _apnsTokenController.add(call.arguments as String);
+        _latestApnsToken = call.arguments as String;
+        _apnsTokenController.add(_latestApnsToken!);
       }
     });
     _apnsHandlerInstalled = true;

@@ -52,6 +52,7 @@ class AppSettings {
     this.themeMode = AppThemeMode.dark,
     this.notificationsEnabled = true,
     this.notificationPermissionAsked = false,
+    this.remotePushEnabled = false,
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
     this.markSeenDelayMs = 1500,
@@ -63,6 +64,10 @@ class AppSettings {
   /// Sistem bildirim izni daha önce bir kez soruldu mu? (bkz.
   /// `SettingsNotifier.requestNotificationPermissionOnce`)
   final bool notificationPermissionAsked;
+
+  /// Anlık bildirim için hesap bilgileri (şifre dahil) push sunucusuna
+  /// gönderilsin mi? Kullanıcı açıkça onaylamadıkça KAPALI kalır.
+  final bool remotePushEnabled;
   final SyncFrequency syncFrequency;
   final bool confirmBeforeDelete;
 
@@ -76,6 +81,7 @@ class AppSettings {
     AppThemeMode? themeMode,
     bool? notificationsEnabled,
     bool? notificationPermissionAsked,
+    bool? remotePushEnabled,
     SyncFrequency? syncFrequency,
     bool? confirmBeforeDelete,
     int? markSeenDelayMs,
@@ -85,6 +91,7 @@ class AppSettings {
         notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
         notificationPermissionAsked:
             notificationPermissionAsked ?? this.notificationPermissionAsked,
+        remotePushEnabled: remotePushEnabled ?? this.remotePushEnabled,
         syncFrequency: syncFrequency ?? this.syncFrequency,
         confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
         markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
@@ -97,9 +104,13 @@ class AppSettingsStore {
 
   final SharedPreferences _prefs;
 
+  /// Ayar dışı küçük kalıcı durumlar için (bkz. `SharedPrefsRegistrationStore`).
+  SharedPreferences get preferences => _prefs;
+
   static const _kTheme = 'kaydet.themeMode';
   static const _kNotifications = 'kaydet.notifications';
   static const _kPermissionAsked = 'kaydet.notificationPermissionAsked';
+  static const _kRemotePush = 'kaydet.remotePushEnabled';
   static const _kSync = 'kaydet.syncFrequency';
   static const _kConfirmDelete = 'kaydet.confirmDelete';
 
@@ -118,6 +129,7 @@ class AppSettingsStore {
             )],
       notificationsEnabled: _prefs.getBool(_kNotifications) ?? true,
       notificationPermissionAsked: _prefs.getBool(_kPermissionAsked) ?? false,
+      remotePushEnabled: _prefs.getBool(_kRemotePush) ?? false,
       syncFrequency: syncIndex == null
           ? SyncFrequency.push
           : SyncFrequency
@@ -147,6 +159,7 @@ class AppSettingsStore {
     await _prefs.setInt(_kTheme, settings.themeMode.index);
     await _prefs.setBool(_kNotifications, settings.notificationsEnabled);
     await _prefs.setBool(_kPermissionAsked, settings.notificationPermissionAsked);
+    await _prefs.setBool(_kRemotePush, settings.remotePushEnabled);
     await _prefs.setInt(_kSync, settings.syncFrequency.index);
     await _prefs.setBool(_kConfirmDelete, settings.confirmBeforeDelete);
   }
