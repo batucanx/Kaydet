@@ -78,6 +78,13 @@ flutter_launcher_icons:
   remove_alpha_ios: true
 
 flutter:
+  # iOS eklentileri CocoaPods'tan alinir (bkz. ios/Podfile). Swift Package
+  # Manager acikken Package.swift'i olan eklentiler (workmanager_apple gibi)
+  # Pods'tan atlanir ve modulleri, Flutter'in Xcode projesine ekledigi Swift
+  # paketinden gelir; bu projenin Xcode dosyasi elle yazildigi icin o baglanti
+  # yok ve "Unable to resolve module dependency" hatasi cikar.
+  config:
+    enable-swift-package-manager: false
   uses-material-design: true
   assets:
     - assets/icon/app_logo.png
