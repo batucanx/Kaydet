@@ -1,7 +1,7 @@
-# workmanager (arka plan eşitleme) BGTaskScheduler API'si için en az iOS 14
-# gerektirir — bkz. `ios/Runner.xcodeproj` içindeki IPHONEOS_DEPLOYMENT_TARGET
-# ile birebir aynı olmalı.
-platform :ios, '14.0'
+# Flutter 3.47 şablonu en az iOS 15 ister (workmanager'ın BGTaskScheduler
+# ihtiyacı olan iOS 14'ü de karşılar) — bkz. `ios/Runner.xcodeproj` içindeki
+# IPHONEOS_DEPLOYMENT_TARGET ile birebir aynı olmalı.
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'

@@ -12,6 +12,8 @@ export interface NotifierOptions {
   /** Token geçersiz çıkınca cihazla birlikte silinen hesapların id'leri. */
   onDevicesRemoved?: (accountIds: number[]) => void;
   sleep?: (ms: number) => Promise<void>;
+  /** Sonuç günlüğü; cihaz token'ı ya da içerik ASLA yazılmaz. */
+  log?: (message: string) => void;
 }
 
 // Geçici APNs hatalarında hızlı, kısa yeniden denemeler: bildirim gecikmesin
@@ -63,14 +65,23 @@ export class Notifier {
 
     for (let attempt = 0; ; attempt++) {
       const result = await this.apns.send(device.apns_token, device.environment, payload);
-      if (result.status === 'sent') return;
+      if (result.status === 'sent') {
+        this.opts.log?.(`hesap ${account.id}: push gönderildi (${device.environment})`);
+        return;
+      }
       if (result.status === 'invalid_token') {
+        this.opts.log?.(
+          `hesap ${account.id}: APNs token'ı geçersiz sayıldı (${result.reason}), cihaz siliniyor`,
+        );
         const ids = this.repo.deleteDevice(device.apns_token);
         if (ids.length > 0) this.opts.onDevicesRemoved?.(ids);
         return;
       }
       const delay = RETRY_DELAYS_MS[attempt];
-      if (!result.retryable || delay === undefined) return;
+      if (!result.retryable || delay === undefined) {
+        this.opts.log?.(`hesap ${account.id}: push gönderilemedi (${result.reason})`);
+        return;
+      }
       await this.sleep(delay);
     }
   }

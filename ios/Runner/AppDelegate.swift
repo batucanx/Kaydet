@@ -41,10 +41,14 @@ import workmanager_apple
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "KaydetNotifications")
+    // `registrar(forPlugin:)` bu Flutter surumunde optional dondurur.
+    guard
+      let notificationsRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "KaydetNotifications"),
+      let shareRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "KaydetShare")
+    else { return }
     let channel = FlutterMethodChannel(
       name: "tr.com.pazarlik.kaydet/notifications",
-      binaryMessenger: registrar.messenger()
+      binaryMessenger: notificationsRegistrar.messenger()
     )
     notificationChannel = channel
 
@@ -52,9 +56,7 @@ import workmanager_apple
     // (bkz. ShareChannel.swift, lib/app/share_navigator.dart). Paylasim
     // Flutter'a itilmez; Flutter hazir olunca CEKER — bu yuzden motorun bu
     // noktada hazir olmasi gerekmez.
-    shareChannel = ShareChannel(
-      messenger: engineBridge.pluginRegistry.registrar(forPlugin: "KaydetShare").messenger()
-    )
+    shareChannel = ShareChannel(messenger: shareRegistrar.messenger())
     channel.setMethodCallHandler { call, result in
       switch call.method {
       case "registerForRemoteNotifications":

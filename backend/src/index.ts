@@ -22,6 +22,7 @@ const apns = ApnsClient.fromKeyFile(config.APNS_KEY_PATH, {
 let watchers: WatcherManager;
 const notifier = new Notifier(repo, apns, {
   onDevicesRemoved: (ids) => watchers.onAccountsRemoved(ids),
+  log: (message) => console.log(message),
 });
 watchers = new WatcherManager({
   repo,

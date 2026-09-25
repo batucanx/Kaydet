@@ -98,20 +98,30 @@ enum ShareItemIngester {
             return .failed(message: describe(state.issues) ?? "Paylaşılan içerik alınamadı.")
         }
 
-        var manifest: [String: Any] = [
-            "version": 1,
-            "id": id,
-            "source": "ios-share-extension",
-            "receivedAtMs": Int64(Date().timeIntervalSince1970 * 1000),
-            "files": state.files.map { file -> [String: Any] in
-                ["fileName": file.fileName, "mimeType": file.mimeType, "sizeBytes": file.sizeBytes]
-            },
-            "issues": state.issues.map { issue -> [String: Any] in
-                var entry: [String: Any] = ["code": issue.code]
-                if let name = issue.fileName { entry["fileName"] = name }
-                return entry
-            },
-        ]
+        // Tek büyük sözlük literali yerine parça parça kurulur: derleyicinin
+        // "ifade çok karmaşık" hatasına düşmemesi için.
+        var fileEntries: [[String: Any]] = []
+        for file in state.files {
+            var entry: [String: Any] = [:]
+            entry["fileName"] = file.fileName
+            entry["mimeType"] = file.mimeType
+            entry["sizeBytes"] = file.sizeBytes
+            fileEntries.append(entry)
+        }
+        var issueEntries: [[String: Any]] = []
+        for issue in state.issues {
+            var entry: [String: Any] = ["code": issue.code]
+            if let name = issue.fileName { entry["fileName"] = name }
+            issueEntries.append(entry)
+        }
+
+        var manifest: [String: Any] = [:]
+        manifest["version"] = 1
+        manifest["id"] = id
+        manifest["source"] = "ios-share-extension"
+        manifest["receivedAtMs"] = Int64(Date().timeIntervalSince1970 * 1000)
+        manifest["files"] = fileEntries
+        manifest["issues"] = issueEntries
         if !state.texts.isEmpty {
             manifest["text"] = String(state.texts.joined(separator: "\n").prefix(ShareInbox.maxTextLength))
         }
