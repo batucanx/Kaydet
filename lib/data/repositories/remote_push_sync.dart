@@ -87,6 +87,7 @@ class RemotePushSync {
     required RegistrationStore store,
     required Future<String?> Function(int accountId) readPassword,
     required this.environment,
+    this.log,
   }) : _api = api,
        _store = store,
        _readPassword = readPassword;
@@ -97,6 +98,9 @@ class RemotePushSync {
 
   /// `development` (Xcode debug derlemesi) ya da `production`.
   final String environment;
+
+  /// Teşhis günlüğü. Şifre, token ve adres YAZILMAZ; yalnızca ne olduğu.
+  final void Function(String message)? log;
 
   /// Bir hesabın sunucuda yeniden kaydedilmesini gerektiren her şey. Şifre
   /// bilerek yok: değiştiğinde [sync]'e `force` verilir.
@@ -129,7 +133,8 @@ class RemotePushSync {
       if (syncedToken == null && fingerprints.isEmpty) return true;
       try {
         if (syncedToken != null) await _api.deleteDevice(syncedToken);
-      } on Object catch (_) {
+      } on Object catch (e) {
+        _logFailure('cihaz kaydı silinemedi', e);
         return false; // silinemedi; kayıt durumu korunur, tekrar denenir
       }
       fingerprints.clear();
@@ -159,7 +164,8 @@ class RemotePushSync {
       try {
         await _api.deleteAccount(apnsToken: token, clientAccountId: id);
         fingerprints.remove(id);
-      } on Object catch (_) {
+      } on Object catch (e) {
+        _logFailure('hesap silinemedi', e);
         allSynced = false;
       }
     }
@@ -170,7 +176,10 @@ class RemotePushSync {
         continue;
       }
       final password = await _readPassword(account.id);
-      if (password == null || password.isEmpty) continue;
+      if (password == null || password.isEmpty) {
+        log?.call('hesap ${account.id}: kayıtlı şifre yok, atlandı');
+        continue;
+      }
 
       try {
         await _api.upsertAccount(
@@ -187,12 +196,15 @@ class RemotePushSync {
         );
         fingerprints[account.id] = fp;
         syncedToken = token;
+        log?.call('hesap ${account.id}: sunucuya kaydedildi');
       } on PushBackendException catch (e) {
+        _logFailure('hesap ${account.id} kaydedilemedi', e);
         allSynced = false;
         // Sunucunun reddettiği tek bir hesap diğerlerini engellemesin; ama
         // yanlış anahtar / kesinti gibi genel sorunlarda boşuna yüklenme.
         if (!e.isRequestRejected) break;
-      } on Object catch (_) {
+      } on Object catch (e) {
+        _logFailure('hesap ${account.id} kaydedilemedi', e);
         allSynced = false;
         break; // ağ yok / zaman aşımı: kalan hesaplar da aynı hatayı alır
       }
@@ -200,5 +212,19 @@ class RemotePushSync {
 
     await persist();
     return allSynced;
+  }
+
+  /// Hata türünü yazar; mesajı yazmaz (adres/kimlik bilgisi içerebilir).
+  void _logFailure(String what, Object error) {
+    if (error is PushBackendException) {
+      final hint = switch (error.statusCode) {
+        401 => ' (API anahtarı sunucuyla uyuşmuyor)',
+        400 => ' (sunucu isteği geçersiz buldu)',
+        _ => '',
+      };
+      log?.call('$what: sunucu HTTP ${error.statusCode} döndü$hint');
+    } else {
+      log?.call('$what: ${error.runtimeType} (sunucuya ulaşılamadı?)');
+    }
   }
 }

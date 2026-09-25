@@ -24,6 +24,7 @@ final remotePushSyncProvider = Provider<RemotePushSync?>((ref) {
     ),
     readPassword: ref.watch(secureStoreProvider).readPassword,
     environment: _apnsEnvironment,
+    log: kDebugMode ? (message) => debugPrint('RemotePush: $message') : null,
   );
 });
 
@@ -66,7 +67,15 @@ class RemotePushController extends Notifier<void> {
   @override
   void build() {
     final sync = ref.watch(remotePushSyncProvider);
-    if (sync == null) return;
+    if (sync == null) {
+      if (kDebugMode && Platform.isIOS) {
+        debugPrint(
+          'RemotePush: KAPALI - PUSH_BACKEND_URL / PUSH_API_KEY verilmemis '
+          '(flutter run komutuna --dart-define ekleyin)',
+        );
+      }
+      return;
+    }
 
     final source = ref.watch(apnsTokenSourceProvider);
     _token = source.latest;
@@ -124,11 +133,19 @@ class RemotePushController extends Notifier<void> {
 
     final settings = ref.read(settingsProvider);
     final force = {..._force};
+    final enabled = settings.remotePushEnabled && settings.notificationsEnabled;
+    if (kDebugMode) {
+      debugPrint(
+        'RemotePush: eşitleme (ayar açık: $enabled, '
+        'APNs token: ${_token != null ? 'var' : 'YOK'}, '
+        'hesap: ${accounts.length})',
+      );
+    }
     var ok = false;
     try {
       ok = await sync.sync(
         token: _token,
-        enabled: settings.remotePushEnabled && settings.notificationsEnabled,
+        enabled: enabled,
         accounts: accounts,
         force: force,
       );
