@@ -257,6 +257,7 @@ export class WatcherManager implements AccountHooks {
 
   private begin(account: AccountRow): void {
     this.end(account.id);
+    this.deps.log?.(`hesap ${account.id}: izleme başlatıldı`);
     const watcher = new AccountWatcher(account, {
       ...this.deps,
       onAuthFailed: (id) => {

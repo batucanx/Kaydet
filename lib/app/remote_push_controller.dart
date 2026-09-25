@@ -23,11 +23,22 @@ final remotePushSyncProvider = Provider<RemotePushSync?>((ref) {
       ref.watch(settingsStoreProvider).preferences,
     ),
     readPassword: ref.watch(secureStoreProvider).readPassword,
-    // Xcode debug derlemesi sandbox APNs, TestFlight/App Store production
-    // kullanır (bkz. ios/Runner.xcodeproj `APS_ENVIRONMENT`).
-    environment: kDebugMode ? 'development' : 'production',
+    environment: _apnsEnvironment,
   );
 });
+
+/// Token'ın hangi APNs ortamına ait olduğu.
+///
+/// Varsayılan: debug derlemesi sandbox, TestFlight/App Store production
+/// (bkz. ios/Runner.xcodeproj `APS_ENVIRONMENT`). Kendi geliştirici
+/// sertifikanla imzalanmış bir RELEASE derlemesi ise sandbox token üretir;
+/// bu durumda `--dart-define=PUSH_APNS_ENV=development` verilmelidir, yoksa
+/// sunucu token'ı yanlış Apple adresine gönderip `BadDeviceToken` alır.
+String get _apnsEnvironment {
+  const override = String.fromEnvironment('PUSH_APNS_ENV');
+  if (override == 'development' || override == 'production') return override;
+  return kDebugMode ? 'development' : 'production';
+}
 
 /// APNs token'ının geldiği yer; testlerde sahtesi verilir.
 final apnsTokenSourceProvider =
