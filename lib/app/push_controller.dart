@@ -40,7 +40,6 @@ class PushController extends Notifier<void> {
           );
         });
     ref.onDispose(unreadSubscription.cancel);
-    unawaited(_registerApnsIfAuthorized());
 
     ref.listen(
       settingsProvider.select((s) => (s.notificationsEnabled, s.syncFrequency)),
@@ -88,18 +87,7 @@ class PushController extends Notifier<void> {
     } on Object catch (_) {
       // İzin penceresi açılamadı — ayarlardaki anahtar yine de çalışır.
     }
-    await _registerApnsIfAuthorized();
     await _reconcile();
-  }
-
-  Future<void> _registerApnsIfAuthorized() async {
-    try {
-      await ref
-          .read(notificationServiceProvider)
-          .registerForRemoteNotifications();
-    } on Object catch (_) {
-      // APNs kaydı kullanılamaz olsa da IMAP eşitlemesi ve Android çalışır.
-    }
   }
 
   void _onLifecycle(AppLifecycleState state) {
@@ -109,7 +97,6 @@ class PushController extends Notifier<void> {
     // Servis yalnızca uygulama öndeyken başlatılabilir (Android 12+); sistem
     // servisi öldürmüşse en erken bu an yeniden kurulur.
     unawaited(_reconcile());
-    unawaited(_registerApnsIfAuthorized());
     // Başka yerde okunan iletilerin bildirimleri gölgede kalmasın.
     _dismissHandledNotifications();
   }

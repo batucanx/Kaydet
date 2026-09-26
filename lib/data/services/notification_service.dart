@@ -38,43 +38,6 @@ class NotificationService {
   static const MethodChannel _iosChannel = MethodChannel(
     'tr.com.pazarlik.kaydet/notifications',
   );
-  static final StreamController<String> _apnsTokenController =
-      StreamController<String>.broadcast();
-  static bool _apnsHandlerInstalled = false;
-  static String? _latestApnsToken;
-
-  /// Bu oturumda alınan son APNs token'ı; akışı geç dinleyen için.
-  static String? get latestApnsToken => _latestApnsToken;
-
-  /// APNs token'ı cihazdan uygulama katmanına aktarılır; push sunucusuna
-  /// kaydı `RemotePushController` yapar.
-  static Stream<String> get apnsTokens => _apnsTokenController.stream;
-
-  static void _installApnsHandler() {
-    if (_apnsHandlerInstalled) return;
-    _iosChannel.setMethodCallHandler((call) async {
-      if (call.method == 'onApnsToken' && call.arguments is String) {
-        _latestApnsToken = call.arguments as String;
-        _apnsTokenController.add(_latestApnsToken!);
-      }
-    });
-    _apnsHandlerInstalled = true;
-  }
-
-  /// iOS sistem kaydı her uygulama açılışında tazelenebilir; izin verilmemişse
-  /// sessizce atlanır. Android akışına dokunmaz.
-  Future<void> registerForRemoteNotifications() async {
-    if (!Platform.isIOS) return;
-    await initialize();
-    final ios = _plugin
-        .resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin
-        >();
-    final status = await ios?.checkPermissions();
-    if (status?.isEnabled != true) return;
-    _installApnsHandler();
-    await _iosChannel.invokeMethod<void>('registerForRemoteNotifications');
-  }
 
   /// iOS app icon rozetini mutlak okunmamış sayıya ayarlar; artımlı değildir.
   Future<void> setAppBadgeCount(int count) async {
@@ -207,10 +170,6 @@ class NotificationService {
         badge: true,
         sound: true,
       );
-      if (granted == true) {
-        _installApnsHandler();
-        await _iosChannel.invokeMethod<void>('registerForRemoteNotifications');
-      }
       return granted ?? false;
     }
     if (!Platform.isAndroid) return true;

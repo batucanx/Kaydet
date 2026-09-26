@@ -8,7 +8,6 @@ import 'app/notification_navigator.dart';
 import 'app/providers.dart';
 import 'app/push_controller.dart';
 import 'app/push_service.dart';
-import 'app/remote_push_controller.dart';
 import 'app/share_navigator.dart';
 import 'app/sync_controller.dart';
 import 'data/services/app_settings.dart';
@@ -111,10 +110,6 @@ class _BootstrapState extends ConsumerState<_Bootstrap> {
     // Anlık bildirim servisini ayarlara göre açıp kapatır ve servisle
     // konuşur (bkz. `PushController`); izlenmezse hiç oluşturulmaz.
     ref.watch(pushControllerProvider);
-
-    // iOS'ta hesapları push sunucusuna kaydeder (bkz. `RemotePushController`);
-    // yapılandırma ya da kullanıcı onayı yoksa hiçbir şey yapmaz.
-    ref.watch(remotePushControllerProvider);
 
     // Ayarlardaki sıklık değişince arka plan görevi yeniden kaydedilir.
     ref.listen(settingsProvider, (previous, next) {

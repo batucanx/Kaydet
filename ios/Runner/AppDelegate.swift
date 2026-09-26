@@ -59,11 +59,6 @@ import workmanager_apple
     shareChannel = ShareChannel(messenger: shareRegistrar.messenger())
     channel.setMethodCallHandler { call, result in
       switch call.method {
-      case "registerForRemoteNotifications":
-        DispatchQueue.main.async {
-          UIApplication.shared.registerForRemoteNotifications()
-        }
-        result(nil)
       case "setBadgeCount":
         guard
           let arguments = call.arguments as? [String: Any],
@@ -89,27 +84,5 @@ import workmanager_apple
         result(FlutterMethodNotImplemented)
       }
     }
-  }
-
-  override func application(
-    _ application: UIApplication,
-    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
-  ) {
-    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
-    let token = deviceToken.map { String(format: "%02x", $0) }.joined()
-    notificationChannel?.invokeMethod("onApnsToken", arguments: token)
-    #if DEBUG
-      NSLog("APNs device token received")
-    #endif
-  }
-
-  override func application(
-    _ application: UIApplication,
-    didFailToRegisterForRemoteNotificationsWithError error: Error
-  ) {
-    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
-    #if DEBUG
-      NSLog("APNs registration failed: %@", error.localizedDescription)
-    #endif
   }
 }

@@ -199,9 +199,6 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> setSyncFrequency(SyncFrequency frequency) =>
       _save(state.copyWith(syncFrequency: frequency));
 
-  Future<void> setRemotePush(bool value) =>
-      _save(state.copyWith(remotePushEnabled: value));
-
   Future<void> setConfirmBeforeDelete(bool value) =>
       _save(state.copyWith(confirmBeforeDelete: value));
 }
