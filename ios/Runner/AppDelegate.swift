@@ -5,7 +5,6 @@ import workmanager_apple
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
-  private var notificationChannel: FlutterMethodChannel?
   private var shareChannel: ShareChannel?
 
   override func application(
@@ -50,7 +49,6 @@ import workmanager_apple
       name: "tr.com.pazarlik.kaydet/notifications",
       binaryMessenger: notificationsRegistrar.messenger()
     )
-    notificationChannel = channel
 
     // Share Extension'in App Group'a biraktigi paylasimlari Flutter'a acar
     // (bkz. ShareChannel.swift, lib/app/share_navigator.dart). Paylasim
