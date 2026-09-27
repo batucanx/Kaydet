@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show min;
 
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
@@ -8,6 +9,7 @@ import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/models/search_filters.dart';
 import '../../domain/use_cases/label_keywords.dart';
+import '../services/attachment_files.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -74,7 +76,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -170,6 +172,14 @@ class AppDatabase extends _$AppDatabase {
       if (from < 11) {
         await _backfillLabelImapKeywords();
       }
+      // v11 → v12: Arama dizini (`messages_fts`) artık ileti kimliğini FTS5'in
+      // kendi `rowid`'inde tutuyor. Eski tabloda kimlik `UNINDEXED` bir
+      // sütundu ve her ekleme/silmede tüm dizin taranıyordu (`DELETE ... WHERE
+      // message_id = ?`); `rowid` ile aynı işlem doğrudan erişimdir. Eski
+      // dizin atılıp yerel iletilerden yeniden kurulur.
+      if (from < 12) {
+        await _rebuildFtsIndex();
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -221,18 +231,84 @@ class AppDatabase extends _$AppDatabase {
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_signatures_default '
       'ON signatures (account_id) WHERE is_default = 1',
     );
+    // Yukarıdaki indekslerin hepsi `account_id` ile başlar; oysa klasör
+    // düzeyindeki sorguların çoğu (`messageByUid`, `highestUid`, `uidsOf`,
+    // `deleteMessagesByUid`, klasör sayaçları…) yalnızca `mailbox_id` ile
+    // süzer ve o indekslerden yararlanamayıp tüm tabloyu tarardı. Eşitleme
+    // bunları ileti başına döngüde çağırır.
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_messages_mailbox_uid '
+      'ON messages (mailbox_id, uid)',
+    );
+    // Okunmamış sayaçları: klasör başına (`mailbox_id`) ve tüm hesaplar için
+    // (yalnızca `is_seen`/`is_deleted`). Önek sırası ikisine de hizmet eder.
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_messages_unread '
+      'ON messages (is_seen, is_deleted, mailbox_id)',
+    );
   }
 
   /// Tam metin arama tablosu.
   ///
   /// İçeriğe yazılan metin `foldForSearch()` ile normalleştirilmiştir; sorgu
   /// da aynı fonksiyondan geçer. Böylece "sahan" araması "Şahan"ı bulur.
+  ///
+  /// İletinin kimliği FTS5'in `rowid`'idir (`messages.id`): ekleme/silme
+  /// doğrudan erişimdir, dizin taranmaz.
   Future<void> _createFtsTable() async {
     await customStatement(
       "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5("
-      "content, message_id UNINDEXED, "
-      "tokenize=\"unicode61 remove_diacritics 2\")",
+      "content, tokenize=\"unicode61 remove_diacritics 2\")",
     );
+  }
+
+  /// Arama dizinini yerel iletilerden baştan kurar (bkz. v11 → v12 göçü).
+  ///
+  /// Sayfa sayfa okunur: gövdeler büyük olabilir ve tüm tabloyu tek seferde
+  /// belleğe almak düşük donanımlı cihazda bellek yetersizliğine yol açardı.
+  /// Yeniden kurma başarısız olursa uygulama yine açılır (arama boş kalır,
+  /// yeni gelen iletiler dizine yazılmaya devam eder) — bir arama dizini
+  /// yüzünden veritabanının hiç açılmaması kabul edilemez.
+  Future<void> _rebuildFtsIndex() async {
+    try {
+      await customStatement('DROP TABLE IF EXISTS messages_fts');
+      await _createFtsTable();
+
+      var lastId = 0;
+      while (true) {
+        final rows = await customSelect(
+          'SELECT m.id AS id, m.subject AS subject, m.from_name AS from_name, '
+          'm.from_email AS from_email, m.preview AS preview, '
+          'b.plain_text AS body '
+          'FROM messages m '
+          'LEFT JOIN message_bodies b ON b.message_id = m.id '
+          'WHERE m.id > ? ORDER BY m.id LIMIT 200',
+          variables: [Variable<int>(lastId)],
+          readsFrom: {messages, messageBodies},
+        ).get();
+        if (rows.isEmpty) break;
+        for (final row in rows) {
+          final id = row.read<int>('id');
+          lastId = id;
+          await customStatement(
+            'INSERT INTO messages_fts (rowid, content) VALUES (?, ?)',
+            [
+              id,
+              _ftsText([
+                row.read<String>('subject'),
+                row.read<String>('from_name'),
+                row.read<String>('from_email'),
+                row.read<String>('preview'),
+                row.readNullable<String>('body') ?? '',
+              ]),
+            ],
+          );
+        }
+      }
+    } on Object {
+      await customStatement('DROP TABLE IF EXISTS messages_fts');
+      await _createFtsTable();
+    }
   }
 
   // ---------------------------------------------------------------- hesaplar
@@ -436,13 +512,15 @@ class AppDatabase extends _$AppDatabase {
         await (select(
           messages,
         )..where((m) => m.mailboxId.equals(mailboxId))).map((m) => m.id).get();
+    final files = await _downloadedAttachmentPaths(ids);
     await transaction(() async {
       if (ids.isNotEmpty) {
         await _deleteFtsFor(ids);
-        await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+        await _deleteMessageRows(ids);
       }
       await (delete(mailboxes)..where((m) => m.id.equals(mailboxId))).go();
     });
+    await AttachmentFiles.deleteAll(files);
   }
 
   Future<void> updateMailboxSync(
@@ -511,12 +589,14 @@ class AppDatabase extends _$AppDatabase {
             .map((m) => m.id)
             .get();
     if (ids.isEmpty) return;
+    final files = await _downloadedAttachmentPaths(ids);
     // FTS silme + satır silme tek transaction'da: kesinti anında FTS
     // girdileri silinip mesaj satırları kalması gibi bir tutarsızlığı önler.
     await transaction(() async {
       await _deleteFtsFor(ids);
-      await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+      await _deleteMessageRows(ids);
     });
+    await AttachmentFiles.deleteAll(files);
   }
 
   // ----------------------------------------------------------------- iletiler
@@ -728,7 +808,14 @@ class AppDatabase extends _$AppDatabase {
         } else {
           await (update(messages)..where((m) => m.id.equals(existing!.id)))
               .write(row.copyWith(id: const Value.absent()));
-          await _writeFts(existing.id, row);
+          // Zarf yenilenirken dizindeki gövde ve önizleme metni KAYBOLMAMALI.
+          final body = await bodyOf(existing.id);
+          await _writeFts(
+            existing.id,
+            row,
+            preview: existing.preview,
+            body: body?.plainText ?? '',
+          );
         }
       }
     });
@@ -787,10 +874,72 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteMessages(List<int> ids) async {
     if (ids.isEmpty) return;
+    final files = await _downloadedAttachmentPaths(ids);
     await transaction(() async {
       await _deleteFtsFor(ids);
-      await (delete(messages)..where((m) => m.id.isIn(ids))).go();
+      await _deleteMessageRows(ids);
     });
+    // Satırlar silindikten SONRA: transaction geri alınırsa dosyalar kalır.
+    await AttachmentFiles.deleteAll(files);
+  }
+
+  /// İleti satırlarını SQLite'ın değişken sınırını aşmayacak parçalarla siler.
+  Future<void> _deleteMessageRows(List<int> ids) async {
+    for (var i = 0; i < ids.length; i += _sqlChunk) {
+      final chunk = ids.sublist(i, min(i + _sqlChunk, ids.length));
+      await (delete(messages)..where((m) => m.id.isIn(chunk))).go();
+    }
+  }
+
+  /// `IN (?, ?, …)` listelerinin en fazla eleman sayısı (SQLite'ın eski
+  /// sürümlerdeki 999 değişken sınırının altında).
+  static const int _sqlChunk = 500;
+
+  /// [messageIds] iletilerinin İNDİRİLMİŞ ek dosyalarının yolları. Yazma
+  /// ekranından eklenen (`isOutgoing`) dosyalar kullanıcının kendi dosyasının
+  /// kopyasıdır ve buradan yönetilmez.
+  Future<List<String>> _downloadedAttachmentPaths(List<int> messageIds) async {
+    final paths = <String>[];
+    for (var i = 0; i < messageIds.length; i += _sqlChunk) {
+      final chunk = messageIds.sublist(
+        i,
+        min(i + _sqlChunk, messageIds.length),
+      );
+      final rows =
+          await (select(attachments)..where(
+                (a) =>
+                    a.messageId.isIn(chunk) &
+                    a.localPath.isNotNull() &
+                    a.isOutgoing.equals(false),
+              ))
+              .get();
+      for (final row in rows) {
+        paths.add(row.localPath!);
+      }
+    }
+    return paths;
+  }
+
+  /// [uids]'e karşılık gelen yerel iletiler (uid → satır), tek toplu okumayla.
+  Future<Map<int, MessageRow>> messagesByUids(
+    int mailboxId,
+    Iterable<int> uids,
+  ) async {
+    final all = uids.toList();
+    final result = <int, MessageRow>{};
+    for (var i = 0; i < all.length; i += _sqlChunk) {
+      final chunk = all.sublist(i, min(i + _sqlChunk, all.length));
+      final rows =
+          await (select(messages)..where(
+                (m) => m.mailboxId.equals(mailboxId) & m.uid.isIn(chunk),
+              ))
+              .get();
+      for (final row in rows) {
+        final uid = row.uid;
+        if (uid != null) result[uid] = row;
+      }
+    }
+    return result;
   }
 
   /// [keepNewest] en yeni iletiden SONRAKİ (yani en eski) trimming
@@ -869,35 +1018,81 @@ class AppDatabase extends _$AppDatabase {
     messageBodies,
   )..where((b) => b.messageId.equals(messageId))).watchSingleOrNull();
 
+  /// Gövdeyi yazar, iletinin `bodyFetchedAt`'ini işaretler ve arama dizinini
+  /// zenginleştirir.
+  ///
+  /// [messagePatch] aynı `UPDATE`'e katılır (önizleme, ek bayrağı gibi): ayrı
+  /// yazımlar her birinde liste ve sayaç akışlarını yeniden sorgulatırdı.
+  /// Hepsi tek transaction'dadır.
   Future<void> upsertBody({
     required int messageId,
     String? plainText,
     String? html,
-  }) async {
+    MessagesCompanion messagePatch = const MessagesCompanion(),
+  }) => transaction(() async {
+    final now = DateTime.now().toUtc();
     await into(messageBodies).insertOnConflictUpdate(
       MessageBodiesCompanion.insert(
         messageId: Value(messageId),
         plainText: Value(plainText),
         html: Value(html),
-        fetchedAt: Value(DateTime.now().toUtc()),
+        fetchedAt: Value(now),
       ),
     );
     await (update(messages)..where((m) => m.id.equals(messageId))).write(
-      MessagesCompanion(bodyFetchedAt: Value(DateTime.now().toUtc())),
+      messagePatch.copyWith(bodyFetchedAt: Value(now)),
     );
     // Gövde geldiğinde arama indeksi zenginleşir.
     final message = await messageById(messageId);
     if (message != null) {
       await _rebuildFtsForMessage(message, plainText ?? '');
     }
-  }
+  });
 
-  /// 30 günden eski gövdeleri budar; envelope kaydı kalır.
-  Future<int> pruneOldBodies({Duration keep = const Duration(days: 30)}) async {
+  /// [keep]'ten eski, sunucudan YENİDEN İNDİRİLEBİLEN gövdeleri budar;
+  /// envelope kaydı kalır. Dönüş: silinen gövde sayısı.
+  ///
+  /// Yalnızca sunucuda karşılığı olan iletiler budanır: taslak, giden kutusu
+  /// ve henüz Gönderilenler'e yazılmamış iletilerin gövdesi TEK kopyadır;
+  /// silinirse taslak boş açılır ve kuyruktaki ileti boş gövdeyle gönderilir.
+  ///
+  /// Budanan iletilerin `bodyFetchedAt`'i sıfırlanır — aksi hâlde
+  /// `MailRepository.ensureBody` "gövde zaten indirilmiş" sanıp bir daha
+  /// indirmez ve ileti kalıcı olarak boş görünürdü.
+  Future<int> pruneOldBodies({Duration keep = const Duration(days: 30)}) {
     final cutoff = DateTime.now().toUtc().subtract(keep);
-    return (delete(
-      messageBodies,
-    )..where((b) => b.fetchedAt.isSmallerThanValue(cutoff))).go();
+    return transaction(() async {
+      final candidates =
+          await (select(messageBodies).join([
+                innerJoin(messages, messages.id.equalsExp(messageBodies.messageId)),
+              ])..where(
+                messageBodies.fetchedAt.isSmallerThanValue(cutoff) &
+                    messages.uid.isNotNull() &
+                    messages.isLocalOnly.equals(false) &
+                    messages.outboxState.isIn([
+                      OutboxState.none.index,
+                      OutboxState.sent.index,
+                    ]),
+              ))
+              .map((row) => row.read(messages.id)!)
+              .get();
+      if (candidates.isEmpty) return 0;
+
+      var removed = 0;
+      for (var i = 0; i < candidates.length; i += _sqlChunk) {
+        final chunk = candidates.sublist(
+          i,
+          min(i + _sqlChunk, candidates.length),
+        );
+        removed += await (delete(
+          messageBodies,
+        )..where((b) => b.messageId.isIn(chunk))).go();
+        await (update(messages)..where((m) => m.id.isIn(chunk))).write(
+          const MessagesCompanion(bodyFetchedAt: Value(null)),
+        );
+      }
+      return removed;
+    });
   }
 
   // ------------------------------------------------------------------ ekler
@@ -937,6 +1132,31 @@ class AppDatabase extends _$AppDatabase {
               ..where((a) => a.isOutgoing.equals(true) & a.localPath.isNotNull()))
             .get();
     return {for (final row in rows) row.localPath!};
+  }
+
+  /// HÂLÂ gerekli olan giden ek dosyalarının yolları: taslaklara, kuyruktaki
+  /// (gönderilmeyi bekleyen, gönderiliyor, başarısız) iletilere ve
+  /// Gönderilenler'e henüz yazılmamış (`uid` yok) gönderilmiş iletilere bağlı
+  /// olanlar. Bunların dışındakiler sahipsizdir ve süpürülebilir (bkz.
+  /// `OutgoingAttachmentStore.sweep`).
+  Future<Set<String>> activeOutgoingAttachmentPaths() async {
+    final query = select(attachments).join([
+      innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
+    ])
+      ..where(
+        attachments.isOutgoing.equals(true) &
+            attachments.localPath.isNotNull() &
+            (messages.isDraft.equals(true) |
+                messages.isLocalOnly.equals(true) |
+                messages.uid.isNull() |
+                messages.outboxState.isIn([
+                  OutboxState.queued.index,
+                  OutboxState.sending.index,
+                  OutboxState.failed.index,
+                ])),
+      );
+    final rows = await query.get();
+    return {for (final row in rows) row.read(attachments.localPath)!};
   }
 
   Future<void> setAttachmentPath(int id, String path) =>
@@ -979,8 +1199,14 @@ class AppDatabase extends _$AppDatabase {
   Future<List<LabelRow>> labelsOf(int accountId) =>
       (select(labels)..where((l) => l.accountId.equals(accountId))).get();
 
-  Future<int> insertLabel(LabelsCompanion row) =>
-      into(labels).insertOnConflictUpdate(row);
+  /// Etiketi ekler; hesapta aynı adlı etiket varsa tonunu ve anahtar kelimesini
+  /// günceller. Çakışma hedefi `(account_id, name)` benzersizliğidir:
+  /// `insertOnConflictUpdate` yalnızca birincil anahtarı hedef alır ve var olan
+  /// bir adla etiket oluşturmak "UNIQUE constraint failed" hatası fırlatırdı.
+  Future<int> insertLabel(LabelsCompanion row) => into(labels).insert(
+    row,
+    onConflict: DoUpdate((_) => row, target: [labels.accountId, labels.name]),
+  );
 
   Future<void> deleteLabel(int id) =>
       (delete(labels)..where((l) => l.id.equals(id))).go();
@@ -1381,6 +1607,30 @@ class AppDatabase extends _$AppDatabase {
         .go();
   }
 
+  /// Belirtilen iletiye ait henüz gönderilmemiş (`pending`) send işlemlerini bulur.
+  Future<List<PendingOperationRow>> pendingSendOperationsFor(
+    int messageId,
+  ) async {
+    final ops = await (select(pendingOperations)
+          ..where(
+            (p) =>
+                p.type.equalsValue(PendingOpType.send) &
+                p.status.equalsValue(PendingOpStatus.pending),
+          ))
+        .get();
+
+    final result = <PendingOperationRow>[];
+    for (final op in ops) {
+      try {
+        final decoded = jsonDecode(op.payloadJson);
+        if (decoded is Map && decoded['messageId'] == messageId) {
+          result.add(op);
+        }
+      } catch (_) {}
+    }
+    return result;
+  }
+
   Future<void> completeOperation(int id) =>
       (delete(pendingOperations)..where((p) => p.id.equals(id))).go();
 
@@ -1424,8 +1674,8 @@ class AppDatabase extends _$AppDatabase {
     final accountClause = accountId == null ? '' : 'AND m.account_id = ? ';
     final filter = _messageFilterSql(filters);
     final rows = await customSelect(
-      'SELECT f.message_id AS mid FROM messages_fts f '
-      'JOIN messages m ON m.id = f.message_id '
+      'SELECT f.rowid AS mid FROM messages_fts f '
+      'JOIN messages m ON m.id = f.rowid '
       'JOIN mailboxes mb ON mb.id = m.mailbox_id '
       'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
       'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?',
@@ -1508,7 +1758,7 @@ class AppDatabase extends _$AppDatabase {
   /// seçilip Dosyalar sekmesine geçildiğinde o kişinin gönderdiği ekler
   /// görünsün (dosya adı kişinin adını içermese bile) — bkz.
   /// `mailSearchResultsProvider`'ın dayandığı `messages_fts` içeriği
-  /// (`_ftsContentFor`), orada da gönderen ad/e-posta aranabilir. Yalnızca
+  /// (`_ftsText`), orada da gönderen ad/e-posta aranabilir. Yalnızca
   /// alınan iletilerin ekleri aranır — yazma ekranından iliştirilip henüz
   /// gönderilmemiş dosyalar (`isOutgoing`) hariç tutulur. Gömülü (`isInline`)
   /// parçalar da hariç tutulur: bunlar HTML gövdesi içinde `cid:` ile
@@ -1625,62 +1875,69 @@ class AppDatabase extends _$AppDatabase {
     return tokens.map((t) => '"${t.replaceAll('"', '')}"*').join(' ');
   }
 
-  String _ftsContentFor(MessagesCompanion row, [String body = '']) {
-    final parts = <String>[
+  /// Arama dizinine yazılacak metin: parçalar birleştirilip `foldForSearch`
+  /// ile normalleştirilir (sorgu da aynı fonksiyondan geçer).
+  String _ftsText(Iterable<String> parts) =>
+      foldForSearch(parts.where((part) => part.isNotEmpty).join(' '));
+
+  /// Yeni/güncellenen bir iletinin dizin kaydını yazar. [preview] ve [body],
+  /// [row] o alanları taşımadığında (zarf yenilemesi) mevcut değerleri
+  /// korumak içindir; aksi hâlde dizindeki gövde metni kaybolurdu.
+  Future<void> _writeFts(
+    int messageId,
+    MessagesCompanion row, {
+    String preview = '',
+    String body = '',
+  }) => _replaceFts(
+    messageId,
+    _ftsText([
       row.subject.present ? row.subject.value : '',
       row.fromName.present ? row.fromName.value : '',
       row.fromEmail.present ? row.fromEmail.value : '',
-      row.preview.present ? row.preview.value : '',
+      row.preview.present ? row.preview.value : preview,
       body,
-    ];
-    return foldForSearch(parts.where((p) => p.isNotEmpty).join(' '));
-  }
+    ]),
+  );
 
-  Future<void> _writeFts(int messageId, MessagesCompanion row) async {
-    await customStatement('DELETE FROM messages_fts WHERE message_id = ?', [
+  Future<void> _rebuildFtsForMessage(MessageRow row, String body) =>
+      _replaceFts(
+        row.id,
+        _ftsText([row.subject, row.fromName, row.fromEmail, row.preview, body]),
+      );
+
+  /// Dizin kaydını `rowid` (= ileti kimliği) üzerinden değiştirir: doğrudan
+  /// erişim, dizin taranmaz.
+  Future<void> _replaceFts(int messageId, String content) async {
+    await customStatement('DELETE FROM messages_fts WHERE rowid = ?', [
       messageId,
     ]);
     await customStatement(
-      'INSERT INTO messages_fts (content, message_id) VALUES (?, ?)',
-      [_ftsContentFor(row), messageId],
-    );
-  }
-
-  Future<void> _rebuildFtsForMessage(MessageRow row, String body) async {
-    final content = foldForSearch(
-      [
-        row.subject,
-        row.fromName,
-        row.fromEmail,
-        row.preview,
-        body,
-      ].where((p) => p.isNotEmpty).join(' '),
-    );
-    await customStatement('DELETE FROM messages_fts WHERE message_id = ?', [
-      row.id,
-    ]);
-    await customStatement(
-      'INSERT INTO messages_fts (content, message_id) VALUES (?, ?)',
-      [content, row.id],
+      'INSERT INTO messages_fts (rowid, content) VALUES (?, ?)',
+      [messageId, content],
     );
   }
 
   Future<void> _deleteFtsFor(List<int> ids) async {
-    for (final id in ids) {
-      await customStatement('DELETE FROM messages_fts WHERE message_id = ?', [
-        id,
-      ]);
+    for (var i = 0; i < ids.length; i += _sqlChunk) {
+      final chunk = ids.sublist(i, min(i + _sqlChunk, ids.length));
+      await customStatement(
+        'DELETE FROM messages_fts WHERE rowid IN '
+        '(${List.filled(chunk.length, '?').join(',')})',
+        chunk,
+      );
     }
   }
 
-  /// Hesap silindiğinde her şeyi temizler.
+  /// Hesap silindiğinde her şeyi temizler (indirilmiş ek dosyaları dahil).
   Future<void> wipeAccount(int accountId) async {
     final ids = await (select(
       messages,
     )..where((m) => m.accountId.equals(accountId))).map((m) => m.id).get();
+    final files = await _downloadedAttachmentPaths(ids);
     await transaction(() async {
       await _deleteFtsFor(ids);
       await deleteAccount(accountId);
     });
+    await AttachmentFiles.deleteAll(files);
   }
 }

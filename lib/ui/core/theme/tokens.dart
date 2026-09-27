@@ -161,6 +161,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     required this.accentFill,
     required this.onAccentFill,
     required this.accentSubtle,
+    required this.accentStrong,
     required this.danger,
     required this.dangerFill,
     required this.success,
@@ -174,8 +175,9 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   final Brightness brightness;
 
   final Color bg;
-  // Çoğu temada `bg` ile aynıdır; yalnızca koyu temada AppBar'ın zeminden
-  // farklı bir tonda olduğu için ayrışır (bkz. `AppTheme._build` içindeki
+  // Açık temada Outlook'un mavi üst çubuğuna yaklaşan `accent` tonu; koyu
+  // temada zeminden (`bg`) ayrışıp drawer'la aynı gri tona (`surface`/
+  // `surfaceDeep`) eşitlenir (bkz. `AppTheme._build` içindeki
   // `appBarTheme.backgroundColor`).
   final Color appBarBg;
   // Mail detay ekranının okuma bölmesi (WebView gövdesi + iskelet dolgusu).
@@ -195,6 +197,11 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   final Color accentFill;
   final Color onAccentFill;
   final Color accentSubtle;
+  // İkinci, koyu vurgu tonu — açık temada Gelen Kutusu üst çubuğu gibi
+  // `accentFill` zeminli yüzeylerin üzerinde ondan ayrışması gereken opak
+  // pilli düğmeler (bkz. `_FilterMenuButton`) için. Koyu temada `accentFill`
+  // ile aynıdır: koyu tema bu tondan etkilenmez.
+  final Color accentStrong;
 
   final Color danger;
   final Color dangerFill;
@@ -210,27 +217,30 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   bool get isDark => brightness == Brightness.dark;
 
   /// Açık tema.
+  /// Outlook/Microsoft Mail'e yaklaşan kurumsal mavi-beyaz palet — kararlar
+  /// için bkz. kullanıcı referans ekran görüntüleri (2026-09-27).
   static const KaydetTokens light = KaydetTokens(
     brightness: Brightness.light,
     bg: Color(0xFFFFFFFF),
-    appBarBg: Color(0xFFFFFFFF),
+    appBarBg: Color(0xFF1478C9),
     readingBg: Color(0xFFFFFFFF),
     surface: Color(0xFFF6F8F9),
     surfaceElevated: Color(0xFFFFFFFF),
     surfaceDeep: Color(0xFFEEF2F4),
-    textPrimary: Color(0xFF0F1619), // 18.27:1
-    textSecondary: Color(0xFF5A6B73), // 5.55:1
-    textTertiary: Color(0xFF7C8B93), // 3.52:1
-    accent: Color(0xFF1B72C4), // 4.94:1
-    accentFill: Color(0xFF1B72C4),
+    textPrimary: Color(0xFF202124),
+    textSecondary: Color(0xFF6B6F73),
+    textTertiary: Color(0xFF9AA0A6),
+    accent: Color(0xFF1478C9),
+    accentFill: Color(0xFF1478C9),
     onAccentFill: Color(0xFFFFFFFF),
-    accentSubtle: Color(0x141B72C4),
-    danger: Color(0xFFC62A2F), // 5.57:1
+    accentSubtle: Color(0x1F1478C9),
+    accentStrong: Color(0xFF075A9C),
+    danger: Color(0xFFC62A2F),
     dangerFill: Color(0xFFC62A2F),
     success: Color(0xFF1A7F4B),
     warning: Color(0xFFB26A00),
-    divider: Color(0xFFE3E8EA),
-    border: Color(0xFFD3DBDE),
+    divider: Color(0xFFE5E7EB),
+    border: Color(0xFFE5E7EB),
     scrim: Color(0x73000000),
     avatarTones: _lightAvatarTones,
   );
@@ -243,9 +253,12 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   /// farkı verir.
   ///
   /// Yüzey hiyerarşisi:
-  ///   bg / appBarBg (#131314)         → Zemin, liste, üst çubuk
+  ///   bg (#131314)                    → Zemin, liste
+  ///   appBarBg / surface / surfaceDeep (#1E1F20) → Üst çubuk, drawer, alan ve
+  ///                                      kart zemini — kullanıcı isteğiyle üst
+  ///                                      çubuk artık `bg`'den değil drawer'la
+  ///                                      AYNI tondan (bkz. `FolderDrawer`).
   ///   readingBg (#2A2A2A)             → Yalnızca mail okuma bölmesi (aşağı bkz.)
-  ///   surface / surfaceDeep (#1E1F20) → Drawer, alan ve kart zemini
   ///   surfaceElevated (#282A2C)       → Diyalog, alt sayfa, araç çubuğu
   ///
   /// Vurgu ikiye ayrılır — koyu zeminde tek renk hem dolgu hem metin olamaz:
@@ -258,7 +271,10 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
     bg: Color(0xFF131314),
-    appBarBg: Color(0xFF131314),
+    // Drawer'la (`surface`/`surfaceDeep`) aynı gri — kullanıcı isteğiyle
+    // artık `bg`'nin near-black tonundan ayrışıp navigasyon çekmecesiyle
+    // birleşiyor.
+    appBarBg: Color(0xFF1E1F20),
     // Uzun metin okunan tek yüzey: uygulamanın near-black zemininde açık
     // renkli metin parlar (halation) ve uzun okumada yorar. Nötr, orta-koyu
     // bir gri bunu yumuşatır. WebView zemini, iskelet ve mail renk dönüşümü
@@ -279,6 +295,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     // içindeki `_FolderTile` ve `listTileTheme.selectedColor`. Üzerinde
     // `accent` 7,2:1, ana metin 9,7:1.
     accentSubtle: Color(0xFF1A3556),
+    accentStrong: Color(0xFF0B57D0),
     danger: Color(0xFFF28B82),
     dangerFill: Color(0xFFC5221F),
     success: Color(0xFF81C995),
@@ -367,6 +384,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     Color? accentFill,
     Color? onAccentFill,
     Color? accentSubtle,
+    Color? accentStrong,
     Color? danger,
     Color? dangerFill,
     Color? success,
@@ -390,6 +408,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     accentFill: accentFill ?? this.accentFill,
     onAccentFill: onAccentFill ?? this.onAccentFill,
     accentSubtle: accentSubtle ?? this.accentSubtle,
+    accentStrong: accentStrong ?? this.accentStrong,
     danger: danger ?? this.danger,
     dangerFill: dangerFill ?? this.dangerFill,
     success: success ?? this.success,
@@ -419,6 +438,7 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
       accentFill: c(accentFill, other.accentFill),
       onAccentFill: c(onAccentFill, other.onAccentFill),
       accentSubtle: c(accentSubtle, other.accentSubtle),
+      accentStrong: c(accentStrong, other.accentStrong),
       danger: c(danger, other.danger),
       dangerFill: c(dangerFill, other.dangerFill),
       success: c(success, other.success),

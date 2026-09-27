@@ -558,6 +558,27 @@ class _ServerBlock extends StatelessWidget {
               visualDensity: VisualDensity.compact,
             ),
           ),
+          // Şifrelemesiz seçenek şifreyi ve iletileri ağda düz metin taşır;
+          // kullanıcı bunu seçerken açıkça uyarılır.
+          if (security == SocketSecurity.none) ...[
+            const SizedBox(height: Space.sm),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(LucideIcons.triangleAlert, size: IconSize.sm, color: t.danger),
+                const SizedBox(width: Space.sm),
+                Expanded(
+                  child: Text(
+                    'Şifreniz ve iletileriniz şifrelenmeden gönderilir. '
+                    'Yalnızca güvendiğiniz bir iç ağda kullanın.',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: t.danger),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/avatar.dart' show domainOf;
 import '../core/date_format.dart';
 import '../core/result.dart';
 import '../core/turkish.dart';
@@ -18,6 +19,7 @@ import '../data/repositories/sync_engine.dart';
 import '../data/services/app_settings.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
+import '../data/services/outgoing_attachment_store.dart';
 import '../data/services/secure_store.dart';
 import '../data/services/share_intake_service.dart';
 import '../data/services/smtp_service.dart';
@@ -62,6 +64,12 @@ final shareIntakeServiceProvider = Provider<ShareIntakeService>((ref) {
   return service;
 });
 
+/// Yazma ekranından eklenen dosyaların kalıcı deposu (bkz.
+/// `OutgoingAttachmentStore`).
+final outgoingAttachmentStoreProvider = Provider<OutgoingAttachmentStore>(
+  (ref) => OutgoingAttachmentStore(),
+);
+
 final mailConnectionProvider = Provider<MailConnection>((ref) {
   final connection = MailConnection(
     database: ref.watch(databaseProvider),
@@ -104,6 +112,12 @@ final mailRepositoryProvider = Provider<MailRepository>((ref) {
 /// kısaltmak için geçersiz kılar.
 final mailUndoWindowProvider = Provider<Duration>(
   (ref) => const Duration(seconds: 6),
+);
+
+/// Gönderilen iletinin "Geri al" (Undo Send) için bekletildiği süre (5 sn).
+/// Testler beklemeden göndermek için kısa süreyle geçersiz kılar.
+final sendUndoWindowProvider = Provider<Duration>(
+  (ref) => const Duration(seconds: 5),
 );
 
 /// Sunucuda başarısız olup yerelde geri alınan arşivle/sil/taşı eylemleri.
@@ -201,6 +215,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setConfirmBeforeDelete(bool value) =>
       _save(state.copyWith(confirmBeforeDelete: value));
+
+  Future<void> setShowBrandLogos(bool value) =>
+      _save(state.copyWith(showBrandLogos: value));
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(
@@ -263,6 +280,16 @@ final mailboxesProvider = StreamProvider<List<MailboxRow>>((ref) {
   final accountId = ref.watch(accountIdProvider);
   if (accountId == null) return Stream.value(const <MailboxRow>[]);
   return ref.watch(databaseProvider).watchMailboxes(accountId);
+});
+
+/// Cihazdaki hesapların e-posta alan adları (küçük harf). Bu alan adları için
+/// marka logosu aranmaz: kullanıcının kendi (kurum içi) alan adını ağa
+/// duyurmanın anlamı yok (bkz. `BrandAvatar`).
+final ownEmailDomainsProvider = Provider<Set<String>>((ref) {
+  final accounts = ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
+  return {
+    for (final account in accounts) ?domainOf(account.email),
+  };
 });
 
 /// Belirli bir hesabın klasörleri — çoklu hesap yan menüsünde her hesap

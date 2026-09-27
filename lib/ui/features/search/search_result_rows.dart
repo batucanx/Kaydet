@@ -7,6 +7,7 @@ import '../../../domain/models/mail_models.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 
 /// Arama sonucundaki bir ileti kartı: avatar, gönderen (taslak/gönderilmiş
@@ -283,13 +284,13 @@ class AttachmentResultRow extends StatelessWidget {
               height: Dimens.avatarSize,
               decoration: BoxDecoration(
                 color: t.surfaceElevated,
-                shape: BoxShape.circle,
+                borderRadius: BorderRadius.circular(Radii.md),
               ),
               alignment: Alignment.center,
-              child: Icon(
-                LucideIcons.paperclip,
-                size: IconSize.md,
-                color: t.textSecondary,
+              child: AttachmentTypeIcon(
+                fileName: result.attachment.fileName,
+                mimeType: result.attachment.mimeType,
+                size: IconSize.lg,
               ),
             ),
             const SizedBox(width: Space.md),

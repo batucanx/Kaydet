@@ -8,10 +8,12 @@ import 'app/notification_navigator.dart';
 import 'app/providers.dart';
 import 'app/push_controller.dart';
 import 'app/push_service.dart';
+import 'app/remote_push_controller.dart';
 import 'app/share_navigator.dart';
 import 'app/sync_controller.dart';
 import 'data/services/app_settings.dart';
 import 'data/services/notification_service.dart';
+import 'data/services/quick_templates_store.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,6 +37,7 @@ Future<void> main() async {
   );
 
   final settingsStore = await AppSettingsStore.create();
+  final quickTemplatesStore = await QuickTemplatesStore.create();
 
   // Arka plan görevleri başlatılamasa bile uygulama açılmalı.
   try {
@@ -65,6 +68,7 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         settingsStoreProvider.overrideWithValue(settingsStore),
+        quickTemplatesStoreProvider.overrideWithValue(quickTemplatesStore),
       ],
       child: const _Bootstrap(),
     ),
@@ -110,6 +114,11 @@ class _BootstrapState extends ConsumerState<_Bootstrap> {
     // Anlık bildirim servisini ayarlara göre açıp kapatır ve servisle
     // konuşur (bkz. `PushController`); izlenmezse hiç oluşturulmaz.
     ref.watch(pushControllerProvider);
+
+    // iOS'ta cihazın hesaplarını push sunucusuyla eşler (bkz.
+    // `RemotePushController`); Android'de ve backend yapılandırılmamışken
+    // no-op'tur, izlenmezse hiç oluşturulmaz.
+    ref.watch(remotePushControllerProvider);
 
     // Ayarlardaki sıklık değişince arka plan görevi yeniden kaydedilir.
     ref.listen(settingsProvider, (previous, next) {

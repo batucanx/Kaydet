@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/navigation.dart';
 import '../../../app/providers.dart';
 import '../../../data/repositories/mail_repository.dart';
+import '../../../core/date_format.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
@@ -18,19 +20,14 @@ import 'send_feedback.dart';
 /// - İçerikli bir taslakla kapandıysa (geri tuşu/X, bkz.
 ///   `ComposeScreen._closeScreen`) "kaydedildi"; kullanıcı pişman olursa
 ///   yanındaki "Sil" eylemiyle taslağı silebilir.
-/// - İleti gönderildiyse "gönderiliyor", sonra gerçek sonuca göre
-///   "gönderildi" ya da "gönderilemedi" (bkz. [SendFeedback]).
+/// - İleti gönderildiyse önce "Geri Al" seçeneğiyle "gönderiliyor", sonra
+///   gerçek sonuca göre "gönderildi" ya da "gönderilemedi" (bkz. [SendFeedback]).
+/// - İleti zamanlandıysa "İleti zamanlandı: [Zaman]" ve "Geri Al" düğmesi çıkar.
 /// - Boş bırakılan iletide bildirim çıkmaz.
 ///
 /// [noticeBottomInset], çağıran ekranın altında bildirimin kapatmaması
 /// gereken bir öğe varsa (FAB, alt eylem çubuğu) onun yüksekliğidir — bkz.
 /// [KaydetNotice.show].
-///
-/// Bildirim çağıran ekrana bırakılmadı: rota kapanana kadar o ekranın
-/// `BuildContext`i ağaçtan çıkmış olabilir ve `context.mounted` denetimine
-/// takılan bildirim sessizce hiç görünmüyordu (bkz. `KaydetDepthCoverEffect`).
-/// Bu yüzden gereken her şey — kök `Overlay`, repository — rota açılmadan
-/// ÖNCE yakalanır; ikisi de hiçbir ekranın ömrüne bağlı değildir.
 Future<void> openCompose(
   BuildContext context,
   WidgetRef ref, {
@@ -59,18 +56,34 @@ Future<void> openCompose(
     fullscreenDialog: fullscreenDialog,
     transitionStyle: transitionStyle,
   );
-  _announceOutcome(overlay, repository, outcome, noticeBottomInset);
+  _announceOutcome(
+    overlay,
+    repository,
+    outcome,
+    noticeBottomInset,
+    onUndo: (messageId) async {
+      final cancelled = await repository.cancelQueuedSend(messageId);
+      if (cancelled && context.mounted) {
+        KaydetNotice.show(
+          overlay,
+          message: 'Gönderim iptal edildi. Taslak açılıyor…',
+          bottomInset: noticeBottomInset,
+        );
+        unawaited(
+          openCompose(
+            context,
+            ref,
+            draftId: messageId,
+            noticeBottomInset: noticeBottomInset,
+          ),
+        );
+      }
+    },
+  );
 }
 
 /// Widget ağacının dışından — bildirimdeki "Yanıtla" eylemi gibi — yazma
 /// ekranını açar (bkz. `NotificationNavigator`).
-///
-/// Elinde bir `BuildContext`/`WidgetRef` olmayan çağıranlar için [openCompose]
-/// ile aynı akıştır: kök `Navigator`ın kendisi verilir, kök `Overlay` ondan
-/// alınır.
-///
-/// [attachmentPaths], [subject] ve [body] sistem "Paylaş" menüsünden gelen
-/// içeriği yeni iletiye taşır (bkz. `ShareNavigator`).
 Future<void> openComposeFromNavigator(
   NavigatorState navigator, {
   required MailRepository repository,
@@ -96,15 +109,42 @@ Future<void> openComposeFromNavigator(
     ),
   );
   if (overlay == null) return;
-  _announceOutcome(overlay, repository, outcome, 0);
+  _announceOutcome(
+    overlay,
+    repository,
+    outcome,
+    0,
+    onUndo: (messageId) async {
+      final cancelled = await repository.cancelQueuedSend(messageId);
+      if (cancelled && navigator.mounted) {
+        KaydetNotice.show(
+          overlay,
+          message: 'Gönderim iptal edildi.',
+          bottomInset: 0,
+        );
+        unawaited(
+          openComposeFromNavigator(
+            navigator,
+            repository: repository,
+            replyToId: replyToId,
+            mode: mode,
+            attachmentPaths: attachmentPaths,
+            subject: subject,
+            body: body,
+          ),
+        );
+      }
+    },
+  );
 }
 
 void _announceOutcome(
   OverlayState overlay,
   MailRepository repository,
   ComposeOutcome? outcome,
-  double bottomInset,
-) {
+  double bottomInset, {
+  ValueChanged<int>? onUndo,
+}) {
   if (!overlay.mounted) return;
 
   switch (outcome) {
@@ -119,11 +159,26 @@ void _announceOutcome(
           () => repository.deletePermanently([draftId]),
         ),
       );
-    case ComposeSendQueued(:final messageId):
+    case ComposeSendQueued(:final messageId, :final undoDuration, :final accountId):
       SendFeedback.track(
         overlay,
         repository.watchOutboxState(messageId),
         bottomInset: bottomInset,
+        undoDuration: undoDuration,
+        onUndo: onUndo != null ? () => onUndo(messageId) : null,
+        onUndoExpired: accountId != null
+            ? () => unawaited(repository.processQueue(accountId))
+            : null,
+      );
+    case ComposeSendScheduled(:final messageId, :final scheduledAt):
+      final timeStr = formatScheduleDate(scheduledAt);
+      KaydetNotice.show(
+        overlay,
+        message: 'İleti zamanlandı: $timeStr',
+        actionLabel: onUndo != null ? 'Geri Al' : null,
+        duration: const Duration(seconds: 8),
+        bottomInset: bottomInset,
+        onAction: onUndo != null ? () => onUndo(messageId) : null,
       );
     case null:
       break;

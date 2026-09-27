@@ -86,6 +86,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
+          sendUndoWindowProvider.overrideWithValue(Duration.zero),
           databaseProvider.overrideWithValue(db),
           secureStoreProvider.overrideWithValue(secureStore),
           imapServiceProvider.overrideWithValue(imap),

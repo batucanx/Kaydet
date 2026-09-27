@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:synchronized/synchronized.dart';
+
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../database/app_database.dart';
@@ -12,6 +14,16 @@ import '../services/secure_store.dart';
 /// limitine takılmanın ("Too many connections") birinci sebebidir. Bu sınıf
 /// tek bağlantıyı yaşatır, koptuğunda üstel geri çekilmeyle yeniden bağlar
 /// ve 4 dakikada bir NOOP göndererek sunucunun oturumu düşürmesini önler.
+///
+/// **Mantıksal işlemler tek tek serileştirilir.** IMAP'te `SELECT` bağlantı
+/// başına TEK klasör seçer ve UID'ler klasöre özgüdür: `SELECT` ile onu izleyen
+/// `STORE`/`EXPUNGE`/`FETCH` arasına başka bir işlem girip başka bir klasör
+/// (ya da başka bir hesap) seçerse komut yanlış klasörde çalışır ve sunucu
+/// yine de "OK" döner. [ImapService]'in kendi komut başına kilidi bunu
+/// engelleyemez; bu yüzden birden çok komuttan oluşan her mantıksal işlem
+/// ([exclusive] / [locked]) bu sınıfın kilidi altında baştan sona çalışır.
+/// Kilit yeniden girişli DEĞİLDİR: [exclusive]/[locked]/[ensureConnected]
+/// çağrılan bir işlemin içinden tekrar çağrılamaz (kilitlenir).
 class MailConnection {
   MailConnection({
     required AppDatabase database,
@@ -32,37 +44,94 @@ class MailConnection {
   /// denetler ve dışarıdan bir NOOP'a ihtiyaç duymaz.
   final bool _keepAliveEnabled;
 
+  /// Mantıksal IMAP işlemlerini sıraya dizer (bkz. sınıf açıklaması).
+  final Lock _lock = Lock();
+
   Timer? _keepAlive;
-  int? _accountId;
+
+  /// Şu an bağlı olan hesap. YALNIZCA bağlantı gerçekten kurulduktan sonra
+  /// yazılır: bağlanma sürerken başka bir çağıran, hâlâ eski hesaba ait olan
+  /// soketi yeni hesabın bağlantısı sanıp onunla işlem yapamaz.
+  int? _connectedAccountId;
+
   ServerCapabilities _capabilities = ServerCapabilities.unknown;
-  Completer<Result<void>>? _connecting;
 
   ImapService get imap => _imap;
   ServerCapabilities get capabilities => _capabilities;
   bool get isConnected => _imap.isConnected;
   Stream<void> get serverChanges => _imap.serverChanges;
 
+  /// Bağlantı şu an tam olarak [accountId] hesabına mı ait?
+  bool isConnectedTo(int accountId) =>
+      _imap.isConnected && _connectedAccountId == accountId;
+
   /// Bağlantının hazır olduğundan emin olur.
   ///
-  /// Aynı anda birden çok çağrı gelirse yalnızca biri bağlanır, diğerleri
-  /// aynı sonucu bekler.
-  Future<Result<void>> ensureConnected(int accountId) async {
-    if (_imap.isConnected && _accountId == accountId) return okVoid;
+  /// Kilidi alır: başka bir işlem sürerken hesap değiştirmek o işlemin soketini
+  /// altından çekerdi, bu yüzden sıra beklenir. Zaten bir [exclusive] ya da
+  /// [locked] işleminin İÇİNDEN çağrılmamalıdır.
+  Future<Result<void>> ensureConnected(int accountId) =>
+      _lock.synchronized(() => _ensureConnectedUnlocked(accountId));
 
-    final pending = _connecting;
-    if (pending != null && _accountId == accountId) return pending.future;
+  /// [accountId] hesabına bağlanıp [action]'ı tek bir mantıksal işlem olarak,
+  /// başka hiçbir IMAP işlemi araya giremeden çalıştırır.
+  ///
+  /// [action] içinde birden çok komut (SELECT → FETCH gibi) güvenle
+  /// kullanılabilir; `ensureConnected`/`exclusive`/`locked` çağrılmamalıdır.
+  Future<Result<R>> exclusive<R>(
+    int accountId,
+    Future<Result<R>> Function() action,
+  ) => _lock.synchronized(() async {
+    final connected = await _ensureConnectedUnlocked(accountId);
+    if (connected is Err<void>) return Err<R>(connected.failure);
+    return action();
+  });
 
-    final completer = Completer<Result<void>>();
-    _connecting = completer;
-    _accountId = accountId;
+  /// Bağlantı kurmadan [action]'ı işlem kilidi altında çalıştırır. Bağlantının
+  /// beklenen hesaba ait olduğunu doğrulamak [action]'ın işidir
+  /// (bkz. [isConnectedTo]).
+  Future<T> locked<T>(Future<T> Function() action) =>
+      _lock.synchronized(action);
 
-    try {
-      final result = await _connect(accountId);
-      completer.complete(result);
-      return result;
-    } finally {
-      _connecting = null;
+  /// Klasörü seçer ve yerel UID'lerin hâlâ geçerli olduğunu doğrular.
+  ///
+  /// Sunucunun UIDVALIDITY değeri yerelde kayıtlı olandan farklıysa yerel
+  /// UID'ler artık başka iletileri gösterir; onlarla `FETCH`/`STORE` yapmak
+  /// YANLIŞ iletiyi okur ya da değiştirir. Bu durumda
+  /// [UidValidityChangedFailure] döner; klasör bir sonraki eşitlemede baştan
+  /// indirilir. Yalnızca [exclusive]/[locked] içinde çağrılmalıdır.
+  Future<Result<MailboxState>> selectVerified(
+    MailboxRow mailbox, {
+    bool enableCondStore = false,
+  }) async {
+    final selected = await _imap.selectMailbox(
+      mailbox.path,
+      enableCondStore: enableCondStore,
+    );
+    if (selected is Err<MailboxState>) return selected;
+    final state = (selected as Ok<MailboxState>).value;
+    final known = mailbox.uidValidity;
+    if (known != null && state.uidValidity != 0 && known != state.uidValidity) {
+      return Err(
+        UidValidityChangedFailure(
+          mailboxPath: mailbox.path,
+          oldValue: known,
+          newValue: state.uidValidity,
+        ),
+      );
     }
+    return selected;
+  }
+
+  Future<Result<void>> _ensureConnectedUnlocked(int accountId) async {
+    if (_imap.isConnected && _connectedAccountId == accountId) return okVoid;
+
+    // Farklı hesaba geçiş ya da kopmuş bağlantı: bağlanma bitene dek hiçbir
+    // hesap "bağlı" sayılmaz.
+    _connectedAccountId = null;
+    final result = await _connect(accountId);
+    if (result.isOk) _connectedAccountId = accountId;
+    return result;
   }
 
   Future<Result<void>> _connect(int accountId) async {
@@ -126,12 +195,27 @@ class MailConnection {
     _keepAlive = null;
   }
 
+  /// Bağlantıyı kapatır. Sürmekte olan bir işlemi BEKLEMEZ: çıkış yapan
+  /// kullanıcının sunucu yanıt vermediği için kilitlenmemesi gerekir; süren
+  /// işlem bağlantı hatasıyla biter.
   Future<void> disconnect() async {
     _stopKeepAlive();
-    _accountId = null;
+    _connectedAccountId = null;
     _capabilities = ServerCapabilities.unknown;
     await _imap.disconnect();
   }
+
+  /// Bağlantı hâlâ [accountId] hesabına aitse kapatır; başka bir hesaba
+  /// geçilmişse HİÇ dokunmaz.
+  ///
+  /// Hesap değiştirilirken eski hesabın oturumu arka planda kapatılır; bu
+  /// kapatma, yeni hesabın bağlantısı kurulduktan SONRA çalışırsa onu da
+  /// kapatırdı. Kontrol işlem kilidi altında yapılır (bağlantılar yalnızca bu
+  /// kilit altında kurulur), bu yüzden araya yeni bir bağlantı giremez.
+  Future<void> disconnectAccount(int accountId) => _lock.synchronized(() async {
+    if (_connectedAccountId != accountId) return;
+    await disconnect();
+  });
 
   /// Hesabın SMTP ayarlarını güvenli depodaki kimlik bilgisiyle birleştirir.
   Future<MailServerConfig?> smtpConfig(int accountId) async {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -11,7 +12,6 @@ import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -21,10 +21,16 @@ import '../../../core/date_format.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/attachment_type.dart';
 import '../../../domain/use_cases/text_extraction.dart';
+import '../../core/actions/attachment_actions.dart';
 import '../../core/actions/message_actions.dart';
+import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/attachment_icon.dart';
+import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import '../attachment_preview/attachment_preview_screen.dart';
 import '../compose/compose_launcher.dart';
 import '../compose/compose_screen.dart' show ComposeMode;
 import 'mail_html_document.dart';
@@ -331,6 +337,11 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
                           fetchStatus: bodyFetch,
                           onRetry: () =>
                               ref.invalidate(bodyFetchProvider(_messageId)),
+                          // İletideki `mailto:` bağlantısı uygulamanın kendi
+                          // yazma ekranını açar.
+                          onMailto: (address) => unawaited(
+                            openCompose(context, ref, initialTo: address),
+                          ),
                         ),
                       ),
                     ],
@@ -552,36 +563,34 @@ class _AttachmentChip extends ConsumerStatefulWidget {
 }
 
 class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
-  bool _busy = false;
-
-  Future<void> _open() async {
-    setState(() => _busy = true);
-    final result = await ref
-        .read(mailRepositoryProvider)
-        .downloadAttachment(widget.attachment.id);
-    if (!mounted) return;
-    setState(() => _busy = false);
-
-    await result.fold((path) => OpenFilex.open(path), (failure) async {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(failure.userMessage)));
-    });
+  /// Ekin varsayılan davranışı artık İNDİR değil ÖNİZLE: dokunma doğrudan
+  /// `AttachmentPreviewScreen`i açar; ekran kendi içinde önbellek/indirme
+  /// durumunu ele alır (bkz. o ekranın belgesi). Burada ayrıca indirme
+  /// yapılmaz.
+  void _openPreview() {
+    context.pushScreen(
+      AttachmentPreviewScreen(attachment: widget.attachment),
+      transitionStyle: KaydetTransitionStyle.horizontalPush,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final downloaded = widget.attachment.localPath != null;
+    final kind = AttachmentType.resolve(
+      mimeType: widget.attachment.mimeType,
+      fileName: widget.attachment.fileName,
+    );
     return InkWell(
-      onTap: _busy ? null : _open,
+      onTap: _openPreview,
       borderRadius: BorderRadius.circular(Radii.sm),
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 240, minHeight: 44),
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.md,
-          vertical: Space.sm,
+        constraints: const BoxConstraints(maxWidth: 280, minHeight: 44),
+        padding: const EdgeInsetsDirectional.only(
+          start: Space.md,
+          top: Space.sm,
+          bottom: Space.sm,
+          end: Space.xs,
         ),
         decoration: BoxDecoration(
           color: t.surface,
@@ -591,21 +600,12 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (_busy)
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: t.accent,
-                ),
-              )
-            else
-              Icon(
-                downloaded ? LucideIcons.fileCheck : LucideIcons.download,
-                size: IconSize.sm,
-                color: downloaded ? t.success : t.accent,
-              ),
+            AttachmentTypeIcon(
+              kind: kind,
+              fileName: widget.attachment.fileName,
+              mimeType: widget.attachment.mimeType,
+              size: IconSize.lg,
+            ),
             const SizedBox(width: Space.sm),
             Flexible(
               child: Column(
@@ -619,7 +619,8 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                   Text(
-                    formatBytes(widget.attachment.sizeBytes),
+                    '${AttachmentType.label(widget.attachment.fileName)} · '
+                    '${formatBytes(widget.attachment.sizeBytes)}',
                     style: Theme.of(
                       context,
                     ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
@@ -627,8 +628,106 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
                 ],
               ),
             ),
+            _AttachmentOverflowButton(attachment: widget.attachment, kind: kind),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Ek şeridindeki "⋮" düğmesi — bkz. bellek: kısa seçim listeleri anchored
+/// bir popup'ta ([MenuAnchor]), tam ekran bir alttan panelde değil.
+///
+/// Menü öğeleri yerel dosya yolunu gerektirir (bkz. `attachmentMenuItems`);
+/// ek henüz önbellekte değilse ilk dokunuşta önce indirilir (düğmede kısa bir
+/// dönen gösterge), menü ancak dosya hazır olduktan SONRA açılır — kullanıcı
+/// "Paylaş" gibi bir eylemi seçtiğinde arkada eksik/yanlış bir dosya olmaz.
+class _AttachmentOverflowButton extends ConsumerStatefulWidget {
+  const _AttachmentOverflowButton({required this.attachment, required this.kind});
+
+  final AttachmentRow attachment;
+  final AttachmentKind kind;
+
+  @override
+  ConsumerState<_AttachmentOverflowButton> createState() =>
+      _AttachmentOverflowButtonState();
+}
+
+class _AttachmentOverflowButtonState
+    extends ConsumerState<_AttachmentOverflowButton> {
+  final MenuController _menu = MenuController();
+  bool _busy = false;
+  String? _resolvedPath;
+
+  Future<void> _openMenu() async {
+    if (_busy) return;
+    var path = _resolvedPath;
+    if (path == null) {
+      final existing = widget.attachment.localPath;
+      if (existing != null && File(existing).existsSync()) {
+        path = existing;
+      } else {
+        setState(() => _busy = true);
+        final result = await ref
+            .read(mailRepositoryProvider)
+            .downloadAttachment(widget.attachment.id);
+        if (!mounted) return;
+        setState(() => _busy = false);
+        path = result.valueOrNull;
+        if (path == null) {
+          final failure = result.failureOrNull;
+          final overlay = Overlay.of(context, rootOverlay: true);
+          if (overlay.mounted) {
+            KaydetNotice.show(
+              overlay,
+              message: failure?.userMessage ?? 'Dosya açılamadı.',
+            );
+          }
+          return;
+        }
+      }
+      if (!mounted) return;
+      setState(() => _resolvedPath = path);
+    }
+    // `menuChildren` az önceki `setState` ile güncellenir; açılış BİR KARE
+    // sonraya bırakılır ki menü, dosya yolu artık bilinen doğru öğe
+    // listesiyle açılsın (aksi hâlde bu karenin eski ağacı kullanılırdı).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _menu.open();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final path = _resolvedPath;
+    return MenuAnchor(
+      controller: _menu,
+      animated: true,
+      menuChildren: path == null
+          ? const []
+          : attachmentMenuItems(
+              context,
+              ref,
+              attachment: widget.attachment,
+              localPath: path,
+              kind: widget.kind,
+            ),
+      builder: (context, controller, child) => IconButton(
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        visualDensity: VisualDensity.compact,
+        icon: _busy
+            ? SizedBox(
+                width: IconSize.sm,
+                height: IconSize.sm,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: context.tokens.accent,
+                ),
+              )
+            : const Icon(LucideIcons.ellipsisVertical, size: IconSize.sm),
+        onPressed: _openMenu,
       ),
     );
   }
@@ -639,6 +738,7 @@ class _BodyView extends StatelessWidget {
     required this.body,
     required this.fetchStatus,
     required this.onRetry,
+    required this.onMailto,
   });
 
   /// Yerelde (offline-first) elde bulunan en güncel gövde — `null` ise
@@ -653,6 +753,9 @@ class _BodyView extends StatelessWidget {
   final AsyncValue<MessageBodyRow?> fetchStatus;
 
   final VoidCallback onRetry;
+
+  /// İletideki bir `mailto:` bağlantısına dokunulunca çağrılır (alıcı adresi).
+  final ValueChanged<String> onMailto;
 
   @override
   Widget build(BuildContext context) {
@@ -698,7 +801,7 @@ class _BodyView extends StatelessWidget {
       // üstüne ayrı bir katman olarak eklenir (bkz. `_PinchZoomableBody`).
       return _PinchZoomableBody(
         contentKey: body!.messageId,
-        child: _HtmlWebView(html: html),
+        child: _HtmlWebView(html: html, onMailto: onMailto),
       );
     }
 
@@ -1150,13 +1253,27 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
 /// açılır (`useWideViewPort` + overview kipi, yakınlaştırma ayarından
 /// bağımsızdır).
 ///
+/// Android'de bileşim (composition) kipi İÇERİK BOYUNA GÖRE değişir (bkz.
+/// `_HtmlWebViewState._switchToHybridComposition`): normal boydaki e-postalar
+/// (büyük çoğunluk) `webview_flutter_android`in VARSAYILAN, doku (texture)
+/// tabanlı kipinde kalır — paketin kendi belgesi Hybrid Composition'ı "expensive"
+/// (`initExpensiveAndroidView`) olarak adlandırır: her kaydırma karesinde
+/// platform görünümünü Android'in kendi View ağacında yeniden konumlandırmak
+/// doku tabanlı kipe göre gözle görülür şekilde daha pahalıdır ve Outlook'un
+/// akıcı kaydırmasının aksine kare düşürür. Hybrid Composition SADECE içerik
+/// bu dokunun sığabileceğinden (GPU'nun garantili en düşük doku boyutu,
+/// `_hybridCompositionThresholdPx`) uzunsa devreye girer — aksi hâlde doku
+/// WebView'ı sığdıramaz ve uygulama çöker (flutter/flutter#104889, #116954).
 /// Ekranın kendisinin geri geçişte (bkz. `MailDetailScreen` belgesi) donmuş
-/// bir görüntüyle animasyonlanması, buradaki Hybrid Composition WebView'ın
+/// bir görüntüyle animasyonlanması, Hybrid Composition kipindeyken WebView'ın
 /// geçiş sırasında ekranda "yırtılmasını" (tearing) da önler.
 class _HtmlWebView extends StatefulWidget {
-  const _HtmlWebView({required this.html});
+  const _HtmlWebView({required this.html, required this.onMailto});
 
   final String html;
+
+  /// `mailto:` bağlantısına dokunulunca alıcı adres(ler)i ile çağrılır.
+  final ValueChanged<String> onMailto;
 
   @override
   State<_HtmlWebView> createState() => _HtmlWebViewState();
@@ -1177,8 +1294,22 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     Factory<LongPressGestureRecognizer>(LongPressGestureRecognizer.new),
   };
 
-  late final WebViewController _controller;
-  late final Widget _webView;
+  /// Android'in dokuya (texture) sığdırabileceği garantili en düşük yükseklik
+  /// (fiziksel piksel) — GLES'in garantili asgari `GL_MAX_TEXTURE_SIZE`si.
+  /// Gerçek cihazların çoğu çok daha fazlasını destekler, ama bilinmeyen bir
+  /// cihazda dokuyu bunun üstüne çıkarmak (bkz. `_switchToHybridComposition`)
+  /// az önce yazılıp iskeletten yeni çıkmış bir ekranı çökertme riski taşır —
+  /// bu yüzden kasıtlı olarak muhafazakâr seçilir.
+  static const double _hybridCompositionThresholdPx = 4096;
+
+  late WebViewController _controller;
+  late Widget _webView;
+
+  /// `true` olunca `_controller`/`_webView` Hybrid Composition ile kurulur
+  /// (bkz. `_createWebView`). Yeni bir iletiye geçilince (bkz.
+  /// `didUpdateWidget`) sıfıra döner — önceki ileti devasa olsa bile sıradaki
+  /// normal boyuttaki ileti yine hızlı doku kipinden başlar.
+  bool _hybridComposition = false;
 
   // `_load()` art arda (ör. ilk `didChangeDependencies` hemen ardından
   // `didUpdateWidget`) tetiklenirse, önce başlayan ama geç biten bir isolate
@@ -1213,6 +1344,12 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   void initState() {
     super.initState();
+    _createWebView();
+  }
+
+  /// `_controller`/`_webView`i (yeniden) kurar. Bileşim kipi `_hybridComposition`
+  /// tarafından belirlenir (bkz. alan belgesi ve `_switchToHybridComposition`).
+  void _createWebView() {
     // JS açık: çalışan tek betik `MailHtmlDocument`in nonce'lu render
     // betiğidir; e-postanın kendi betikleri belgedeki CSP ile engellenir.
     _controller = WebViewController()
@@ -1241,16 +1378,18 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     if (platform is AndroidWebViewController) {
       unawaited(platform.setUseWideViewPort(true));
     }
-    // Android'de Hybrid Composition: varsayılan (doku tabanlı) kip platform
-    // görünümünü boyutu kadar bir dokuya çizer; içerik boyuna uzatılmış uzun
-    // bir WebView o dokuya sığmaz ve uygulama çöker (flutter/flutter#104889,
-    // #116954). Hybrid Composition WebView'ı gerçek bir Android görünümü
-    // olarak yerleştirir; yalnızca ekranda görünen kısmı çizilir.
+    // Android'de kip: VARSAYILAN (doku tabanlı, `_hybridComposition == false`)
+    // hızlıdır ama platform görünümünü boyutu kadar bir dokuya çizdiğinden
+    // dokunun sığamayacağı kadar uzun içerikte uygulamayı çökertir (bkz. sınıf
+    // belgesi). Yalnızca `_switchToHybridComposition` bunu tespit edip
+    // Hybrid Composition'a geçtiğinde `true` olur — o kip WebView'ı gerçek bir
+    // Android görünümü olarak yerleştirir (dokuya bağlı değildir) ama daha
+    // pahalıdır.
     _webView = platform is AndroidWebViewController
         ? WebViewWidget.fromPlatformCreationParams(
             params: AndroidWebViewWidgetCreationParams(
               controller: platform,
-              displayWithHybridComposition: true,
+              displayWithHybridComposition: _hybridComposition,
               gestureRecognizers: _gestures,
             ),
           )
@@ -1298,8 +1437,48 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
       _height = null;
       _cssHeight = null;
       _cssWidth = null;
+      // Önceki ileti devasa olup Hybrid Composition'a geçirdiyse (bkz.
+      // `_switchToHybridComposition`) bu STATE (`_HtmlWebViewState`) akıcı
+      // geçiş için AYNI kalır (bkz. sınıf belgesi) — kip kendiliğinden
+      // sıfırlanmaz. Sıradaki ileti normal boyuttaysa yine de pahalı kipte
+      // kalıp gereksiz yere kaydırma FPS'inden ödün vermesin diye burada
+      // elle sıfırlanıp WebView yeniden (hızlı, doku tabanlı kipte) kurulur.
+      if (_hybridComposition) {
+        _hybridComposition = false;
+        _createWebView();
+        final tokens = _tokens;
+        if (tokens != null) {
+          unawaited(_controller.setBackgroundColor(tokens.readingBg));
+        }
+      }
       unawaited(_load());
     }
+  }
+
+  /// Doku tabanlı (varsayılan, hızlı) kipten Hybrid Composition'a (yavaş ama
+  /// her boyu kaldırabilen) geçer — yalnızca `_applyHeight`/`_measureDirectly`
+  /// içerik boyunun dokuya sığamayacağını tespit ettiğinde çağrılır (bkz.
+  /// `_hybridCompositionThresholdPx`). WebView'ın platform görünümü bileşim
+  /// kipi kurulduktan sonra değiştirilemez, bu yüzden `_controller`/`_webView`
+  /// baştan kurulup içerik yeniden yüklenir; `_load()` yeni bir `_loadToken`
+  /// aldığından eski (artık sökülen) WebView'dan geç gelebilecek bir bildirim
+  /// zaten `_onLayoutMessage`de ayıklanır.
+  void _switchToHybridComposition() {
+    if (_hybridComposition || !mounted) return;
+    _hybridComposition = true;
+    _createWebView();
+    // Yeni `_controller` için `didChangeDependencies` bir daha çalışmaz —
+    // zemin rengi burada elle uygulanmazsa yeni WebView sayfa yüklenene kadar
+    // kendi varsayılan (beyaz) zeminiyle bir kare görünür (bkz.
+    // `didChangeDependencies`deki aynı satırın belgesi).
+    final tokens = _tokens;
+    if (tokens != null) unawaited(_controller.setBackgroundColor(tokens.readingBg));
+    setState(() {
+      _height = null;
+      _cssHeight = null;
+      _cssWidth = null;
+    });
+    unawaited(_load());
   }
 
   /// İlk yükleme (büyük gövdelerde platform kanalından geçen ağır
@@ -1363,7 +1542,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
       // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
       // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
       // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
-      final noConflictingViewport = TextExtraction.stripViewportMeta(html);
+      final noConflictingViewport = TextExtraction.stripMetaRefresh(
+        TextExtraction.stripViewportMeta(html),
+      );
       return (
         TextExtraction.resolveColorSchemeQueries(
           noConflictingViewport,
@@ -1422,6 +1603,26 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
       _maxHeight,
     );
     _measureFallback?.cancel();
+    _applyMeasuredHeight(height);
+  }
+
+  /// Ölçülen boyu uygular — ama önce Android'de doku tabanlı (hızlı, varsayılan)
+  /// kipteyken bu boyun dokuya sığıp sığmayacağını denetler (bkz.
+  /// `_hybridCompositionThresholdPx`). Sığmıyorsa boy hiç uygulanmaz; bunun
+  /// yerine `_switchToHybridComposition` WebView'ı güvenli (ama daha pahalı)
+  /// kipte yeniden kurup aynı içeriği tekrar yükler — o yüklemenin sonunda bu
+  /// metot yeniden çağrıldığında `_hybridComposition == true` olacağından
+  /// aşağıdaki denetim atlanıp boy normalce uygulanır.
+  void _applyMeasuredHeight(double height) {
+    if (!_hybridComposition) {
+      final platform = _controller.platform;
+      if (platform is AndroidWebViewController &&
+          height * MediaQuery.devicePixelRatioOf(context) >
+              _hybridCompositionThresholdPx) {
+        _switchToHybridComposition();
+        return;
+      }
+    }
     if (height != _height) setState(() => _height = height);
   }
 
@@ -1463,20 +1664,72 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     final height = ratio is num && ratio > 0 && _viewWidth > 0
         ? (ratio * _viewWidth).ceilToDouble()
         : _placeholderHeight;
-    setState(() => _height = clampDouble(height, 1, _maxHeight));
+    _applyMeasuredHeight(clampDouble(height, 1, _maxHeight));
   }
 
-  /// Bağlantı tıklamaları WebView içinde takip edilmez, sistem tarayıcısında
-  /// açılır — aksi hâlde kullanıcı gönderenin sayfasına "uygulama içinde",
-  /// hiçbir sandbox olmadan gitmiş olur. İlk yüklemenin kendisi (data: URI)
-  /// bu engellemeye takılmaz; yalnızca gerçek http(s) gezinmeleri yakalanır.
+  /// Bağlantı tıklamaları WebView içinde takip edilmez — aksi hâlde kullanıcı
+  /// gönderenin sayfasına "uygulama içinde", hiçbir sandbox olmadan gitmiş olur:
+  ///
+  /// - `http(s)`: sistem tarayıcısında açılır.
+  /// - `mailto:`: uygulamanın kendi yazma ekranı ([_HtmlWebView.onMailto]).
+  /// - `tel:` / `sms:`: sistemin ilgili uygulaması.
+  /// - `about:`: belgenin kendisi (`loadHtmlString`) ve sayfa içi bağlantılar
+  ///   (`#bolum`) — WebView içinde kalır.
+  /// - Diğer her şey (`data:`, `intent:`, `file:`, `content:`, `javascript:`…)
+  ///   engellenir. Özellikle `data:` içinde kalmamalı: uygulamanın kendi
+  ///   yüklemesi `data:` kullanmaz, ama dokunulan bir `data:text/html` bağlantısı
+  ///   WebView'a tarayıcı kaynaklı bir gezinme olarak yüklenir ve gönderenin
+  ///   betiği CSP'siz çalışırdı. Eskiden bilinmeyen şemalar WebView içinde
+  ///   açılıyor, `mailto:`/`tel:` bağlantıları ileti gövdesini bir hata
+  ///   sayfasıyla değiştiriyordu.
+  ///
+  /// `<iframe>` yüklemeleri buraya hiç ulaşmaz: belgedeki CSP (`frame-src
+  /// 'none'`, bkz. `MailHtmlDocument`) onları daha önce engeller. Bu yüzden
+  /// `request.isMainFrame` süzgeci KULLANILMAZ — iOS'ta `target="_blank"`
+  /// bağlantıları hedef çerçevesiz geldiği için `false` olur ve dokunulan
+  /// bağlantı sessizce yutulurdu.
   FutureOr<NavigationDecision> _onNavigationRequest(NavigationRequest request) {
     final uri = Uri.tryParse(request.url);
-    if (uri != null && (uri.scheme == 'http' || uri.scheme == 'https')) {
-      unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
-      return NavigationDecision.prevent;
+    if (uri == null) return NavigationDecision.prevent;
+
+    switch (uri.scheme.toLowerCase()) {
+      case 'about':
+        return NavigationDecision.navigate;
+      case 'http':
+      case 'https':
+      case 'tel':
+      case 'sms':
+        unawaited(_launchExternally(uri));
+        return NavigationDecision.prevent;
+      case 'mailto':
+        final address = _mailtoRecipients(uri);
+        if (address.isNotEmpty) {
+          widget.onMailto(address);
+        } else {
+          unawaited(_launchExternally(uri));
+        }
+        return NavigationDecision.prevent;
+      default:
+        return NavigationDecision.prevent;
     }
-    return NavigationDecision.navigate;
+  }
+
+  /// `mailto:a@x.com,b@y.com?subject=…` → `a@x.com,b@y.com` (alıcı listesi).
+  static String _mailtoRecipients(Uri uri) {
+    try {
+      return Uri.decodeComponent(uri.path).trim();
+    } on Object catch (_) {
+      // Bozuk yüzde kodlaması: adres okunamadı, çağıran harici uygulamaya düşer.
+      return '';
+    }
+  }
+
+  Future<void> _launchExternally(Uri uri) async {
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } on Object catch (_) {
+      // Bu bağlantıyı açacak bir uygulama yok; sessizce yok sayılır.
+    }
   }
 
   @override
@@ -1614,22 +1867,26 @@ class _MoreMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repository = ref.read(mailRepositoryProvider);
+    final selfEmail = ref.watch(accountByIdProvider(message.accountId))?.email;
+    final showReplyAll = message.hasMultipleRecipients(selfEmail);
 
     return MenuAnchor(
       animated: true,
       menuChildren: [
-        MenuItemButton(
-          leadingIcon: const Icon(LucideIcons.replyAll, size: IconSize.sm),
-          onPressed: () => openCompose(
-            context,
-            ref,
-            replyToId: message.id,
-            mode: ComposeMode.replyAll,
-            noticeBottomInset: _ActionBar.height,
+        if (showReplyAll) ...[
+          MenuItemButton(
+            leadingIcon: const Icon(LucideIcons.replyAll, size: IconSize.sm),
+            onPressed: () => openCompose(
+              context,
+              ref,
+              replyToId: message.id,
+              mode: ComposeMode.replyAll,
+              noticeBottomInset: _ActionBar.height,
+            ),
+            child: const Text('Tümünü yanıtla'),
           ),
-          child: const Text('Tümünü yanıtla'),
-        ),
-        const Divider(height: 1),
+          const Divider(height: 1),
+        ],
         MenuItemButton(
           leadingIcon: Icon(
             message.isFlagged ? LucideIcons.pinOff : LucideIcons.pin,
@@ -1690,3 +1947,46 @@ class _MoreMenu extends ConsumerWidget {
     );
   }
 }
+
+extension MessageRowReplyX on MessageRow {
+  /// Bu iletide 1'den fazla katılan/alıcı var mı?
+  ///
+  /// Outlook tarzı: Tek kişili bir iletiyse (gönderici + tek alıcı) "Tümünü yanıtla"
+  /// seçeneği görünmez.
+  bool hasMultipleRecipients(String? selfEmail) {
+    final to = EmailAddress.decodeList(toAddrJson);
+    final cc = EmailAddress.decodeList(ccJson);
+
+    final participants = <String>{};
+    if (fromEmail.trim().isNotEmpty) {
+      participants.add(fromEmail.trim().toLowerCase());
+    }
+    for (final a in to) {
+      final e = a.email.trim().toLowerCase();
+      if (e.isNotEmpty) participants.add(e);
+    }
+    for (final a in cc) {
+      final e = a.email.trim().toLowerCase();
+      if (e.isNotEmpty) participants.add(e);
+    }
+
+    if (selfEmail != null && selfEmail.trim().isNotEmpty) {
+      participants.remove(selfEmail.trim().toLowerCase());
+    } else {
+      final toCcOnly = <String>{};
+      final fromLower = fromEmail.trim().toLowerCase();
+      for (final a in to) {
+        final e = a.email.trim().toLowerCase();
+        if (e.isNotEmpty && e != fromLower) toCcOnly.add(e);
+      }
+      for (final a in cc) {
+        final e = a.email.trim().toLowerCase();
+        if (e.isNotEmpty && e != fromLower) toCcOnly.add(e);
+      }
+      return toCcOnly.length > 1;
+    }
+
+    return participants.length > 1;
+  }
+}
+

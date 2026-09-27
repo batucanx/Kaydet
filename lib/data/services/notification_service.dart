@@ -51,6 +51,18 @@ class NotificationService {
     }
   }
 
+  // ---------------------------------------------------------- APNs token'ı
+
+  /// `AppDelegate.swift`teki `didRegisterForRemoteNotificationsWithDeviceToken`
+  /// bu kanaldan `onApnsToken` çağırır (bkz. `RemotePushController`, cihazın
+  /// hesaplarını push sunucusuyla eşler). Yalnızca iOS'ta yayın yapar.
+  static String? _latestApnsToken;
+  static String? get latestApnsToken => _latestApnsToken;
+
+  static final StreamController<String> _apnsTokenController =
+      StreamController<String>.broadcast();
+  static Stream<String> get apnsTokens => _apnsTokenController.stream;
+
   // `NotificationService()` her çağrıda yeni bir örnek döner (bkz.
   // `notificationServiceProvider` ve `main.dart`daki ayrı örnek) ama
   // altındaki `FlutterLocalNotificationsPlugin` tek bir singleton'dır.
@@ -147,7 +159,22 @@ class NotificationService {
       onDidReceiveNotificationResponse: _onForegroundResponse,
       onDidReceiveBackgroundNotificationResponse: onBackgroundResponse,
     );
+    _listenApnsToken();
     _initialised = true;
+  }
+
+  /// `AppDelegate.swift`teki `didRegisterForRemoteNotificationsWithDeviceToken`
+  /// bu kanaldan `onApnsToken` çağırır — token, sistem bildirim izninden
+  /// BAĞIMSIZ olarak uygulama açılışında gelir (bkz. o dosyadaki not).
+  static void _listenApnsToken() {
+    if (!Platform.isIOS) return;
+    _iosChannel.setMethodCallHandler((call) async {
+      if (call.method != 'onApnsToken') return;
+      final token = call.arguments as String?;
+      if (token == null || token.isEmpty) return;
+      _latestApnsToken = token;
+      _apnsTokenController.add(token);
+    });
   }
 
   /// Uygulama bir bildirime dokunularak (soğuk başlangıç) açıldıysa onu

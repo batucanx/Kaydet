@@ -120,5 +120,57 @@ void main() {
       expect(find.text(SendFeedback.sentMessage), findsNothing);
       expect(find.text(SendFeedback.failedMessage), findsNothing);
     });
+
+    testWidgets('undoDuration ve onUndo verilirse "Geri Al" butonu görünür ve basılınca onUndo çağrılır', (
+      tester,
+    ) async {
+      final overlay = await pumpHost(tester);
+      var undoCalled = false;
+
+      SendFeedback.track(
+        overlay,
+        states.stream,
+        undoDuration: const Duration(seconds: 5),
+        onUndo: () => undoCalled = true,
+      );
+      await pumpTransition(tester);
+
+      expect(find.text(SendFeedback.sendingMessage), findsOneWidget);
+      expect(find.text('Geri Al'), findsOneWidget);
+
+      await tester.tap(find.text('Geri Al'));
+      await pumpTransition(tester);
+
+      expect(undoCalled, isTrue);
+    });
+
+    testWidgets('undoDuration dolunca onUndoExpired çağrılır ve normal gönderim izlenir', (
+      tester,
+    ) async {
+      final overlay = await pumpHost(tester);
+      var expiredCalled = false;
+
+      SendFeedback.track(
+        overlay,
+        states.stream,
+        undoDuration: const Duration(seconds: 3),
+        onUndo: () {},
+        onUndoExpired: () => expiredCalled = true,
+      );
+      await pumpTransition(tester);
+
+      expect(find.text('Geri Al'), findsOneWidget);
+      expect(expiredCalled, isFalse);
+
+      await tester.pump(const Duration(seconds: 3));
+      expect(expiredCalled, isTrue);
+
+      states.add(OutboxState.sent);
+      await pumpTransition(tester);
+      expect(find.text(SendFeedback.sentMessage), findsOneWidget);
+
+      await drain(tester);
+    });
   });
 }
+

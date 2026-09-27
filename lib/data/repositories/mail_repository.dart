@@ -13,6 +13,7 @@ import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/label_keywords.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../database/app_database.dart';
+import '../services/attachment_files.dart';
 import '../services/smtp_service.dart';
 import 'mail_connection.dart';
 import 'sync_engine.dart';
@@ -97,6 +98,12 @@ class MailRepository {
   bool _processing = false;
   Future<void>? _activeRun;
 
+  /// Kuyruk turu sürerken gelen `kickQueue`/`processQueue` istekleri. Turun
+  /// başındaki `claimDueOperations` görüntüsünde o sırada eklenen işlem yoktur;
+  /// istek sessizce atılırsa işlem bir sonraki eşitlemeye (dakikalarca)
+  /// kalırdı. Tur bitince bu hesaplar yeniden işlenir.
+  final Set<int> _kickedWhileBusy = {};
+
   /// Taşıma/silme kuyruğa alınırken olan iletiler — aynı iletiye art arda
   /// gelen (hızlı çift swipe, seçim çubuğu + swipe) isteklerin ikinci kez
   /// kuyruğa girmesini engeller.
@@ -116,7 +123,10 @@ class MailRepository {
   /// cihazdan bakan kullanıcının eski durumu görmesi demektir. Ağ yoksa
   /// işlem kuyrukta kalır ve bağlantı gelince yeniden denenir.
   void kickQueue(int accountId) {
-    if (_processing) return;
+    if (_processing) {
+      _kickedWhileBusy.add(accountId);
+      return;
+    }
     unawaited(processQueue(accountId));
   }
 
@@ -395,6 +405,18 @@ class MailRepository {
   Future<void> markSpam(List<int> messageIds) =>
       moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
 
+  /// Çöp Kutusu/İstenmeyen'den Gelen Kutusu'na geri yükler — `archive()` ile
+  /// aynı geri-alınabilir mekanizmayı (bkz. [moveToMailbox]) paylaşır.
+  Future<MailActionHandle?> restoreToInbox(
+    List<int> messageIds, {
+    Duration undoWindow = Duration.zero,
+  }) => moveToMailbox(
+    messageIds: messageIds,
+    target: SpecialUse.inbox,
+    action: MailActionKind.move,
+    undoWindow: undoWindow,
+  );
+
   /// Önbelleğe alınmış ileti gövdelerini temizler (Ayarlar > Önbelleği
   /// temizle). Zarf kaydı kalır; ileti tekrar açıldığında gövde yeniden
   /// indirilir.
@@ -423,17 +445,24 @@ class MailRepository {
     if (strippable.isNotEmpty) {
       final localAttachments = await _db.attachmentsForMessages(strippable);
       final clearedIds = <int>[];
+      final downloaded = <String>[];
       for (final attachment in localAttachments) {
         final path = attachment.localPath;
         if (path == null) continue;
-        try {
-          await File(path).delete();
-        } on FileSystemException {
-          // Dosya zaten yoksa/erişilemezse DB kaydı yine de temizlenir —
-          // asıl amaç disk alanıydı, dosya zaten kaybolmuşsa iş bitmiştir.
+        if (attachment.isOutgoing) {
+          try {
+            await File(path).delete();
+          } on FileSystemException {
+            // Dosya zaten yoksa/erişilemezse DB kaydı yine de temizlenir —
+            // asıl amaç disk alanıydı, dosya zaten kaybolmuşsa iş bitmiştir.
+          }
+        } else {
+          downloaded.add(path);
         }
         clearedIds.add(attachment.id);
       }
+      // İndirilen ekler boşalan ara klasörleriyle birlikte silinir.
+      await AttachmentFiles.deleteAll(downloaded);
       await _db.clearAttachmentPaths(clearedIds);
     }
 
@@ -477,6 +506,14 @@ class MailRepository {
     // Sunucu özel anahtar kelime desteklemiyorsa etiket yalnızca yereldir.
     final shouldEnqueue = account?.supportsKeywords == true;
 
+    // Etiketin KAYITLI anahtar kelimesi (bkz. `AccountRepository.createLabel`):
+    // adlar aynı ASCII karşılığına düşebildiği için anahtar kelime addan yeniden
+    // türetilirse eşitlemenin okuduğu anahtar kelimeyle uyuşmayabilir.
+    final labelRows = await _db.labelsOf(rows.first.accountId);
+    final keyword =
+        labelRows.where((l) => l.name == labelName).firstOrNull?.imapKeyword ??
+        labelImapKeyword(labelName);
+
     await _db.transaction(() async {
       for (final row in rows) {
         final labels = _decodeLabels(row.labelsJson);
@@ -496,7 +533,7 @@ class MailRepository {
         await _enqueueByMailbox(
           rows.where((r) => r.uid != null).toList(),
           add ? PendingOpType.addKeyword : PendingOpType.removeKeyword,
-          extra: {'keyword': labelImapKeyword(labelName)},
+          extra: {'keyword': keyword},
         );
       }
     });
@@ -520,22 +557,31 @@ class MailRepository {
   Future<Result<void>> ensureBody(int messageId) async {
     final row = await _db.messageById(messageId);
     if (row == null) return const Err(UnknownFailure(detail: 'ileti yok'));
-    if (row.bodyFetchedAt != null) return okVoid;
     if (row.uid == null) return okVoid; // yerel taslak
+
+    // `bodyFetchedAt` tek başına yetmez: gövde satırı yoksa ileti "indirilmiş"
+    // görünse bile boştur (eski sürümlerde "Önbelleği temizle" gövdeleri silip
+    // bu alanı bırakıyordu; o iletiler burada kendiliğinden onarılır).
+    if (row.bodyFetchedAt != null && await _db.bodyOf(messageId) != null) {
+      return okVoid;
+    }
 
     final mailbox = await _db.mailboxById(row.mailboxId);
     if (mailbox == null) return const Err(MailboxNotFoundFailure());
 
-    final connected = await _connection.ensureConnected(row.accountId);
-    if (connected is Err<void>) return connected;
+    // SELECT ve FETCH tek işlemdir: araya başka bir klasör seçimi girip UID'yi
+    // başka bir iletinin gövdesine çeviremez.
+    final fetched = await _connection.exclusive<FetchedBody>(
+      row.accountId,
+      () async {
+        final selected = await _connection.selectVerified(mailbox);
+        if (selected is Err<MailboxState>) return Err(selected.failure);
+        return _connection.imap.fetchBody(row.uid!);
+      },
+    );
+    if (fetched is Err<FetchedBody>) return Err(fetched.failure);
 
-    final selected = await _connection.imap.selectMailbox(mailbox.path);
-    if (selected is Err<MailboxState>) return Err(selected.failure);
-
-    final body = await _connection.imap.fetchBody(row.uid!);
-    if (body is Err<FetchedBody>) return Err(body.failure);
-
-    await _sync.storeBody(row, (body as Ok<FetchedBody>).value);
+    await _sync.storeBody(row, (fetched as Ok<FetchedBody>).value);
     return okVoid;
   }
 
@@ -548,7 +594,38 @@ class MailRepository {
       return const Err(UnknownFailure(detail: 'ek bulunamadı'));
     }
     final existing = attachment.localPath;
-    if (existing != null && File(existing).existsSync()) return Ok(existing);
+    if (existing != null && File(existing).existsSync()) {
+      final file = File(existing);
+      final length = file.lengthSync();
+      final isTruncated = attachment.sizeBytes > 0 && length < (attachment.sizeBytes / 2);
+      final nameLower = attachment.fileName.toLowerCase();
+      var isCorruptOffice = false;
+      if ((nameLower.endsWith('.docx') || nameLower.endsWith('.xlsx')) && length >= 4) {
+        try {
+          final header = file.openSync(mode: FileMode.read).readSync(4);
+          if (header[0] != 0x50 || header[1] != 0x4B) {
+            isCorruptOffice = true;
+          }
+        } catch (_) {}
+      }
+
+      if (length == 0 || isTruncated || isCorruptOffice) {
+        try {
+          file.deleteSync();
+        } catch (_) {}
+      } else {
+        try {
+          final rawBytes = await file.readAsBytes();
+          final decodedBytes = AttachmentFiles.ensureBinaryDecoded(rawBytes);
+          if (decodedBytes.length != rawBytes.length) {
+            await file.writeAsBytes(decodedBytes);
+          }
+          return Ok(existing);
+        } catch (_) {
+          return Ok(existing);
+        }
+      }
+    }
 
     final row = await _db.messageById(attachment.messageId);
     if (row?.uid == null) return const Err(UnknownFailure(detail: 'ileti yok'));
@@ -556,28 +633,42 @@ class MailRepository {
     final mailbox = await _db.mailboxById(row!.mailboxId);
     if (mailbox == null) return const Err(MailboxNotFoundFailure());
 
-    final connected = await _connection.ensureConnected(row.accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
-    final selected = await _connection.imap.selectMailbox(mailbox.path);
-    if (selected is Err<MailboxState>) return Err(selected.failure);
-
-    final data = await _connection.imap.fetchAttachment(
-      row.uid!,
-      attachment.partId,
+    final fetched = await _connection.exclusive<Uint8List>(
+      row.accountId,
+      () async {
+        final selected = await _connection.selectVerified(mailbox);
+        if (selected is Err<MailboxState>) return Err(selected.failure);
+        return _connection.imap.fetchAttachment(row.uid!, attachment.partId);
+      },
     );
-    if (data is Err) return Err((data as Err).failure);
+    if (fetched is Err<Uint8List>) return Err(fetched.failure);
+    final data = (fetched as Ok<Uint8List>).value;
+    // BODYSTRUCTURE boyutu bildirmişken boş içerik gelmesi bozuk bir yanıttır;
+    // boş dosyayı "indirildi" diye önbelleğe almak, kullanıcının ekini bir daha
+    // hiç açamamasına yol açardı.
+    if (data.isEmpty && attachment.sizeBytes > 0) {
+      return const Err(ServerFailure(detail: 'ek içeriği boş geldi'));
+    }
 
     try {
       final dir = await getApplicationSupportDirectory();
-      final folder = Directory(p.join(dir.path, 'ekler', '${row.id}'));
-      if (!folder.existsSync()) folder.createSync(recursive: true);
-      final safeName = attachment.fileName.replaceAll(
-        RegExp(r'[<>:"/\\|?*\x00-\x1F]'),
-        '_',
+      // Her ek KENDİ klasöründe: aynı iletideki aynı adlı iki ek (`image.png`)
+      // birbirinin üstüne yazılmaz. Yapı `AttachmentFiles` ile paylaşılır
+      // (silme yalnızca bu dizin altındakilere uygulanır).
+      final folder = Directory(
+        p.join(
+          dir.path,
+          AttachmentFiles.directoryName,
+          '${row.id}',
+          '${attachment.id}',
+        ),
       );
-      final file = File(p.join(folder.path, safeName));
-      await file.writeAsBytes((data as Ok).value);
+      if (!folder.existsSync()) folder.createSync(recursive: true);
+      final file = File(
+        p.join(folder.path, AttachmentFiles.safeFileName(attachment.fileName)),
+      );
+      final decodedData = AttachmentFiles.ensureBinaryDecoded(data);
+      await file.writeAsBytes(decodedData);
       await _db.setAttachmentPath(attachmentId, file.path);
       return Ok(file.path);
     } on FileSystemException catch (error) {
@@ -692,7 +783,14 @@ class MailRepository {
   /// İletiyi gönderim kuyruğuna alır.
   ///
   /// Gönderim anında yapılmaz: önce yerel kayıt "Gönderiliyor" durumuna
+  /// İletiyi gönderilmek üzere yerel giden kutusuna kaydeder.
+  ///
+  /// Kullanıcıya anında dönülür; ileti önce yerelde "gönderiliyor" durumuna
   /// geçer, sonra kuyruk işlenir. Böylece ağ yokken yazılan ileti kaybolmaz.
+  ///
+  /// [undoDelay] verilirse (varsayılan 5 sn), ileti bu süre boyunca geri alma
+  /// penceresinde bekletilir; süresi dolmadan sunucuya gönderilmez.
+  /// [scheduledAt] verilirse, ileti belirtilen ileri tarihe kadar bekletilir.
   Future<int> queueSend({
     required int accountId,
     int? draftId,
@@ -708,6 +806,8 @@ class MailRepository {
     String? references,
     bool markSourceAnswered = false,
     bool markSourceForwarded = false,
+    Duration? undoDelay = const Duration(seconds: 5),
+    DateTime? scheduledAt,
   }) async {
     final id = await saveDraft(
       accountId: accountId,
@@ -724,6 +824,15 @@ class MailRepository {
       references: references,
     );
     if (id < 0) return id;
+
+    final DateTime? effectiveNextAttempt;
+    if (scheduledAt != null) {
+      effectiveNextAttempt = scheduledAt.toUtc();
+    } else if (undoDelay != null && undoDelay > Duration.zero) {
+      effectiveNextAttempt = DateTime.now().toUtc().add(undoDelay);
+    } else {
+      effectiveNextAttempt = null;
+    }
 
     // Gönderim kuyruğundaki ileti yerelde Gönderilenler'e taşınır: kullanıcı
     // "gönderdim" dedikten sonra iletisini Taslaklar'da değil, beklediği
@@ -750,7 +859,14 @@ class MailRepository {
         PendingOperationsCompanion.insert(
           accountId: accountId,
           type: PendingOpType.send,
-          payloadJson: Value(jsonEncode({'messageId': id})),
+          payloadJson: Value(
+            jsonEncode({
+              'messageId': id,
+              if (scheduledAt != null)
+                'scheduledAt': scheduledAt.toUtc().toIso8601String(),
+            }),
+          ),
+          nextAttemptAt: Value(effectiveNextAttempt),
         ),
       );
 
@@ -774,7 +890,54 @@ class MailRepository {
       // yukarı taşınıp kullanıcıya "gönderilemedi" gösterilmemeli (yeniden
       // gönderim ileti çiftlenmesine yol açardı).
     }
+
+    if (scheduledAt == null) {
+      if (undoDelay != null && undoDelay > Duration.zero) {
+        _scheduleKick(accountId, undoDelay);
+      } else {
+        kickQueue(accountId);
+      }
+    }
+
     return id;
+  }
+
+  /// Kuyruktaki henüz gönderilmemiş (veya zamanlanmış) bir iletinin gönderimini
+  /// iptal eder; iletiyi yeniden Taslaklar klasörüne çeker.
+  ///
+  /// Kullanıcı "Gönder" dedikten sonraki geri alma (Undo Send) süresinde
+  /// veya ileri tarihli zamanlanmış iletisini iptal etmek istediğinde çağrılır.
+  /// İleti zaten gönderilmişse veya sunucuya aktarılmaya başlanmışsa `false` döner.
+  Future<bool> cancelQueuedSend(int messageId) async {
+    final row = await _db.messageById(messageId);
+    if (row == null) return false;
+    if (row.outboxState == OutboxState.sent ||
+        row.outboxState == OutboxState.sending) {
+      return false;
+    }
+
+    final pending = await _db.pendingSendOperationsFor(messageId);
+    if (pending.isNotEmpty) {
+      final cancelled = await _db.cancelPendingOperations(
+        pending.map((p) => p.id).toList(),
+      );
+      if (cancelled == 0) return false;
+    }
+
+    final draftsBox =
+        await _db.mailboxBySpecialUse(row.accountId, SpecialUse.drafts);
+
+    await _db.updateMessage(
+      messageId,
+      MessagesCompanion(
+        outboxState: const Value(OutboxState.none),
+        isDraft: const Value(true),
+        outboxError: const Value(null),
+        mailboxId: draftsBox == null ? const Value.absent() : Value(draftsBox.id),
+      ),
+    );
+
+    return true;
   }
 
   /// Bir iletinin gönderim durumunu izler; ileti silinirse `null` yayınlar.
@@ -868,42 +1031,59 @@ class MailRepository {
   /// atomik `pending → running` geçişidir; bu, isolate/süreç sınırlarını
   /// aşan tek güvenilir kilit noktasıdır (bkz. `app_database.dart`).
   Future<void> processQueue(int accountId) async {
-    if (_processing) return;
+    if (_processing) {
+      _kickedWhileBusy.add(accountId);
+      return;
+    }
     _processing = true;
     final finished = Completer<void>();
     _activeRun = finished.future;
     try {
-      final operations = await _db.claimDueOperations(accountId);
-      if (operations.isEmpty) return;
-
-      final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) {
-        // Hiçbir işlem gerçekten denenmedi — sahiplenmeyi hemen bırak, aksi
-        // hâlde ağ geri geldiğinde kira süresi dolana kadar gereksiz gecikir.
-        await _db.releaseOperations(operations.map((op) => op.id).toList());
-        return;
-      }
-
-      for (final op in operations) {
-        // Bu işlemi yürütmeye başlamadan hemen önce kirasını tazele: parti
-        // içindeki önceki işlemler zaman aldıysa (ör. yavaş bir gönderim),
-        // bu işlem kalan değil TAZE bir kira süresiyle başlar.
-        await _db.renewLease(op.id);
-        // `op.status`, `claimDueOperations`'ın DÖNDÜĞÜ (sahiplenmeden ÖNCEKİ)
-        // anlık görüntüdür: `running` ise bu, süresi dolmuş bir kiradan
-        // yeniden sahiplenildiği (önceki işlemcinin muhtemelen çöktüğü)
-        // anlamına gelir — bkz. `_sendQueued`'daki `claimOutboxSend` çağrısı.
-        final wasReclaimed = op.status == PendingOpStatus.running;
-        final result = await _execute(accountId, op, wasReclaimed);
-        await result.fold(
-          (_) => _db.completeOperation(op.id),
-          (failure) => _handleFailure(op, failure),
-        );
+      final pending = <int>[accountId];
+      while (pending.isNotEmpty) {
+        await _processAccountQueue(pending.removeAt(0));
+        // Tur sürerken istenen hesaplar (bkz. `_kickedWhileBusy`) aynı turda,
+        // arada `_activeRun`'ı boş bırakmadan işlenir: `waitForQueue` hepsini
+        // bekler.
+        for (final id in _kickedWhileBusy) {
+          if (!pending.contains(id)) pending.add(id);
+        }
+        _kickedWhileBusy.clear();
       }
     } finally {
       _processing = false;
       _activeRun = null;
       finished.complete();
+    }
+  }
+
+  Future<void> _processAccountQueue(int accountId) async {
+    final operations = await _db.claimDueOperations(accountId);
+    if (operations.isEmpty) return;
+
+    final connected = await _connection.ensureConnected(accountId);
+    if (connected is Err<void>) {
+      // Hiçbir işlem gerçekten denenmedi — sahiplenmeyi hemen bırak, aksi
+      // hâlde ağ geri geldiğinde kira süresi dolana kadar gereksiz gecikir.
+      await _db.releaseOperations(operations.map((op) => op.id).toList());
+      return;
+    }
+
+    for (final op in operations) {
+      // Bu işlemi yürütmeye başlamadan hemen önce kirasını tazele: parti
+      // içindeki önceki işlemler zaman aldıysa (ör. yavaş bir gönderim),
+      // bu işlem kalan değil TAZE bir kira süresiyle başlar.
+      await _db.renewLease(op.id);
+      // `op.status`, `claimDueOperations`'ın DÖNDÜĞÜ (sahiplenmeden ÖNCEKİ)
+      // anlık görüntüdür: `running` ise bu, süresi dolmuş bir kiradan
+      // yeniden sahiplenildiği (önceki işlemcinin muhtemelen çöktüğü)
+      // anlamına gelir — bkz. `_sendQueued`'daki `claimOutboxSend` çağrısı.
+      final wasReclaimed = op.status == PendingOpStatus.running;
+      final result = await _execute(accountId, op, wasReclaimed);
+      await result.fold(
+        (_) => _db.completeOperation(op.id),
+        (failure) => _handleFailure(op, failure),
+      );
     }
   }
 
@@ -913,11 +1093,14 @@ class MailRepository {
   /// kuyruğa alındıktan hemen sonra veritabanını ve bağlantıyı kapatır;
   /// bekletilmeyen bir tur yarıda kesilir ve işlem bir sonraki eşitlemeye
   /// kalır. `_processing` bayrağı olduğu için ikinci bir `processQueue`
-  /// çağrısı çalışan turu beklemez, hemen döner — bu yüzden ayrı bir bekleme
-  /// noktası gerekir.
+  /// çağrısı çalışan turu beklemez (yalnızca turun sonunda yeniden işlenmek
+  /// üzere kaydedilir) — bu yüzden ayrı bir bekleme noktası gerekir.
   Future<void> waitForQueue() async {
-    final run = _activeRun;
-    if (run != null) await run;
+    while (true) {
+      final run = _activeRun;
+      if (run == null) return;
+      await run;
+    }
   }
 
   Future<void> _handleFailure(
@@ -928,6 +1111,9 @@ class MailRepository {
     var permanent =
         (failure is ServerFailure && failure.isPermanent) ||
         failure is RecipientRejectedFailure ||
+        // Ek dosyası cihazda yok: tekrar denemek dosyayı geri getirmez;
+        // kullanıcı hemen bilgilendirilmeli (bkz. `AttachmentMissingFailure`).
+        failure is AttachmentMissingFailure ||
         // Hedef klasör çözülemedi/oluşturulamadı: tekrar denemek sonucu
         // değiştirmez, kullanıcı hemen bilgilendirilmeli.
         (op.type == PendingOpType.move && failure is MailboxNotFoundFailure) ||
@@ -1033,17 +1219,71 @@ class MailRepository {
     bool wasReclaimed,
   ) async {
     final payload = _payloadOf(op);
+
+    switch (op.type) {
+      case PendingOpType.appendDraft:
+        return _appendLocalMessage(accountId, payload);
+
+      case PendingOpType.send:
+        return _sendQueued(accountId, payload, wasReclaimed: wasReclaimed);
+
+      case PendingOpType.markSeen:
+      case PendingOpType.markUnseen:
+      case PendingOpType.flag:
+      case PendingOpType.unflag:
+      case PendingOpType.addKeyword:
+      case PendingOpType.removeKeyword:
+      case PendingOpType.move:
+      case PendingOpType.deletePermanently:
+      case PendingOpType.deleteDraft:
+        // Klasör seçimi + komut TEK mantıksal işlemdir: araya başka bir klasör
+        // ya da hesap seçimi girerse UID'ler yanlış iletilere uygulanır
+        // (`deletePermanently` için bu, başka iletilerin sunucudan kalıcı
+        // silinmesi demektir). Bkz. `MailConnection`.
+        return _connection.exclusive<void>(
+          accountId,
+          () => _executeMailboxOperation(accountId, op, payload),
+        );
+    }
+  }
+
+  /// Bir klasördeki iletilere uygulanan işlemler; [MailConnection.exclusive]
+  /// içinde çağrılır.
+  Future<Result<void>> _executeMailboxOperation(
+    int accountId,
+    PendingOperationRow op,
+    Map<String, dynamic> payload,
+  ) async {
     final uids = (payload['uids'] as List?)?.whereType<int>().toList() ?? [];
-    final mailboxPath = payload['mailboxPath'] as String?;
+
+    // Klasörün ŞİMDİKİ yolu: klasör bu arada yeniden adlandırıldıysa payload'daki
+    // yol artık yok olurdu.
+    var mailboxPath = payload['mailboxPath'] as String?;
+    final mailboxId = payload['mailboxId'];
+    if (mailboxId is int) {
+      final current = await _db.mailboxById(mailboxId);
+      if (current != null) mailboxPath = current.path;
+    }
+    final sourcePath = mailboxPath;
 
     Future<Result<void>> withMailbox(
       Future<Result<void>> Function() action,
     ) async {
-      if (mailboxPath == null) {
+      if (sourcePath == null) {
         return const Err(MailboxNotFoundFailure());
       }
-      final selected = await _connection.imap.selectMailbox(mailboxPath);
+      final selected = await _connection.imap.selectMailbox(sourcePath);
       if (selected is Err<MailboxState>) return Err(selected.failure);
+
+      // İşlem kuyruğa alındığındaki UIDVALIDITY ile şimdiki farklıysa UID'ler
+      // artık başka iletileri gösterir: uygulamak YANLIŞ iletiyi değiştirir ya
+      // da kalıcı siler. İşlem düşürülür; klasör bir sonraki eşitlemede
+      // (UIDVALIDITY farkı yüzünden) baştan indirilir ve gerçek sunucu durumu
+      // görünür.
+      final expected = payload['uidValidity'];
+      final actual = (selected as Ok<MailboxState>).value.uidValidity;
+      if (expected is int && actual != 0 && expected != actual) return okVoid;
+
       return action();
     }
 
@@ -1103,21 +1343,18 @@ class MailRepository {
           return _connection.imap.moveMessages(
             uids: uids,
             targetPath: targetPath,
-            sourcePath: mailboxPath,
+            sourcePath: sourcePath,
           );
         });
 
       case PendingOpType.deletePermanently:
-        return withMailbox(() => _connection.imap.deletePermanently(uids));
-
-      case PendingOpType.appendDraft:
-        return _appendLocalMessage(accountId, payload);
-
       case PendingOpType.deleteDraft:
         return withMailbox(() => _connection.imap.deletePermanently(uids));
 
+      case PendingOpType.appendDraft:
       case PendingOpType.send:
-        return _sendQueued(accountId, payload, wasReclaimed: wasReclaimed);
+        // `_execute` bunları buraya göndermez.
+        return okVoid;
     }
   }
 
@@ -1185,13 +1422,26 @@ class MailRepository {
     final outgoing = await _buildOutgoing(row, isDraft: !isSentCopy);
     if (outgoing is Err<OutgoingMessage>) return Err(outgoing.failure);
 
-    final built = MimeBuilder.build((outgoing as Ok<OutgoingMessage>).value);
-    if (built is Err<BuiltMessage>) return Err(built.failure);
+    // Yedek kopya (taslak / Gönderilenler): cihazda artık olmayan bir ek
+    // yüzünden kopyanın HİÇ yazılmaması, eksik ekli bir kopyadan daha kötüdür.
+    // Kendi kopyamızda Bcc alıcıları görünür (varsayılan `includeBcc`). Dosya
+    // okuma ve base64 ayrı bir isolate'te yapılır: büyük ek ekranı dondurmaz.
+    final built = await MimeBuilder.buildSourceInIsolate(
+      (outgoing as Ok<OutgoingMessage>).value,
+      skipMissingAttachments: true,
+    );
+    if (built is Err<WireMessage>) return Err(built.failure);
 
-    final appended = await _connection.imap.appendMessage(
-      mimeSource: (built as Ok<BuiltMessage>).value.source,
-      targetPath: targetPath,
-      flags: isSentCopy ? [r'\Seen'] : [r'\Draft', r'\Seen'],
+    // Yalnızca sunucuya yazma kilit altındadır; MIME oluşturma diğer IMAP
+    // işlemlerini bekletmemek için dışarıda kalır.
+    final source = (built as Ok<WireMessage>).value.source;
+    final appended = await _connection.exclusive<int?>(
+      accountId,
+      () => _connection.imap.appendMessage(
+        mimeSource: source,
+        targetPath: targetPath,
+        flags: isSentCopy ? [r'\Seen'] : [r'\Draft', r'\Seen'],
+      ),
     );
     if (appended is Err<int?>) return Err(appended.failure);
 
@@ -1327,10 +1577,13 @@ class MailRepository {
     final sentBox = await _db.mailboxBySpecialUse(accountId, SpecialUse.sent);
     if (sentBox == null) return;
 
-    final appended = await _connection.imap.appendMessage(
-      mimeSource: mimeSource,
-      targetPath: sentBox.path,
-      flags: [r'\Seen'],
+    final appended = await _connection.exclusive<int?>(
+      accountId,
+      () => _connection.imap.appendMessage(
+        mimeSource: mimeSource,
+        targetPath: sentBox.path,
+        flags: [r'\Seen'],
+      ),
     );
 
     if (appended is Err<int?>) {
@@ -1434,6 +1687,11 @@ class MailRepository {
             jsonEncode({
               'mailboxId': entry.key,
               'mailboxPath': mailbox.path,
+              // İşlem çalıştırılırken sunucunun UIDVALIDITY'siyle karşılaştırılır
+              // (bkz. `_executeMailboxOperation`): UID'ler yalnızca bu değer
+              // değişmedikçe aynı iletileri gösterir.
+              if (mailbox.uidValidity != null)
+                'uidValidity': mailbox.uidValidity,
               'uids': entry.value.map((r) => r.uid!).toList(),
               'messageIds': entry.value.map((r) => r.id).toList(),
               ...extra,

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'attachment_files.dart';
 import 'package:enough_mail/enough_mail.dart' as em;
 import 'package:synchronized/synchronized.dart';
 
@@ -17,6 +18,14 @@ abstract class ImapService {
   Future<Result<ServerCapabilities>> connect(MailServerConfig config);
 
   Future<void> disconnect();
+
+  /// Kimlik bilgisini ve sunucu ayarını, uygulamanın canlı oturumuna
+  /// DOKUNMADAN sınar: ayrı, geçici bir bağlantı açıp oturum açar ve kapatır.
+  ///
+  /// [connect] kullanılamaz: o, ortak oturumu kapatıp yerine geçer; giriş
+  /// ekranından yeni bir hesap denenirken etkin hesabın bağlantısı kopar ve
+  /// süren işlemleri başka bir sunucuya karışır.
+  Future<Result<void>> verify(MailServerConfig config);
 
   bool get isConnected;
 
@@ -47,7 +56,9 @@ abstract class ImapService {
     int? changedSinceModSeq,
   });
 
-  /// İletinin tam gövdesini çeker.
+  /// İletinin tam gövdesini çeker. İleti seçili klasörde yoksa (silinmiş ya da
+  /// UID başka klasöre ait) [MessageNotFoundFailure] döner — boş gövde
+  /// "başarı" sayılıp önbelleğe yazılmaz.
   Future<Result<FetchedBody>> fetchBody(int uid);
 
   /// Ek dosyanın ikili içeriğini çeker.
@@ -128,6 +139,14 @@ class ImapServiceException implements Exception {
   String toString() => 'ImapServiceException: $message';
 }
 
+/// İstenen UID seçili klasörde bulunamadı.
+class MessageNotFoundException implements Exception {
+  const MessageNotFoundException();
+
+  @override
+  String toString() => 'MessageNotFoundException';
+}
+
 /// `enough_mail` tabanlı uygulama.
 class EnoughMailImapService implements ImapService {
   EnoughMailImapService();
@@ -145,13 +164,24 @@ class EnoughMailImapService implements ImapService {
   /// Oturum açma (LOGIN/AUTH) için beklenen en uzun süre.
   static const Duration _loginTimeout = Duration(seconds: 20);
 
-  /// Tek bir IMAP komutu (LIST/SELECT/FETCH/…) için beklenen en uzun süre.
+  /// Tek bir IMAP komutu (LIST/SELECT/STORE/…) için varsayılan en uzun süre.
   ///
   /// Soket açık kalıp sunucu yanıt vermeyi bırakırsa (yük, ağ sorunu) bu
   /// olmadan `await` sonsuza kadar asılı kalır — ekranda "yükleniyor"
-  /// göstergesi hiç kapanmaz. `_mapError` zaten `TimeoutException`'ı
-  /// tanıyordu; eksik olan bu sınırın konmasıydı.
+  /// göstergesi hiç kapanmaz.
   static const Duration _commandTimeout = Duration(seconds: 30);
+
+  /// Uzun süren komutların (zarf/bayrak/gövde/ek çekme, APPEND) `enough_mail`
+  /// düzeyindeki yanıt zaman aşımları. `_guard`'ın dış sınırı bunlardan
+  /// [_outerSlack] kadar UZUN olmak zorundadır: kısa olursa (eskiden herkese
+  /// 30 sn uygulanıyordu) büyük ek indirmeleri ve APPEND'ler yanıt gelmeden
+  /// kesilirdi.
+  static const Duration _envelopeResponseTimeout = Duration(seconds: 60);
+  static const Duration _flagsResponseTimeout = Duration(seconds: 45);
+  static const Duration _bodyResponseTimeout = Duration(seconds: 90);
+  static const Duration _attachmentResponseTimeout = Duration(minutes: 3);
+  static const Duration _appendResponseTimeout = Duration(minutes: 2);
+  static const Duration _outerSlack = Duration(seconds: 15);
 
   @override
   Stream<void> get serverChanges => _changes.stream;
@@ -232,12 +262,55 @@ class EnoughMailImapService implements ImapService {
   @override
   Future<void> disconnect() => _lock.synchronized(_teardown);
 
+  @override
+  Future<Result<void>> verify(MailServerConfig config) async {
+    // Ortak oturuma (`_client`, `_lock`, `_selectedPath`) HİÇ dokunulmaz.
+    em.ImapClient? client;
+    try {
+      final probe = client = em.ImapClient(isLogEnabled: false);
+      await probe.connectToServer(
+        config.host,
+        config.port,
+        isSecure: config.isImplicitTls,
+        timeout: const Duration(seconds: 25),
+      );
+      if (config.security == SocketSecurity.startTls) {
+        await probe.startTls();
+      }
+      await (switch (config.credential) {
+        PasswordCredential(:final password) => probe.login(
+          config.username,
+          password,
+        ),
+      }).timeout(_loginTimeout);
+      return okVoid;
+    } catch (error, stack) {
+      return Err(_mapError(error, stack));
+    } finally {
+      if (client != null) await _closeProbe(client);
+    }
+  }
+
+  /// [verify]'ın geçici bağlantısını kapatır; her adım süre sınırlıdır.
+  Future<void> _closeProbe(em.ImapClient client) async {
+    try {
+      if (client.isLoggedIn) await client.logout().timeout(_shutdownStep);
+    } catch (_) {}
+    try {
+      await client.disconnect().timeout(_shutdownStep);
+    } catch (_) {}
+  }
+
   /// Oturumu kapatır.
   ///
   /// Her adım süre sınırlıdır: sunucu yanıt vermezse (ağ koptu, IDLE'da
   /// takıldı) `logout` sonsuza kadar bekler ve kapatmayı bekleyen çıkış
   /// akışı da onunla birlikte kilitlenir.
-  Future<void> _teardown() async {
+  ///
+  /// [graceful] `false` ise (yanıtsız kalmış bir komut yüzünden bağlantı
+  /// güvenilmez) IDLE/LOGOUT nezaketi atlanır: sunucu zaten yanıt vermiyor,
+  /// bunları beklemek yalnızca gecikme katardı — soket doğrudan kapatılır.
+  Future<void> _teardown({bool graceful = true}) async {
     final wasIdling = _idling;
     _idling = false;
     _selectedPath = null;
@@ -246,15 +319,17 @@ class EnoughMailImapService implements ImapService {
     final client = _client;
     _client = null;
     if (client == null) return;
-    try {
-      // IDLE sürerken sunucu yalnızca "DONE" bekler, LOGOUT'a yanıt
-      // vermez; önce IDLE bitirilir.
-      if (wasIdling) await client.idleDone().timeout(_shutdownStep);
-    } catch (_) {}
-    try {
-      if (client.isLoggedIn) await client.logout().timeout(_shutdownStep);
-    } catch (_) {
-      // Oturum kapatma başarısız olsa da soketi kapat.
+    if (graceful) {
+      try {
+        // IDLE sürerken sunucu yalnızca "DONE" bekler, LOGOUT'a yanıt
+        // vermez; önce IDLE bitirilir.
+        if (wasIdling) await client.idleDone().timeout(_shutdownStep);
+      } catch (_) {}
+      try {
+        if (client.isLoggedIn) await client.logout().timeout(_shutdownStep);
+      } catch (_) {
+        // Oturum kapatma başarısız olsa da soketi kapat.
+      }
     }
     try {
       await client.disconnect().timeout(_shutdownStep);
@@ -341,10 +416,10 @@ class EnoughMailImapService implements ImapService {
         final result = await _requireClient.uidFetchMessages(
           sequence,
           _envelopeCriteria,
-          responseTimeout: const Duration(seconds: 60),
+          responseTimeout: _envelopeResponseTimeout,
         );
         return result.messages.map(_toEnvelope).toList();
-      });
+      }, timeout: _envelopeResponseTimeout + _outerSlack);
 
   @override
   Future<Result<List<FetchedEnvelope>>> fetchEnvelopeRange({
@@ -360,10 +435,10 @@ class EnoughMailImapService implements ImapService {
     final result = await _requireClient.uidFetchMessages(
       sequence,
       _envelopeCriteria,
-      responseTimeout: const Duration(seconds: 60),
+      responseTimeout: _envelopeResponseTimeout,
     );
     return result.messages.map(_toEnvelope).toList();
-  });
+  }, timeout: _envelopeResponseTimeout + _outerSlack);
 
   FetchedEnvelope _toEnvelope(em.MimeMessage message) {
     EmailAddress? toAddress(em.MailAddress? address) => address == null
@@ -435,7 +510,7 @@ class EnoughMailImapService implements ImapService {
       sequence,
       '(UID FLAGS)',
       changedSinceModSequence: changedSinceModSeq,
-      responseTimeout: const Duration(seconds: 45),
+      responseTimeout: _flagsResponseTimeout,
     );
     return result.messages
         .where((m) => m.uid != null)
@@ -444,7 +519,7 @@ class EnoughMailImapService implements ImapService {
               RemoteFlagState(uid: m.uid!, flags: m.flags ?? const <String>[]),
         )
         .toList();
-  });
+  }, timeout: _flagsResponseTimeout + _outerSlack);
 
   @override
   Future<Result<FetchedBody>> fetchBody(int uid) => _guard(() async {
@@ -452,11 +527,13 @@ class EnoughMailImapService implements ImapService {
     final result = await _requireClient.uidFetchMessages(
       sequence,
       '(UID FLAGS BODY.PEEK[])',
-      responseTimeout: const Duration(seconds: 90),
+      responseTimeout: _bodyResponseTimeout,
     );
     final message = result.messages.firstOrNull;
     if (message == null) {
-      return const FetchedBody();
+      // Boş bir gövdeyi "başarı" diye döndürmek, çağıranın onu önbelleğe
+      // yazıp iletiyi kalıcı olarak boş göstermesine yol açardı.
+      throw const MessageNotFoundException();
     }
 
     String? plain;
@@ -473,15 +550,37 @@ class EnoughMailImapService implements ImapService {
       } catch (_) {}
     }
 
+    String resolveAttachmentName(String? name, String? mime, {required String fallback}) {
+      final base = (name != null && name.trim().isNotEmpty) ? name.trim() : fallback;
+      if (base.contains('.')) return base;
+      final m = (mime ?? '').toLowerCase();
+      final ext = switch (m) {
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '.docx',
+        'application/msword' => '.doc',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => '.xlsx',
+        'application/vnd.ms-excel' => '.xls',
+        'application/pdf' => '.pdf',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' => '.pptx',
+        'application/vnd.ms-powerpoint' => '.ppt',
+        'text/plain' => '.txt',
+        'text/csv' => '.csv',
+        'image/png' => '.png',
+        'image/jpeg' => '.jpg',
+        'application/zip' => '.zip',
+        _ => '',
+      };
+      return '$base$ext';
+    }
+
     final attachments = <FetchedAttachment>[];
     try {
       for (final info in message.findContentInfo()) {
+        final mime = info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(
           FetchedAttachment(
             partId: info.fetchId,
-            fileName: info.fileName ?? 'dosya',
-            mimeType:
-                info.contentType?.mediaType.text ?? 'application/octet-stream',
+            fileName: resolveAttachmentName(info.fileName, mime, fallback: 'dosya'),
+            mimeType: mime,
             sizeBytes: info.size ?? 0,
             contentId: info.cid,
           ),
@@ -491,12 +590,12 @@ class EnoughMailImapService implements ImapService {
         disposition: em.ContentDisposition.inline,
       )) {
         if (info.isText) continue;
+        final mime = info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(
           FetchedAttachment(
             partId: info.fetchId,
-            fileName: info.fileName ?? 'gomulu',
-            mimeType:
-                info.contentType?.mediaType.text ?? 'application/octet-stream',
+            fileName: resolveAttachmentName(info.fileName, mime, fallback: 'gomulu'),
+            mimeType: mime,
             sizeBytes: info.size ?? 0,
             contentId: info.cid,
             isInline: true,
@@ -508,28 +607,39 @@ class EnoughMailImapService implements ImapService {
     }
 
     return FetchedBody(plainText: plain, html: html, attachments: attachments);
-  });
+  }, timeout: _bodyResponseTimeout + _outerSlack);
 
   @override
   Future<Result<Uint8List>> fetchAttachment(int uid, String partId) =>
       _guard(() async {
         final sequence = em.MessageSequence.fromId(uid, isUid: true);
+        final fetchQuery = partId.isNotEmpty
+            ? '(BODY.PEEK[$partId.MIME] BODY.PEEK[$partId])'
+            : '(BODY.PEEK[])';
         final result = await _requireClient.uidFetchMessages(
           sequence,
-          '(BODY.PEEK[$partId])',
-          responseTimeout: const Duration(minutes: 3),
+          fetchQuery,
+          responseTimeout: _attachmentResponseTimeout,
         );
         final message = result.messages.firstOrNull;
         if (message == null) {
-          throw const ImapServiceException('Ek bulunamadı');
+          throw const MessageNotFoundException();
         }
         final part = message.getPart(partId);
-        final data =
-            part?.decodeContentBinary() ??
-            message.decodeContentBinary() ??
-            Uint8List(0);
-        return data;
-      });
+        Uint8List? data;
+        if (part != null) {
+          data = part.decodeContentBinary();
+        } else if (message.parts == null || message.parts!.isEmpty) {
+          // Çok parçalı olmayan ileti: ek, iletinin kendisidir.
+          data = message.decodeContentBinary();
+        } else {
+          data = message.decodeContentBinary();
+        }
+        if (data == null) {
+          throw const ImapServiceException('Ek içeriği çözülemedi');
+        }
+        return AttachmentFiles.ensureBinaryDecoded(data);
+      }, timeout: _attachmentResponseTimeout + _outerSlack);
 
   @override
   Future<Result<void>> storeFlags({
@@ -611,10 +721,10 @@ class EnoughMailImapService implements ImapService {
       mimeSource,
       targetMailboxPath: targetPath,
       flags: flags.isEmpty ? null : flags,
-      responseTimeout: const Duration(minutes: 2),
+      responseTimeout: _appendResponseTimeout,
     );
     return result.responseCodeAppendUid?.targetSequence.toList().firstOrNull;
-  });
+  }, timeout: _appendResponseTimeout + _outerSlack);
 
   @override
   Future<Result<void>> createMailbox(String path) => _guard(() async {
@@ -701,24 +811,34 @@ class EnoughMailImapService implements ImapService {
   });
 
   /// Tüm komutları tek kuyruktan geçirir ve hataları [AppFailure]'a çevirir.
-  Future<Result<T>> _guard<T>(Future<T> Function() action) =>
-      _lock.synchronized(() async {
+  ///
+  /// [timeout], komutun toplam süresini sınırlar. Süre dolarsa bağlantı
+  /// KAPATILIR: yanıt sonradan gelirse bir sonraki komutun yanıtıyla karışır
+  /// ve protokol durumu bozulurdu. Kapalı bağlantı bir sonraki işlemde
+  /// (bkz. `MailConnection.ensureConnected`) temiz biçimde yeniden kurulur.
+  Future<Result<T>> _guard<T>(
+    Future<T> Function() action, {
+    Duration timeout = _commandTimeout,
+  }) => _lock.synchronized(() async {
+    try {
+      if (!isConnected) {
+        return const Err(ConnectionFailure(detail: 'oturum açık değil'));
+      }
+      // IDLE sırasında başka komut gönderilemez.
+      if (_idling) {
+        _idling = false;
         try {
-          if (!isConnected) {
-            return const Err(ConnectionFailure(detail: 'oturum açık değil'));
-          }
-          // IDLE sırasında başka komut gönderilemez.
-          if (_idling) {
-            _idling = false;
-            try {
-              await _requireClient.idleDone();
-            } catch (_) {}
-          }
-          return Ok(await action().timeout(_commandTimeout));
-        } catch (error, stack) {
-          return Err(_mapError(error, stack));
-        }
-      });
+          await _requireClient.idleDone();
+        } catch (_) {}
+      }
+      return Ok(await action().timeout(timeout));
+    } on TimeoutException catch (error, stack) {
+      await _teardown(graceful: false);
+      return Err(_mapError(error, stack));
+    } catch (error, stack) {
+      return Err(_mapError(error, stack));
+    }
+  });
 
   AppFailure _mapError(Object error, StackTrace stack) {
     if (error is SocketException) {
@@ -738,6 +858,9 @@ class EnoughMailImapService implements ImapService {
     }
     if (error is em.MailException) {
       return _mapImapMessage(error.message ?? error.toString());
+    }
+    if (error is MessageNotFoundException) {
+      return const MessageNotFoundFailure();
     }
     if (error is ImapServiceException) {
       return ServerFailure(detail: error.message);

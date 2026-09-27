@@ -78,6 +78,7 @@ void main() {
       ProviderScope(
         overrides: [
           mailUndoWindowProvider.overrideWithValue(undoWindow),
+          sendUndoWindowProvider.overrideWithValue(undoWindow),
           databaseProvider.overrideWithValue(db),
           secureStoreProvider.overrideWithValue(secureStore),
           imapServiceProvider.overrideWithValue(imap),
@@ -843,7 +844,7 @@ void main() {
       await tester.enterText(find.byType(TextField).at(0), 'ikinci@ornek.com,');
       await tester.enterText(find.byType(TextField).at(1), 'Çipler');
       await tester.pump();
-      expect(find.text('Ikinci'), findsOneWidget);
+      expect(find.text('İkinci'), findsOneWidget);
 
       await tester.tap(find.byTooltip('Gönder'));
       await settle(tester);
@@ -866,8 +867,8 @@ void main() {
 
       await tester.enterText(find.byType(TextField).at(0), 'a@b.com, c@d.com,');
       await tester.pump();
-      expect(find.text('A'), findsOneWidget);
-      expect(find.text('C'), findsOneWidget);
+      expect(find.text('A'), findsWidgets);
+      expect(find.text('C'), findsWidgets);
 
       await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
       await tester.pump();

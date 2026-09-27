@@ -1,7 +1,10 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../app/providers.dart'
+    show ownEmailDomainsProvider, settingsProvider;
 import '../../../core/avatar.dart';
 import '../../../core/turkish.dart';
 import '../theme/app_theme.dart';
@@ -84,7 +87,12 @@ class KaydetAvatar extends StatelessWidget {
 /// sağlayıcı logosunu alır ya da seçim ikonu logonun altında kalır. Logo
 /// yüklenemezse (ağ yok, alan adının favicon'u yok) de sessizce aynı
 /// düz renkli baş harfe döner — hiçbir durumda boş/bozuk görsel kalmaz.
-class BrandAvatar extends StatelessWidget {
+///
+/// **Gizlilik:** logo için gönderenin ALAN ADI Google'ın favicon servisine
+/// iletilir (kimin kime yazdığının üst verisi). Bu yüzden Ayarlar > Gizlilik'te
+/// kapatılabilir ve kullanıcının kendi hesaplarının alan adları (kurum içi
+/// adresler) hiçbir zaman sorgulanmaz.
+class BrandAvatar extends ConsumerWidget {
   const BrandAvatar({
     super.key,
     required this.name,
@@ -100,12 +108,25 @@ class BrandAvatar extends StatelessWidget {
   final double size;
   final VoidCallback? onTap;
 
+  /// Yalnızca sıradan bir ana bilgisayar adı (`sirket.com`, `mail.sirket.com.tr`)
+  /// sorgulanır: adres alanına yazılmış rastgele metin sorgu dizesine karışmaz.
+  static final RegExp _hostName = RegExp(
+    r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$',
+  );
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final domain = domainOf(email);
+    final showLogos = ref.watch(
+      settingsProvider.select((settings) => settings.showBrandLogos),
+    );
+    final ownDomains = ref.watch(ownEmailDomainsProvider);
     if (isSelected ||
         domain == null ||
-        PersonalEmailDomains.isPersonal(domain)) {
+        !showLogos ||
+        !_hostName.hasMatch(domain) ||
+        PersonalEmailDomains.isPersonal(domain) ||
+        ownDomains.contains(domain)) {
       return KaydetAvatar(
         name: name,
         email: email,
@@ -122,7 +143,10 @@ class BrandAvatar extends StatelessWidget {
         color: Colors.white,
         padding: EdgeInsets.all(size * 0.16),
         child: CachedNetworkImage(
-          imageUrl: 'https://www.google.com/s2/favicons?domain=$domain&sz=128',
+          imageUrl: Uri.https('www.google.com', '/s2/favicons', {
+            'domain': domain,
+            'sz': '128',
+          }).toString(),
           fit: BoxFit.contain,
           fadeInDuration: Duration.zero,
           memCacheWidth: (size * 2).round(),
@@ -557,15 +581,16 @@ class DialogActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     const minSize = Size(0, Dimens.controlHeight);
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: Space.sm,
+      runSpacing: Space.xs,
       children: [
         OutlinedButton(
           onPressed: onCancel,
           style: OutlinedButton.styleFrom(minimumSize: minSize),
           child: Text(cancelLabel),
         ),
-        const SizedBox(width: Space.sm),
         FilledButton(
           onPressed: onConfirm,
           style: FilledButton.styleFrom(

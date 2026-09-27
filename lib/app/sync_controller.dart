@@ -8,6 +8,7 @@ import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
 import '../data/repositories/sync_engine.dart';
 import 'providers.dart';
+import 'push_service.dart';
 
 /// Eşitleme durumu — arayüzdeki göstergeleri besler.
 class SyncState {
@@ -61,8 +62,21 @@ class SyncController extends Notifier<SyncState> {
   bool _folderSyncPending = false;
   bool _prefetchingBodies = false;
   bool _running = false;
+
+  /// Bu ana kadar gelen sunucu olayları yok sayılır (bkz. [_onServerChange]).
+  DateTime _quietUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// Bir eşitleme/ön-yükleme turu sürüyor mu?
+  bool get _isBusy => _running || _foldersSyncing || _prefetchingBodies;
+
+  /// Kendi komutlarımızın (SELECT/FETCH/…) yanıtları da sunucu olayı üretebilir.
+  /// Tur bittikten hemen sonra ulaşan gecikmiş olay bu kadar süre yok
+  /// sayılır; aksi hâlde eşitleme kendi olaylarıyla sonsuza dek kendini
+  /// tetikler.
+  static const Duration _eventQuietPeriod = Duration(seconds: 1);
   bool _bootstrapped = false;
   bool _paused = false;
+  bool _disposed = false;
 
   /// Klasör listesi bu süreden sık yenilenmez (ön plana dönüş, çekip yenileme).
   static const Duration _folderMinGap = Duration(seconds: 5);
@@ -77,6 +91,7 @@ class SyncController extends Notifier<SyncState> {
 
   @override
   SyncState build() {
+    _disposed = false;
     ref.onDispose(_stopWatching);
 
     ref.listen(currentMailboxProvider, (previous, next) {
@@ -117,6 +132,7 @@ class SyncController extends Notifier<SyncState> {
 
   /// Tüm zamanlayıcı ve dinleyicileri kapatır.
   void _stopWatching() {
+    _disposed = true;
     _idleRefresh?.cancel();
     _idleRefresh = null;
     _mailRefresh?.cancel();
@@ -160,18 +176,32 @@ class SyncController extends Notifier<SyncState> {
 
   void _watchServerChanges() {
     _serverChanges?.cancel();
-    _serverChanges = ref.read(mailConnectionProvider).serverChanges.listen((_) {
-      // FETCH/SELECT yanıtları da IMAP event stream'ine düşebilir. Bunlar
-      // kendi sync komutlarımızdan üretildiğinde yeni bir sync başlatmak
-      // döngüye yol açar; devam eden tur ve periyodik emniyet sync'i bu
-      // aralıkta kaçabilecek gerçek değişiklikleri zaten yakalar.
-      // Debounce art arda gelen olayları tek bir eşitlemeye indirger.
-      _serverChangeDebounce?.cancel();
-      _serverChangeDebounce = Timer(
-        const Duration(milliseconds: 350),
-        () => _fireAndForget(syncCurrentFolder()),
-      );
+    _serverChanges = ref
+        .read(mailConnectionProvider)
+        .serverChanges
+        .listen((_) => _onServerChange());
+  }
+
+  /// Sunucudan gelen "değişiklik var" olayı.
+  ///
+  /// FETCH/SELECT yanıtları da IMAP event stream'ine düşebilir. Bunlar kendi
+  /// sync komutlarımızdan üretildiğinde yeni bir sync başlatmak döngüye yol
+  /// açar (bkz. `AccountWatcher._syncing`'deki aynı koruma); devam eden tur ve
+  /// periyodik emniyet sync'i bu aralıkta kaçabilecek gerçek değişiklikleri
+  /// zaten yakalar. Debounce art arda gelen olayları tek bir eşitlemeye
+  /// indirger.
+  void _onServerChange() {
+    if (_isBusy || DateTime.now().isBefore(_quietUntil)) return;
+    _serverChangeDebounce?.cancel();
+    _serverChangeDebounce = Timer(const Duration(milliseconds: 350), () {
+      // Zamanlayıcı beklerken bir tur başlamış olabilir.
+      if (_isBusy || DateTime.now().isBefore(_quietUntil)) return;
+      _fireAndForget(syncCurrentFolder());
     });
+  }
+
+  void _markQuiet() {
+    _quietUntil = DateTime.now().add(_eventQuietPeriod);
   }
 
   /// Tüm klasörleri ve seçili klasörün içeriğini eşitler.
@@ -232,6 +262,7 @@ class SyncController extends Notifier<SyncState> {
       );
     } finally {
       _running = false;
+      _markQuiet();
       state = state.copyWith(isSyncing: false);
       await _restartIdle();
       _drainPendingFolderSync();
@@ -277,9 +308,12 @@ class SyncController extends Notifier<SyncState> {
       _fireAndForget(_maybeNotify(mailbox, (outcome as Ok<SyncOutcome>).value));
     } finally {
       _running = false;
-      state = state.copyWith(isSyncing: false);
-      await _restartIdle();
-      _drainPendingFolderSync();
+      _markQuiet();
+      if (!_disposed) {
+        state = state.copyWith(isSyncing: false);
+        await _restartIdle();
+        _drainPendingFolderSync();
+      }
     }
   }
 
@@ -328,6 +362,13 @@ class SyncController extends Notifier<SyncState> {
           .read(syncEngineProvider)
           .loadOlder(accountId: accountId, mailbox: mailbox);
       if (result is Err<int>) {
+        if (result.failure is UidValidityChangedFailure) {
+          // Sunucu klasörü yeniden numaralamış: yerel UID'ler geçersiz, klasör
+          // baştan eşitlenir. Kullanıcıya hata gösterilmez (bkz.
+          // `UidValidityChangedFailure`).
+          _fireAndForget(syncCurrentFolder());
+          return;
+        }
         state = state.copyWith(lastError: result.failure);
         return;
       }
@@ -369,8 +410,6 @@ class SyncController extends Notifier<SyncState> {
         .notifyNew(accountId: accountId, outcome: outcome);
   }
 
-  /// Ön plan servisi (bkz. `PushService`) çalışıyor mu?
-
   /// Uygulama önplandayken IMAP IDLE ile anlık güncelleme alınır.
   ///
   /// IDLE düzenli olarak yenilenir; 30 saniyelik açık klasör eşitlemesi de
@@ -383,14 +422,17 @@ class SyncController extends Notifier<SyncState> {
   /// (Giden, özel klasörler) servis tarafından izlenmez; oralarda IDLE sürer.
   Future<void> _restartIdle() async {
     _idleRefresh?.cancel();
-    if (_paused) return;
+    if (_disposed || _paused) return;
 
     final connection = ref.read(mailConnectionProvider);
     if (!connection.isConnected || !connection.capabilities.supportsIdle) {
       return;
     }
+    if (await _serviceWatches(ref.read(currentMailboxProvider))) return;
+    if (_disposed || _paused) return;
     final started = await connection.imap.startIdle();
-    if (started is Err<void>) return;
+    if (_disposed || _paused || started is Err<void>) return;
+    _idleRefresh?.cancel();
     _idleRefresh = Timer(const Duration(minutes: 8), () {
       // Yeni bir SELECT/FETCH IDLE'ı bitirir; sync'in finally bloğu IDLE'ı
       // yeniden başlatır. Bu tur bağlantı sağlığını da doğrular.
@@ -430,22 +472,23 @@ class SyncController extends Notifier<SyncState> {
       );
     } finally {
       _foldersSyncing = false;
-      // `listMailboxes()` aynı IMAP bağlantısını kullandığı için
-      // EnoughMail'in `_guard` metodu sürmekte olan IDLE'ı bitirir. Yeniden
-      // başlatılmazsa klasör polling'i IDLE'ı sessizce devre dışı bırakırdı.
-      await _restartIdle();
-      _drainPendingFolderSync();
+      _markQuiet();
+      if (!_disposed) {
+        await _restartIdle();
+        _drainPendingFolderSync();
+      }
     }
   }
 
   void _drainPendingFolderSync() {
-    if (!_folderSyncPending || _running || _foldersSyncing || _paused) return;
+    if (_disposed || !_folderSyncPending || _running || _foldersSyncing || _paused) return;
     _folderSyncPending = false;
     scheduleMicrotask(() => _fireAndForget(syncFolders(force: true)));
   }
 
   void _startFolderPolling() {
     _folderRefresh?.cancel();
+    if (_disposed || _paused) return;
     _folderRefresh = Timer.periodic(
       _folderPollInterval,
       (_) => _fireAndForget(syncFolders()),
@@ -454,6 +497,7 @@ class SyncController extends Notifier<SyncState> {
 
   void _startMailPolling() {
     _mailRefresh?.cancel();
+    if (_disposed || _paused) return;
     _mailRefresh = Timer.periodic(
       _mailPollInterval,
       (_) => _fireAndForget(_pollCurrentMailbox()),
@@ -464,8 +508,27 @@ class SyncController extends Notifier<SyncState> {
     // Anlık moddaki ön plan servisi Gelen Kutusu'nu zaten IDLE ile izler ve
     // Drift değişikliklerini ana isolate'e bildirir. Aynı kutuya ikinci bir
     // periyodik sync açıp gereksiz IMAP trafiği üretmeyelim.
+    if (await _serviceWatches(ref.read(currentMailboxProvider))) return;
 
     await syncCurrentFolder();
+  }
+
+  /// Ön plan servisi (bkz. `PushService`) [mailbox]'u (Gelen Kutusu) zaten
+  /// IDLE ile izliyor mu? Servis TÜM hesapların Gelen Kutusu'nu dinler; o
+  /// durumda arayüz aynı kutu için ikinci bir IDLE/yoklama açmaz — iki isolate
+  /// aynı kutuyu aynı anda eşitleyip aynı iletiyi iki kez işlemesin, sunucunun
+  /// eşzamanlı bağlantı sınırı boşuna tüketilmesin. Çekip yenileme, klasör
+  /// değiştirme ve öne gelme gibi kullanıcı eylemleri bu korumadan etkilenmez.
+  Future<bool> _serviceWatches(MailboxRow? mailbox) async {
+    if (mailbox == null || mailbox.specialUse != SpecialUse.inbox) {
+      return false;
+    }
+    try {
+      return await PushService.isRunning;
+    } on Object catch (_) {
+      // Servis durumu okunamadıysa (ör. eklenti yok) arayüz kendi işini yapar.
+      return false;
+    }
   }
 
   void _startBodyPrefetch(
@@ -482,7 +545,10 @@ class SyncController extends Notifier<SyncState> {
         // Gövde/önizleme indirme hatası temel mailbox sync'ini bozmaz.
       } finally {
         _prefetchingBodies = false;
-        await _restartIdle();
+        _markQuiet();
+        if (!_disposed) {
+          await _restartIdle();
+        }
       }
     }());
   }

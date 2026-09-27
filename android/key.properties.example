@@ -1,0 +1,11 @@
+# Yayın (release) imzası için şablon. Bu dosyayı `key.properties` olarak
+# kopyalayıp doldurun; `key.properties` ve anahtar dosyası (.jks/.keystore)
+# .gitignore'dadır ve ASLA depoya eklenmemelidir.
+#
+# Anahtar üretmek için:
+#   keytool -genkey -v -keystore kaydet-release.jks -keyalg RSA -keysize 2048 -validity 10000 -alias kaydet
+storePassword=
+keyPassword=
+keyAlias=kaydet
+# `android/app` klasörüne göre ya da mutlak yol:
+storeFile=../kaydet-release.jks

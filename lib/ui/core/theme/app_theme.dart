@@ -111,6 +111,11 @@ abstract final class AppTheme {
 
   static ThemeData _build(KaydetTokens t) {
     final isDark = t.isDark;
+    // Açık temada üst çubuk artık `accentFill` mavisi zeminli olduğu için
+    // (bkz. `KaydetTokens.light.appBarBg`) üzerindeki metin/ikon `onAccentFill`
+    // (beyaz) olur; koyu temada zemin zaten neredeyse siyah kaldığından
+    // `textPrimary` değişmez.
+    final onAppBar = isDark ? t.textPrimary : t.onAccentFill;
 
     final colorScheme = ColorScheme(
       brightness: t.brightness,
@@ -151,24 +156,24 @@ abstract final class AppTheme {
       splashFactory: InkSparkle.splashFactory,
       appBarTheme: AppBarTheme(
         backgroundColor: t.appBarBg,
-        foregroundColor: t.textPrimary,
+        foregroundColor: onAppBar,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
         centerTitle: false,
         toolbarHeight: Dimens.appBarHeight,
-        titleTextStyle: AppText.titleMedium.copyWith(color: t.textPrimary),
-        systemOverlayStyle: isDark
-            ? SystemUiOverlayStyle.light.copyWith(
-                statusBarColor: Colors.transparent,
-                systemNavigationBarColor: t.surfaceElevated,
-                systemNavigationBarIconBrightness: Brightness.light,
-              )
-            : SystemUiOverlayStyle.dark.copyWith(
-                statusBarColor: Colors.transparent,
-                systemNavigationBarColor: t.surface,
-                systemNavigationBarIconBrightness: Brightness.dark,
-              ),
+        titleTextStyle: AppText.titleMedium.copyWith(color: onAppBar),
+        // Açık temada üst çubuk artık koyu bir mavi zemin olduğundan durum
+        // çubuğu ikonları da (koyu temadaki gibi) açık renkli olmalı; alttaki
+        // sistem gezinme çubuğu ise kendi yüzeyinin (surface/surfaceElevated)
+        // parlaklığına göre ayrı kalır.
+        systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+          statusBarColor: Colors.transparent,
+          systemNavigationBarColor: isDark ? t.surfaceElevated : t.surface,
+          systemNavigationBarIconBrightness: isDark
+              ? Brightness.light
+              : Brightness.dark,
+        ),
       ),
       dividerTheme: DividerThemeData(
         color: t.divider,
@@ -208,7 +213,7 @@ abstract final class AppTheme {
       ),
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
-          foregroundColor: t.textPrimary,
+          foregroundColor: t.accent,
           side: BorderSide(color: t.border),
           minimumSize: const Size.fromHeight(Dimens.controlHeight),
           textStyle: AppText.labelMedium.copyWith(fontSize: 14 * AppText.scale),

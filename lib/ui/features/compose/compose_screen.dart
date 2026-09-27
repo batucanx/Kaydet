@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -18,15 +20,20 @@ import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/compose_formatting.dart';
 import '../../../domain/use_cases/email_html_codec.dart';
+import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import 'attachment_reminder.dart';
 import 'quick_contacts_strip.dart';
+import 'quick_templates_sheet.dart';
 import 'recipient_chip_layout.dart';
 import 'recipient_details_sheet.dart';
+import 'schedule_send_sheet.dart';
 
 /// Yazma ekranının açılış biçimi.
 enum ComposeMode { newMessage, reply, replyAll, forward }
@@ -49,9 +56,28 @@ final class ComposeDraftSaved extends ComposeOutcome {
 /// İleti gönderim kuyruğuna alındı; gerçek gönderim arka planda sürer ve
 /// sonucu [messageId]'nin gönderim durumundan izlenir.
 final class ComposeSendQueued extends ComposeOutcome {
-  const ComposeSendQueued(this.messageId);
+  const ComposeSendQueued(
+    this.messageId, {
+    this.undoDuration = const Duration(seconds: 5),
+    this.accountId,
+  });
 
   final int messageId;
+  final Duration undoDuration;
+  final int? accountId;
+}
+
+/// İleti ileri bir tarihte gönderilmek üzere zamanlandı.
+final class ComposeSendScheduled extends ComposeOutcome {
+  const ComposeSendScheduled(
+    this.messageId,
+    this.scheduledAt, {
+    this.accountId,
+  });
+
+  final int messageId;
+  final DateTime scheduledAt;
+  final int? accountId;
 }
 
 /// İleti yazma ekranı.
@@ -152,9 +178,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _inReplyTo;
   String? _references;
   final List<String> _attachments = [];
+
+  /// Seçicinin verdiği ORİJİNAL yol → kalıcı kopyanın yolu. Aynı dosya iki kez
+  /// seçilirse (kalıcı kopyanın yolu her seferinde farklı olduğundan) tekrar
+  /// eklenmez; ek listeden çıkarılınca kaydı da düşer, yeniden eklenebilir.
+  final Map<String, String> _storedBySource = {};
   final Set<String> _labels = {};
 
   Timer? _autosave;
+  late final ValueNotifier<bool> _hasRecipientChips;
 
   @override
   void initState() {
@@ -164,6 +196,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // `_prefill` taslak/yanıt ise gerçek sahibiyle değiştirecek (aşağı bkz.);
     // yeni bir iletide bu, ilk karede gösterilecek tek değerdir.
     _fromAccountId = ref.read(accountIdProvider);
+    _hasRecipientChips = ValueNotifier<bool>(
+      EmailAddress.parseInput(_to.text).any((a) => a.isValid),
+    );
     _quill = _createQuillController();
     _quill.addListener(_onChanged);
     for (final controller in [_to, _cc, _bcc, _subject]) {
@@ -187,16 +222,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     ),
   );
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Autofocus tek başına klavyeyi tetiklemiyor: `PageTransitionsTheme`
-    // (bkz. `AppTheme._build`) Android'de fade-through geçişi kullanıyor ve
-    // odak, geçiş animasyonu daha bitmeden platforma iletiliyor — bu yüzden
-    // sistem klavyeyi görmezden geliyor. Çözüm: geçiş bitene kadar bekleyip
-    // odağı ve klavyeyi elle iste.
-    if (!_toFocusRequested && widget.mode == ComposeMode.newMessage) {
-      _toFocusRequested = true;
+  void _focusToFieldAndShowKeyboard() {
+    if (!mounted) return;
+    FocusScope.of(context).requestFocus(_toFocus);
+    SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+  }
+
+  /// Yeni ileti açıldığında "Kime" alanına odak verir. `_prefill` tamamlanıp
+  /// `setState` çağrıldıktan SONRA, ilk yeniden çizim karesinin sonunda
+  /// çalışır — bu sayede `QuillEditor`'ın belge değişikliğiyle olası odak
+  /// çalması engellenir. Rota geçiş animasyonu bitene kadar da beklenir;
+  /// aksi hâlde platform klavyeyi görmezden gelir (bkz. eski
+  /// `didChangeDependencies` notu).
+  void _requestToFocusAfterPrefill() {
+    if (_toFocusRequested) return;
+    // Yalnızca gerçekten YENİ bir ileti — taslak düzenlemelerde ve
+    // yanıt/iletmelerde "Kime" zaten dolu, odak gövdeye düşebilir.
+    if (widget.mode != ComposeMode.newMessage || widget.draftId != null) return;
+    _toFocusRequested = true;
+
+    // Bir kare sonrasına ertele: `setState` yeniden çizimi tetikler,
+    // `QuillEditor` dahil tüm çocuklar oluşturulur; ondan SONRA odak istenir.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final animation = ModalRoute.of(context)?.animation;
       if (animation == null || animation.isCompleted) {
         _focusToFieldAndShowKeyboard();
@@ -206,21 +254,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           animation.removeStatusListener(listener);
           _focusToFieldAndShowKeyboard();
         }
-
         animation.addStatusListener(listener);
       }
-    }
-  }
-
-  void _focusToFieldAndShowKeyboard() {
-    if (!mounted) return;
-    FocusScope.of(context).requestFocus(_toFocus);
-    SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+    });
   }
 
   @override
   void dispose() {
     _autosave?.cancel();
+    _hasRecipientChips.dispose();
     _quill.removeListener(_onChanged);
     _quill.dispose();
     for (final controller in [_to, _cc, _bcc, _subject]) {
@@ -251,6 +293,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   // aboneliği sızdırırdı.
   Future<void> _prefill() async {
     final db = ref.read(databaseProvider);
+    final missingAttachments = <String>[];
     if (widget.draftId != null) {
       final id = widget.draftId!;
       // Üçü de bağımsız; ayrı ayrı `await` etmek yerine hepsini hemen
@@ -280,11 +323,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _references = row.referencesRaw;
         _showCcBcc = _cc.text.isNotEmpty || _bcc.text.isNotEmpty;
         final existing = await attachmentsFuture;
-        _attachments.addAll(
-          existing
-              .where((a) => a.isOutgoing && a.localPath != null)
-              .map((a) => a.localPath!),
-        );
+        for (final attachment in existing.where(
+          (a) => a.isOutgoing && a.localPath != null,
+        )) {
+          final path = attachment.localPath!;
+          // Cihazdan silinmiş (geçici klasör temizlenmiş) bir ek gönderimde
+          // sessizce atlanmamalı: kullanıcı açılışta bilgilendirilir ve ek
+          // listeden çıkarılır.
+          if (File(path).existsSync()) {
+            _attachments.add(path);
+          } else {
+            missingAttachments.add(attachment.fileName);
+          }
+        }
         _labels.addAll(_decodeLabels(row.labelsJson));
       }
     } else if (widget.replyToId != null) {
@@ -308,10 +359,20 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
     if (!mounted) return;
     setState(() => _initialised = true);
+    _hasRecipientChips.value =
+        EmailAddress.parseInput(_to.text).any((a) => a.isValid);
+    _requestToFocusAfterPrefill();
     // Paylaşımdan gelen dosyalar henüz hiçbir yerde kayıtlı değil; ilk
     // kullanıcı dokunuşunu beklemeden otomatik kaydetmeyi başlat ki uygulama
-    // hemen kapanırsa da taslak (ve ek) kaybolmasın.
-    if (_attachments.isNotEmpty) _onChanged();
+    // hemen kapanırsa da taslak (ve ek) kaybolmasın. Cihazda bulunamayan ekler
+    // listeden çıkarıldığı için taslak da güncellenir.
+    if (_attachments.isNotEmpty || missingAttachments.isNotEmpty) _onChanged();
+    if (missingAttachments.isNotEmpty) {
+      _showError(
+        'Şu ekler cihazda bulunamadığı için çıkarıldı: '
+        '${missingAttachments.join(', ')}. Gerekirse yeniden ekleyin.',
+      );
+    }
   }
 
   /// Yeni iletinin ilk gövdesi: paylaşılan metin varsa başa, imza altına.
@@ -506,7 +567,35 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           _replyToMessageId != null &&
           _inReplyTo == null);
 
-  Future<void> _send() async {
+  bool _checkForForgottenAttachment() {
+    return AttachmentReminder.shouldWarn(
+      subject: _subject.text,
+      body: _bodyPlainText,
+      hasAttachments: _attachments.isNotEmpty,
+      isReplyOrForward: _sourceIsReply || _sourceIsForward,
+    );
+  }
+
+  Future<bool?> _confirmMissingAttachment() => showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('Ek eklemeyi unuttunuz mu?'),
+      content: const Text(
+        'İletinizin metninde veya konusunda ekli bir dosyadan bahsedilmiş ancak herhangi bir ek bulunmuyor. Yine de göndermek istiyor musunuz?',
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        DialogActions(
+          cancelLabel: 'Ek Ekle',
+          onCancel: () => Navigator.of(context).pop(false),
+          confirmLabel: 'Yine de Gönder',
+          onConfirm: () => Navigator.of(context).pop(true),
+        ),
+      ],
+    ),
+  );
+
+  Future<void> _send({DateTime? scheduledAt}) async {
     final accountId = _fromAccountId;
     if (accountId == null) return;
 
@@ -525,6 +614,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
 
+    if (_checkForForgottenAttachment()) {
+      final proceed = await _confirmMissingAttachment();
+      if (proceed != true) {
+        // Kullanıcı ek eklemek istiyor: dosya seçiciyi aç
+        await _pickFilesFromDisk();
+        return;
+      }
+    }
+
     if (_subject.text.trim().isEmpty) {
       final proceed = await _confirmNoSubject();
       if (proceed != true) return;
@@ -533,6 +631,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _sending = true);
     _autosave?.cancel();
 
+    final undoWindow = ref.read(sendUndoWindowProvider);
+    final effectiveUndoDelay = scheduledAt != null ? null : undoWindow;
     final repository = ref.read(mailRepositoryProvider);
     final messageId = await repository.queueSend(
       accountId: accountId,
@@ -549,6 +649,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       references: _references,
       markSourceAnswered: _sourceIsReply,
       markSourceForwarded: _sourceIsForward,
+      undoDelay: effectiveUndoDelay,
+      scheduledAt: scheduledAt,
     );
     if (!mounted) return;
 
@@ -563,12 +665,50 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
 
-    // Kuyruk hemen işlenmeye çalışılır; başarısız olursa arka planda devam.
-    unawaited(repository.processQueue(accountId));
+    if (scheduledAt != null) {
+      Navigator.of(context).pop<ComposeOutcome>(
+        ComposeSendScheduled(messageId, scheduledAt, accountId: accountId),
+      );
+    } else {
+      Navigator.of(context).pop<ComposeOutcome>(
+        ComposeSendQueued(
+          messageId,
+          undoDuration: undoWindow,
+          accountId: accountId,
+        ),
+      );
+    }
+  }
 
-    // Sonucu (gönderildi / gönderilemedi) kullanıcıya ekranı açan taraf
-    // bildirir — bu ekran kapanınca ağaçtan çıkar (bkz. `SendFeedback`).
-    Navigator.of(context).pop<ComposeOutcome>(ComposeSendQueued(messageId));
+  Future<void> _scheduleSend() async {
+    final picked = await ScheduleSendSheet.show(context);
+    if (picked != null && mounted) {
+      await _send(scheduledAt: picked);
+    }
+  }
+
+  void _showQuickTemplates() {
+    QuickTemplatesSheet.show(
+      context,
+      onSelect: _insertTemplate,
+    );
+  }
+
+  void _insertTemplate(String text) {
+    if (text.isEmpty) return;
+    final selection = _quill.selection;
+    final index = selection.isValid
+        ? selection.start
+        : math.max(0, _quill.document.length - 1);
+    final length = selection.isValid ? selection.end - selection.start : 0;
+    final formatted = text.endsWith('\n') ? text : '$text\n\n';
+    _quill.replaceText(
+      index,
+      length,
+      formatted,
+      TextSelection.collapsed(offset: index + formatted.length),
+    );
+    _onChanged();
   }
 
   void _showError(String message) {
@@ -676,7 +816,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
     if (picked == null) return;
-    _addAttachmentPath(picked.path);
+    await _addAttachmentPath(picked.path);
   }
 
   Future<void> _pickFilesFromDisk() async {
@@ -684,13 +824,67 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (files.isEmpty) return;
     for (final file in files) {
       final path = file.path;
-      if (path != null) _addAttachmentPath(path);
+      if (path != null) await _addAttachmentPath(path);
     }
   }
 
-  void _addAttachmentPath(String path) {
-    if (_attachments.contains(path)) return;
-    setState(() => _attachments.add(path));
+  /// Seçilen dosyayı ek listesine katar.
+  ///
+  /// - Boyut sınırları (bkz. [ShareAttachmentPolicy]): SMTP gönderimi eki
+  ///   bütünüyle belleğe alıp base64'e çevirir; sınırsız bir dosya düşük
+  ///   donanımlı cihazda bellek yetersizliğine yol açar, çoğu sunucu da 25 MB
+  ///   üstünü reddeder.
+  /// - Dosya kalıcı depoya kopyalanır (bkz. `OutgoingAttachmentStore`):
+  ///   seçicinin verdiği yol geçici bir klasördedir ve taslak beklerken
+  ///   silinebilir.
+  Future<void> _addAttachmentPath(String path) async {
+    if (_attachments.contains(path) || _storedBySource.containsKey(path)) return;
+    final name = path.split(RegExp(r'[\\/]')).last;
+    final int size;
+    try {
+      size = await File(path).length();
+    } on FileSystemException {
+      if (mounted) _showError('“$name” okunamadı, eklenemedi.');
+      return;
+    }
+    if (size > ShareAttachmentPolicy.maxFileBytes) {
+      if (mounted) {
+        _showError(
+          '“$name” çok büyük (en fazla '
+          '${ShareAttachmentPolicy.maxFileBytes >> 20} MB), eklenmedi.',
+        );
+      }
+      return;
+    }
+    var total = size;
+    for (final existing in _attachments) {
+      try {
+        total += await File(existing).length();
+      } on FileSystemException {
+        // Zaten silinmiş bir ek toplama katılmaz.
+      }
+    }
+    if (total > ShareAttachmentPolicy.maxTotalBytes) {
+      if (mounted) {
+        _showError(
+          'Eklerin toplamı en fazla '
+          '${ShareAttachmentPolicy.maxTotalBytes >> 20} MB olabilir; '
+          '“$name” eklenmedi.',
+        );
+      }
+      return;
+    }
+
+    final String stored;
+    try {
+      stored = await ref.read(outgoingAttachmentStoreProvider).persist(path);
+    } on Object catch (_) {
+      if (mounted) _showError('“$name” eklenemedi.');
+      return;
+    }
+    if (!mounted || _attachments.contains(stored)) return;
+    _storedBySource[path] = stored;
+    setState(() => _attachments.add(stored));
     _onChanged();
   }
 
@@ -796,6 +990,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    // Üst çubuğun ana metin/ikon rengi — açık temada artık mavi zeminli
+    // (bkz. `KaydetTokens.light.appBarBg`), koyu temada değişmedi.
+    final onAppBar = Theme.of(context).appBarTheme.foregroundColor ?? t.textPrimary;
     final fromAccountId = _fromAccountId;
     final signatures = fromAccountId == null
         ? const <SignatureRow>[]
@@ -884,7 +1081,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            color: t.textPrimary,
+                            color: onAppBar,
                             fontWeight: FontWeight.w600,
                             fontSize: 18 * AppText.scale,
                           ),
@@ -898,7 +1095,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: t.textSecondary,
+                                  color: onAppBar.withValues(alpha: 0.82),
                                   fontSize: 13 * AppText.scale,
                                 ),
                               ),
@@ -906,7 +1103,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                             if (allAccounts.length > 1)
                               Icon(
                                 Icons.keyboard_arrow_down,
-                                color: t.textSecondary,
+                                color: onAppBar.withValues(alpha: 0.82),
                                 size: 16,
                               ),
                           ],
@@ -919,19 +1116,46 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           ),
           actions: [
-            IconButton(
-              icon: _sending
-                  ? SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: t.accent,
-                      ),
-                    )
-                  : Icon(LucideIcons.sendHorizontal, color: t.textPrimary),
-              tooltip: 'Gönder',
-              onPressed: _sending ? null : _send,
+            ValueListenableBuilder<bool>(
+              valueListenable: _hasRecipientChips,
+              builder: (context, hasRecipient, _) {
+                final canSchedule = hasRecipient && !_sending;
+                return IconButton(
+                  icon: Icon(
+                    LucideIcons.calendarClock,
+                    color: canSchedule
+                        ? onAppBar
+                        : onAppBar.withValues(alpha: 0.35),
+                  ),
+                  tooltip: canSchedule
+                      ? 'İleri tarihte gönder'
+                      : 'İleri tarihte göndermek için önce alıcı girin',
+                  onPressed: canSchedule ? _scheduleSend : null,
+                );
+              },
+            ),
+            ValueListenableBuilder<bool>(
+              valueListenable: _hasRecipientChips,
+              builder: (context, hasRecipient, _) {
+                return GestureDetector(
+                  onLongPress:
+                      (hasRecipient && !_sending) ? _scheduleSend : null,
+                  child: IconButton(
+                    icon: _sending
+                        ? SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: onAppBar,
+                            ),
+                          )
+                        : Icon(LucideIcons.sendHorizontal, color: onAppBar),
+                    tooltip: 'Gönder',
+                    onPressed: _sending ? null : () => _send(),
+                  ),
+                );
+              },
             ),
             const SizedBox(width: Space.xs),
           ],
@@ -951,6 +1175,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     controller: _to,
                     focusNode: _toFocus,
                     accountId: fromAccountId,
+                    onChipsChanged: (chips) {
+                      _hasRecipientChips.value = chips.any((a) => a.isValid);
+                    },
                     trailing: IconButton(
                       icon: Icon(
                         _showCcBcc
@@ -985,6 +1212,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     _AttachmentList(
                       paths: _attachments,
                       onRemove: (path) {
+                        _storedBySource.removeWhere((_, stored) => stored == path);
                         setState(() => _attachments.remove(path));
                         _onChanged();
                       },
@@ -1003,6 +1231,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                         config: const QuillEditorConfig(
                           scrollable: false,
                           expands: false,
+                          autoFocus: false,
                           padding: EdgeInsets.zero,
                           placeholder: 'İletinizi buraya yazın…',
                           textCapitalization: TextCapitalization.sentences,
@@ -1028,6 +1257,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   setState(() => _showFormatBar = !_showFormatBar),
               onSignatureSelected: (signature) =>
                   _insertSignature(signature.body),
+              onOpenTemplates: _showQuickTemplates,
             ),
           ],
         ),
@@ -1065,6 +1295,7 @@ class _RecipientField extends StatelessWidget {
     this.focusNode,
     this.isSubject = false,
     this.accountId,
+    this.onChipsChanged,
   });
 
   final String label;
@@ -1077,6 +1308,7 @@ class _RecipientField extends StatelessWidget {
   /// `ComposeScreen._fromAccountId`. Yalnızca e-posta alanlarında (Kime/
   /// Bilgi/Gizli) kullanılır, `isSubject: true` iken yok sayılır.
   final int? accountId;
+  final ValueChanged<List<EmailAddress>>? onChipsChanged;
 
   static const _fieldDecoration = InputDecoration(
     filled: false,
@@ -1096,6 +1328,7 @@ class _RecipientField extends StatelessWidget {
         focusNode: focusNode!,
         accountId: accountId,
         trailing: trailing,
+        onChipsChanged: onChipsChanged,
       );
     }
     final t = context.tokens;
@@ -1155,6 +1388,7 @@ class _RecipientChipsField extends ConsumerStatefulWidget {
     required this.focusNode,
     this.accountId,
     this.trailing,
+    this.onChipsChanged,
   });
 
   final String label;
@@ -1162,6 +1396,7 @@ class _RecipientChipsField extends ConsumerStatefulWidget {
   final FocusNode focusNode;
   final int? accountId;
   final Widget? trailing;
+  final ValueChanged<List<EmailAddress>>? onChipsChanged;
 
   @override
   ConsumerState<_RecipientChipsField> createState() =>
@@ -1194,6 +1429,11 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
     widget.controller.addListener(_onExternalChange);
     widget.focusNode.addListener(_onFocusChange);
     widget.focusNode.onKeyEvent = _onKeyEvent;
+    if (_chips.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _notifyChips();
+      });
+    }
   }
 
   @override
@@ -1204,6 +1444,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
       widget.controller.addListener(_onExternalChange);
       _chips = _dedupe(EmailAddress.parseInput(widget.controller.text));
       _input.clear();
+      _notifyChips();
     }
     if (oldWidget.focusNode != widget.focusNode) {
       oldWidget.focusNode
@@ -1223,6 +1464,10 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
       ..onKeyEvent = null;
     _input.dispose();
     super.dispose();
+  }
+
+  void _notifyChips() {
+    widget.onChipsChanged?.call(List.unmodifiable(_chips));
   }
 
   // ---- Model <-> metin ----
@@ -1255,6 +1500,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
       _chips = _dedupe(EmailAddress.parseInput(widget.controller.text));
       _input.clear();
     });
+    _notifyChips();
   }
 
   // ---- Çip işlemleri ----
@@ -1263,6 +1509,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
     final next = _dedupe([..._chips, ...addresses]);
     setState(() => _chips = next);
     _writeBack();
+    _notifyChips();
   }
 
   void _removeChip(EmailAddress address) {
@@ -1273,6 +1520,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
       ],
     );
     _writeBack();
+    _notifyChips();
   }
 
   /// Yazılmakta olan parça geçerli bir adresse çipe çevirir.
@@ -1802,7 +2050,10 @@ class _AttachmentList extends StatelessWidget {
         children: [
           for (final path in paths)
             Chip(
-              avatar: Icon(LucideIcons.paperclip, size: 14, color: t.accent),
+              avatar: AttachmentTypeIcon(
+                fileName: path.split(RegExp(r'[\\/]')).last,
+                size: 18,
+              ),
               label: Text(
                 path.split(RegExp(r'[\\/]')).last,
                 style: Theme.of(context).textTheme.labelSmall,
@@ -2419,6 +2670,7 @@ class _ComposeToolbar extends StatelessWidget {
     required this.onToggleLabel,
     required this.onToggleFormat,
     required this.onSignatureSelected,
+    required this.onOpenTemplates,
   });
 
   final bool listening;
@@ -2431,6 +2683,7 @@ class _ComposeToolbar extends StatelessWidget {
   final ValueChanged<String> onToggleLabel;
   final VoidCallback onToggleFormat;
   final ValueChanged<SignatureRow> onSignatureSelected;
+  final VoidCallback onOpenTemplates;
 
   @override
   Widget build(BuildContext context) {
@@ -2481,6 +2734,7 @@ class _ComposeToolbar extends StatelessWidget {
                         onToggleLabel: onToggleLabel,
                         onToggleFormat: onToggleFormat,
                         onSignatureSelected: onSignatureSelected,
+                        onOpenTemplates: onOpenTemplates,
                       ),
               ),
             ),
@@ -2502,6 +2756,7 @@ class _MainToolbarRow extends StatelessWidget {
     required this.onToggleLabel,
     required this.onToggleFormat,
     required this.onSignatureSelected,
+    required this.onOpenTemplates,
   });
 
   final bool listening;
@@ -2512,6 +2767,7 @@ class _MainToolbarRow extends StatelessWidget {
   final ValueChanged<String> onToggleLabel;
   final VoidCallback onToggleFormat;
   final ValueChanged<SignatureRow> onSignatureSelected;
+  final VoidCallback onOpenTemplates;
 
   @override
   Widget build(BuildContext context) {
@@ -2550,6 +2806,15 @@ class _MainToolbarRow extends StatelessWidget {
             onSelected: onSignatureSelected,
             color: t.textSecondary,
           ),
+        IconButton(
+          icon: Icon(
+            LucideIcons.layoutTemplate,
+            size: IconSize.md,
+            color: t.textSecondary,
+          ),
+          tooltip: 'Hazır Şablonlar',
+          onPressed: onOpenTemplates,
+        ),
         _ComposeMoreMenu(
           selectedLabels: selectedLabels,
           onToggleLabel: onToggleLabel,

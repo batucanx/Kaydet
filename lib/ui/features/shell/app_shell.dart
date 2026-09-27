@@ -358,15 +358,32 @@ class _SideRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    // Açık temada rayın zemini artık üst çubukla aynı mavi (kullanıcı
+    // isteğiyle) — bu yüzden üzerindeki ikon/halka/ayraç renkleri de beyaza
+    // döner, aksi hâlde `accent` gibi tonlar zeminle aynı maviye karışıp
+    // görünmez olurdu. Koyu tema dokunulmadan (`surfaceDeep` + mevcut
+    // renkler) kalır.
+    final isLight = !t.isDark;
+    final railBg = isLight ? t.appBarBg : t.surfaceDeep;
+    final railIndicator = isLight
+        ? t.onAccentFill.withValues(alpha: 0.22)
+        : t.accentSubtle;
+    final railSelected = isLight ? t.onAccentFill : t.accent;
+    final railUnselected = isLight
+        ? t.onAccentFill.withValues(alpha: 0.75)
+        : t.textSecondary;
+    final railDivider = isLight
+        ? t.onAccentFill.withValues(alpha: 0.3)
+        : t.divider;
     return NavigationRail(
-      backgroundColor: t.surfaceDeep,
+      backgroundColor: railBg,
       minWidth: 76,
       groupAlignment: 1,
       labelType: NavigationRailLabelType.none,
       trailingAtBottom: true,
-      indicatorColor: t.accentSubtle,
-      selectedIconTheme: IconThemeData(color: t.accent),
-      unselectedIconTheme: IconThemeData(color: t.textSecondary),
+      indicatorColor: railIndicator,
+      selectedIconTheme: IconThemeData(color: railSelected),
+      unselectedIconTheme: IconThemeData(color: railUnselected),
       // 2 (Ayarlar) formal bir hedef değil, `trailing`de — o yüzden
       // hedefler listesinde hiçbiri seçili görünmemeli.
       selectedIndex: activeTab < 2 ? activeTab : null,
@@ -399,12 +416,12 @@ class _SideRail extends StatelessWidget {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    border: Border.all(color: t.divider),
+                    border: Border.all(color: railDivider),
                   ),
                   child: Icon(
                     LucideIcons.plus,
                     size: IconSize.md,
-                    color: t.textSecondary,
+                    color: railUnselected,
                   ),
                 ),
               ),
@@ -412,7 +429,7 @@ class _SideRail extends StatelessWidget {
           ),
           const SizedBox(height: Space.md),
           Divider(
-            color: t.divider,
+            color: railDivider,
             height: 1,
             indent: Space.md,
             endIndent: Space.md,
@@ -471,6 +488,17 @@ class _RailIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final duration = context.motion(Motion.fast);
+    // `_SideRail` ile aynı gerekçe: açık temada ray artık mavi zeminli,
+    // bu yüzden bu düğme de (yalnızca `_SideRail.trailing`de kullanılır)
+    // beyaz tabanlı renklere döner; koyu tema dokunulmaz.
+    final isLight = !t.isDark;
+    final indicatorColor = isLight
+        ? t.onAccentFill.withValues(alpha: 0.22)
+        : t.accentSubtle;
+    final selectedColor = isLight ? t.onAccentFill : t.accent;
+    final unselectedColor = isLight
+        ? t.onAccentFill.withValues(alpha: 0.75)
+        : t.textSecondary;
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -483,11 +511,13 @@ class _RailIconButton extends StatelessWidget {
           height: Dimens.touchTarget,
           alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: isSelected ? t.accentSubtle : Colors.transparent,
+            color: isSelected ? indicatorColor : Colors.transparent,
             shape: BoxShape.circle,
           ),
           child: TweenAnimationBuilder<Color?>(
-            tween: ColorTween(end: isSelected ? t.accent : t.textSecondary),
+            tween: ColorTween(
+              end: isSelected ? selectedColor : unselectedColor,
+            ),
             duration: duration,
             curve: Motion.standard,
             builder: (context, color, _) =>
@@ -513,6 +543,10 @@ class _AccountAvatarButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    // `_SideRail` ile aynı gerekçe: açık temada ray mavi zeminli olduğundan
+    // `accent` halkası zeminle karışıp görünmez olurdu — beyaz halkaya döner.
+    // Koyu temada dokunulmaz.
+    final ringColor = t.isDark ? t.accent : t.onAccentFill;
     return Tooltip(
       message: account.email,
       child: InkWell(
@@ -528,7 +562,7 @@ class _AccountAvatarButton extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: isActive ? t.accent : Colors.transparent,
+              color: isActive ? ringColor : Colors.transparent,
               width: isActive ? 2.5 : 1.5,
             ),
           ),
@@ -876,14 +910,14 @@ class _FolderTile extends StatelessWidget {
                   vertical: 1,
                 ),
                 decoration: BoxDecoration(
-                  color: isSelected ? t.accent : t.surface,
+                  color: isSelected ? t.accentSubtle : t.surface,
                   borderRadius: BorderRadius.circular(Radii.full),
                 ),
                 child: AnimatedDefaultTextStyle(
                   duration: duration,
                   curve: Motion.standard,
                   style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                    color: isSelected ? t.onAccentFill : t.textSecondary,
+                    color: isSelected ? t.accent : t.textSecondary,
                   ),
                   child: Text('${badge!}'),
                 ),

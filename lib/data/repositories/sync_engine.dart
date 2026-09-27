@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'dart:math' show min;
 
 import 'package:drift/drift.dart';
 
@@ -45,6 +46,10 @@ class SyncOutcome {
 }
 
 /// IMAP ↔ yerel veritabanı eşitlemesi.
+///
+/// Sunucuya giden her mantıksal işlem (`SELECT` + komutlar) bağlantının işlem
+/// kilidi altında baştan sona çalışır (bkz. `MailConnection`): araya başka bir
+/// klasör/hesap seçimi girip UID'leri yanlış yere uygulatamaz.
 class SyncEngine {
   SyncEngine({
     required AppDatabase database,
@@ -67,6 +72,13 @@ class SyncEngine {
   /// Arka planda önizleme için gövdesi çekilecek ileti sayısı.
   static const int bodyPrefetchCount = 25;
 
+  /// Gövde ön-yüklemesinde işlem kilidinin tek seferde tutulduğu ileti sayısı.
+  ///
+  /// Kilit iletiler arasında bırakılır ki kullanıcının açtığı ileti (bkz.
+  /// `MailRepository.ensureBody`) tüm ön-yüklemenin bitmesini beklemesin;
+  /// ama her iletide klasörü yeniden seçmek de gereksiz gidiş-dönüştür.
+  static const int _prefetchChunk = 5;
+
   /// Bu boyutun altındaki HTML gövdeler doğrudan bu isolate'te temizlenir.
   ///
   /// `TextExtraction.htmlToPlain` regex tabanlıdır (DOM ayrıştırmaz) ve
@@ -81,10 +93,13 @@ class SyncEngine {
   // ------------------------------------------------------------- klasörler
 
   /// Sunucudaki klasörleri yerel veritabanıyla eşitler.
-  Future<Result<List<MailboxRow>>> syncMailboxes(int accountId) async {
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
+  Future<Result<List<MailboxRow>>> syncMailboxes(int accountId) =>
+      _connection.exclusive<List<MailboxRow>>(
+        accountId,
+        () => _syncMailboxes(accountId),
+      );
 
+  Future<Result<List<MailboxRow>>> _syncMailboxes(int accountId) async {
     final listed = await _connection.imap.listMailboxes();
     if (listed is Err<List<RemoteMailbox>>) return Err(listed.failure);
     final remote = (listed as Ok<List<RemoteMailbox>>).value;
@@ -164,12 +179,18 @@ class SyncEngine {
   Future<Result<SyncOutcome>> syncMailbox({
     required int accountId,
     required MailboxRow mailbox,
+  }) {
+    if (!mailbox.isSelectable) return Future.value(const Ok(SyncOutcome()));
+    return _connection.exclusive<SyncOutcome>(
+      accountId,
+      () => _syncMailbox(accountId: accountId, mailbox: mailbox),
+    );
+  }
+
+  Future<Result<SyncOutcome>> _syncMailbox({
+    required int accountId,
+    required MailboxRow mailbox,
   }) async {
-    if (!mailbox.isSelectable) return const Ok(SyncOutcome());
-
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
-
     final caps = _connection.capabilities;
     final selected = await _connection.imap.selectMailbox(
       mailbox.path,
@@ -192,16 +213,39 @@ class SyncEngine {
       resynced = true;
     }
 
+    // `uidNext`, `highestModSeq` ve `totalCount` ("son tam uzlaşmadaki
+    // sunucu durumu") burada YAZILMAZ: yalnızca silinenler ve bayraklar da
+    // başarıyla uzlaştırıldığında en sonda yazılır (bkz. aşağısı). Erken
+    // yazılsaydı geçici bir hata bir sonraki turun "değişiklik yok" sanıp
+    // atlamasına ve kaçan değişikliğin kalıcı olarak kaybolmasına yol açardı.
     await _db.updateMailboxSync(
       mailbox.id,
       uidValidity: state.uidValidity,
-      totalCount: state.messageCount,
       lastSyncAt: DateTime.now().toUtc(),
     );
 
     if (state.messageCount == 0) {
-      await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: false);
-      return Ok(SyncOutcome(resynced: resynced));
+      // Sunucuda hiç ileti kalmadı (başka bir cihazdan Gelen Kutusu/Çöp
+      // boşaltıldı). Yerelde kalan sunucu kaynaklı satırlar artık hayalettir:
+      // silme adımı atlanırsa sonsuza dek görünürler.
+      final vanished = await _syncDeletions(mailbox);
+      if (vanished is Ok<int>) {
+        await _db.updateMailboxSync(
+          mailbox.id,
+          uidNext: state.uidNext > 0 ? state.uidNext : null,
+          highestModSeq: state.highestModSeq,
+          totalCount: 0,
+          hasMoreOnServer: false,
+        );
+      } else {
+        await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: false);
+      }
+      return Ok(
+        SyncOutcome(
+          resynced: resynced,
+          deletedCount: vanished.valueOrNull ?? 0,
+        ),
+      );
     }
 
     // --- 2. Yeni iletiler -------------------------------------------------
@@ -227,6 +271,8 @@ class SyncEngine {
       await _db.updateMailboxSync(
         mailbox.id,
         uidNext: state.uidNext,
+        highestModSeq: state.highestModSeq,
+        totalCount: state.messageCount,
         hasMoreOnServer: uids.length > slice.length,
       );
       return Ok(
@@ -255,14 +301,44 @@ class SyncEngine {
     }
 
     // --- 3. Silinenler ve bayrak değişiklikleri ---------------------------
-    final deleted = await _syncDeletions(mailbox);
-    final changed = await _syncFlags(accountId, mailbox, state, caps);
+    // Her ikisi de başarıyla uzlaşırsa `reconciled` kalır ve sunucu durumu
+    // (uidNext / modseq / ileti sayısı) kaydedilir; biri başarısız olursa
+    // kayıt ilerletilmez ve sonraki tur işi yeniden dener.
+    var reconciled = true;
 
-    await _db.updateMailboxSync(
-      mailbox.id,
-      uidNext: state.uidNext,
-      highestModSeq: state.highestModSeq,
-    );
+    // Silinen (EXPUNGE) ileti sunucudaki ileti sayısını düşürür, yeni ileti
+    // `uidNext`'i artırır; ikisi de aynı kalmışsa ne yeni ne silinmiş ileti
+    // vardır ve klasördeki TÜM UID'leri (büyük klasörde yüzlerce KB)
+    // getiren `UID SEARCH ALL` boşuna çalıştırılmaz.
+    var deleted = 0;
+    final serverChanged =
+        mailbox.uidNext != state.uidNext ||
+        mailbox.totalCount != state.messageCount;
+    if (serverChanged) {
+      final result = await _syncDeletions(mailbox);
+      if (result is Ok<int>) {
+        deleted = result.value;
+      } else {
+        reconciled = false;
+      }
+    }
+
+    var changed = 0;
+    final flags = await _syncFlags(accountId, mailbox, state, caps);
+    if (flags is Ok<int>) {
+      changed = flags.value;
+    } else {
+      reconciled = false;
+    }
+
+    if (reconciled) {
+      await _db.updateMailboxSync(
+        mailbox.id,
+        uidNext: state.uidNext,
+        highestModSeq: state.highestModSeq,
+        totalCount: state.messageCount,
+      );
+    }
 
     return Ok(
       SyncOutcome(
@@ -279,11 +355,20 @@ class SyncEngine {
     required int accountId,
     required MailboxRow mailbox,
     int count = pageSize,
-  }) async {
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
+  }) => _connection.exclusive<int>(
+    accountId,
+    () => _loadOlder(accountId: accountId, mailbox: mailbox, count: count),
+  );
 
-    final selected = await _connection.imap.selectMailbox(mailbox.path);
+  Future<Result<int>> _loadOlder({
+    required int accountId,
+    required MailboxRow mailbox,
+    required int count,
+  }) async {
+    // Çağıranın elindeki satır bayat olabilir; UIDVALIDITY doğrulaması için
+    // güncel değer veritabanından okunur.
+    final current = await _db.mailboxById(mailbox.id) ?? mailbox;
+    final selected = await _connection.selectVerified(current);
     if (selected is Err<MailboxState>) return Err(selected.failure);
 
     final lowest = await _db.lowestUid(mailbox.id);
@@ -320,12 +405,18 @@ class SyncEngine {
   ///
   /// Liste satırındaki özet metni buradan doğar: kısmi gövde çekmek yerine
   /// tam MIME ayrıştırılır, böylece her sunucuda doğru sonuç alınır.
+  ///
+  /// Bu işlem `unawaited` çalışır ve saniyelerce sürebilir; kullanıcı bu sırada
+  /// başka klasöre/hesaba geçebilir. Bu yüzden bağlantı her parçada YENİDEN
+  /// doğrulanır: hesap değişmişse ya da klasörün UIDVALIDITY'si değişmişse hiçbir
+  /// şey çekilmez — aksi hâlde bu klasörün UID'leri başka bir klasörde/hesapta
+  /// çekilip yanlış iletinin gövdesi buradaki satıra yazılırdı.
   Future<void> prefetchBodies({
     required int accountId,
     required MailboxRow mailbox,
     int limit = bodyPrefetchCount,
   }) async {
-    if (!_connection.isConnected) return;
+    if (!_connection.isConnectedTo(accountId)) return;
 
     final rows =
         await (_db.select(_db.messages)
@@ -345,67 +436,98 @@ class SyncEngine {
             .get();
     if (rows.isEmpty) return;
 
-    final selected = await _connection.imap.selectMailbox(mailbox.path);
-    if (selected is Err<MailboxState>) return;
+    final current = await _db.mailboxById(mailbox.id) ?? mailbox;
 
-    for (final row in rows) {
-      final result = await _connection.imap.fetchBody(row.uid!);
-      if (result is Err<FetchedBody>) {
-        // Tek bir bozuk ileti önizleme akışını durdurmamalı.
-        continue;
+    for (var start = 0; start < rows.length; start += _prefetchChunk) {
+      final chunk = rows.sublist(
+        start,
+        min(start + _prefetchChunk, rows.length),
+      );
+
+      final fetched = await _connection
+          .locked<List<(MessageRow, FetchedBody)>?>(() async {
+            if (!_connection.isConnectedTo(accountId)) return null;
+            final selected = await _connection.selectVerified(current);
+            if (selected is Err<MailboxState>) return null;
+
+            final bodies = <(MessageRow, FetchedBody)>[];
+            for (final row in chunk) {
+              final result = await _connection.imap.fetchBody(row.uid!);
+              // Tek bir bozuk/silinmiş ileti önizleme akışını durdurmamalı.
+              if (result is Ok<FetchedBody>) bodies.add((row, result.value));
+            }
+            return bodies;
+          });
+      if (fetched == null) return;
+
+      // Veritabanı yazımı kilidin DIŞINDA: IMAP işlemleri beklemesin.
+      for (final (row, body) in fetched) {
+        await storeBody(row, body);
       }
-      await storeBody(row, (result as Ok<FetchedBody>).value);
     }
   }
 
   /// Gövdeyi ve eklerini veritabanına yazar, önizlemeyi günceller.
+  ///
+  /// Hepsi tek transaction'dadır: liste ve sayaç akışları her yazmada yeniden
+  /// sorgulanmak yerine yalnızca bir kez tetiklenir ve yarım kalmış bir yazım
+  /// (gövde var, `bodyFetchedAt` yok gibi) oluşamaz.
   Future<void> storeBody(MessageRow row, FetchedBody body) async {
     final plain =
         body.plainText ??
         (body.html != null ? await _htmlToPlain(body.html!) : null);
-
-    await _db.upsertBody(messageId: row.id, plainText: plain, html: body.html);
-
     final preview = TextExtraction.buildPreview(plain);
-    if (preview.isNotEmpty && preview != row.preview) {
-      await _db.updateMessage(
-        row.id,
-        MessagesCompanion(preview: Value(preview)),
-      );
-    }
 
-    if (body.attachments.isNotEmpty) {
-      await _db.replaceAttachments(
-        row.id,
-        body.attachments
-            .map(
-              (a) => AttachmentsCompanion.insert(
-                messageId: row.id,
-                partId: Value(a.partId),
-                fileName: Value(a.fileName),
-                mimeType: Value(a.mimeType),
-                sizeBytes: Value(a.sizeBytes),
-                contentId: Value(a.contentId),
-                isInline: Value(a.isInline),
-              ),
-            )
-            .toList(),
+    // İmza/logo gibi HTML gövdesine `cid:` ile gömülü inline parçalar gerçek
+    // ek sayılmaz (bkz. `_AttachmentStrip`teki `!a.isInline` süzgeci) — yoksa
+    // yalnızca gömülü görseli olan iletiler de "Ekleri Var" filtresine ve
+    // ataç ikonuna yanlışlıkla girer. Bayrak gövdenin gerçek içeriğiyle her
+    // zaman eşitlenir, böylece envelope aşamasında önceden yanlış "true"
+    // yazılmış iletiler de gövde çekildiğinde kendiliğinden düzelir.
+    final hasRealAttachments = body.attachments.any((a) => !a.isInline);
+
+    await _db.transaction(() async {
+      // İleti bu arada silinmiş/taşınmış olabilir (kullanıcı eylemi, eşitleme):
+      // olmayan bir satıra gövde yazmak yabancı anahtar hatası verirdi.
+      final current = await _db.messageById(row.id);
+      if (current == null) return;
+
+      final patch = MessagesCompanion(
+        preview: preview.isNotEmpty && preview != current.preview
+            ? Value(preview)
+            : const Value.absent(),
+        hasAttachments:
+            body.attachments.isNotEmpty &&
+                hasRealAttachments != current.hasAttachments
+            ? Value(hasRealAttachments)
+            : const Value.absent(),
       );
-      // İmza/logo gibi HTML gövdesine `cid:` ile gömülü inline parçalar
-      // gerçek ek sayılmaz (bkz. `_AttachmentStrip`teki `!a.isInline`
-      // süzgeci) — yoksa yalnızca gömülü görseli olan iletiler de "Ekleri
-      // Var" filtresine ve ataç ikonuna yanlışlıkla girer. Bayrak gövdenin
-      // gerçek içeriğiyle her zaman eşitlenir, böylece envelope aşamasında
-      // önceden yanlış "true" yazılmış iletiler de gövde çekildiğinde
-      // kendiliğinden düzelir.
-      final hasRealAttachments = body.attachments.any((a) => !a.isInline);
-      if (hasRealAttachments != row.hasAttachments) {
-        await _db.updateMessage(
+      await _db.upsertBody(
+        messageId: row.id,
+        plainText: plain,
+        html: body.html,
+        messagePatch: patch,
+      );
+
+      if (body.attachments.isNotEmpty) {
+        await _db.replaceAttachments(
           row.id,
-          MessagesCompanion(hasAttachments: Value(hasRealAttachments)),
+          body.attachments
+              .map(
+                (a) => AttachmentsCompanion.insert(
+                  messageId: row.id,
+                  partId: Value(a.partId),
+                  fileName: Value(a.fileName),
+                  mimeType: Value(a.mimeType),
+                  sizeBytes: Value(a.sizeBytes),
+                  contentId: Value(a.contentId),
+                  isInline: Value(a.isInline),
+                ),
+              )
+              .toList(),
         );
       }
-    }
+    });
   }
 
   // ------------------------------------------------------------ iç yardımcı
@@ -474,21 +596,24 @@ class SyncEngine {
   /// kullanılır: UID'ler hâlâ [mailbox]'ta duruyorsa zarfları yeniden
   /// çekilir. Artımlı eşitleme (`localHighest + 1`) silinmiş satırı kendiliğinden
   /// geri getirmez. Sunucuda artık olmayan UID'ler sessizce atlanır.
+  ///
+  /// Klasörün UIDVALIDITY'si değişmişse UID'ler başka iletileri gösterir;
+  /// bu durumda hiçbir şey geri yüklenmez ve hata döner.
   Future<Result<int>> restoreMessages({
     required int accountId,
     required MailboxRow mailbox,
     required List<int> uids,
-  }) async {
-    if (uids.isEmpty) return const Ok(0);
-    final connected = await _connection.ensureConnected(accountId);
-    if (connected is Err<void>) return Err(connected.failure);
+  }) {
+    if (uids.isEmpty) return Future.value(const Ok(0));
+    return _connection.exclusive<int>(accountId, () async {
+      final current = await _db.mailboxById(mailbox.id) ?? mailbox;
+      final selected = await _connection.selectVerified(current);
+      if (selected is Err<MailboxState>) return Err(selected.failure);
 
-    final selected = await _connection.imap.selectMailbox(mailbox.path);
-    if (selected is Err<MailboxState>) return Err(selected.failure);
-
-    final fetched = await _fetchAndStore(accountId, mailbox, uids);
-    if (fetched is Err<List<int>>) return Err(fetched.failure);
-    return Ok((fetched as Ok<List<int>>).value.length);
+      final fetched = await _fetchAndStore(accountId, mailbox, uids);
+      if (fetched is Err<List<int>>) return Err(fetched.failure);
+      return Ok((fetched as Ok<List<int>>).value.length);
+    });
   }
 
   Future<List<int>> _storeEnvelopes(
@@ -643,19 +768,23 @@ class SyncEngine {
   ) => keywords.map((k) => namesByKeyword[k]).whereType<String>().toList();
 
   /// Sunucuda artık olmayan iletileri yerelden siler.
-  Future<int> _syncDeletions(MailboxRow mailbox) async {
+  ///
+  /// Sunucudaki UID listesi alınamazsa hata döner (sessizce "0 silindi"
+  /// denmez): çağıran uzlaşmayı tamamlanmamış sayar ve sonraki turda yeniden
+  /// dener.
+  Future<Result<int>> _syncDeletions(MailboxRow mailbox) async {
     final all = await _connection.imap.searchAllUids();
-    if (all is Err<List<int>>) return 0;
+    if (all is Err<List<int>>) return Err(all.failure);
     final serverUids = (all as Ok<List<int>>).value.toSet();
 
     final localUids = await _db.uidsOf(mailbox.id);
     final vanished = localUids
         .where((uid) => !serverUids.contains(uid))
         .toList();
-    if (vanished.isEmpty) return 0;
+    if (vanished.isEmpty) return const Ok(0);
 
     await _db.deleteMessagesByUid(mailbox.id, vanished);
-    return vanished.length;
+    return Ok(vanished.length);
   }
 
   /// Bayrak değişikliklerini yerele yansıtır.
@@ -663,20 +792,32 @@ class SyncEngine {
   /// Bekleyen yerel işlemi olan iletiler atlanır; aksi hâlde kullanıcının
   /// az önce yaptığı değişiklik sunucudan gelen eski durumla geri alınır
   /// ve arayüzde "geri zıplama" görülür.
-  Future<int> _syncFlags(
+  ///
+  /// Sunucu bayrakları alınamazsa hata döner: çağıran `highestModSeq`'i
+  /// İLERLETMEZ. Aksi hâlde CONDSTORE `CHANGEDSINCE` bir sonraki turda bu
+  /// turdaki değişiklikleri hiç görmez ve başka cihazda okunan bir ileti
+  /// burada sonsuza dek okunmamış kalırdı.
+  Future<Result<int>> _syncFlags(
     int accountId,
     MailboxRow mailbox,
     MailboxState state,
     ServerCapabilities caps,
   ) async {
     final localUids = await _db.uidsOf(mailbox.id);
-    if (localUids.isEmpty) return 0;
+    if (localUids.isEmpty) return const Ok(0);
 
-    final useCondStore =
+    final hasCondStoreBaseline =
         caps.supportsCondStore &&
         mailbox.highestModSeq != null &&
-        state.highestModSeq != null &&
-        state.highestModSeq! > mailbox.highestModSeq!;
+        state.highestModSeq != null;
+
+    // CONDSTORE: modseq son uzlaşmadan beri hiç artmadıysa ne bir bayrak ne
+    // bir ileti değişmiştir — sunucuya hiç sormaya gerek yok.
+    if (hasCondStoreBaseline && state.highestModSeq == mailbox.highestModSeq) {
+      return const Ok(0);
+    }
+    final useCondStore =
+        hasCondStoreBaseline && state.highestModSeq! > mailbox.highestModSeq!;
 
     final window = useCondStore
         ? localUids
@@ -686,17 +827,21 @@ class SyncEngine {
       window,
       changedSinceModSeq: useCondStore ? mailbox.highestModSeq : null,
     );
-    if (fetched is Err<List<RemoteFlagState>>) return 0;
+    if (fetched is Err<List<RemoteFlagState>>) return Err(fetched.failure);
     final states = (fetched as Ok<List<RemoteFlagState>>).value;
-    if (states.isEmpty) return 0;
+    if (states.isEmpty) return const Ok(0);
 
     final locked = await _lockedUids(accountId, mailbox.id);
     final labelNamesByKeyword = await _labelNamesByKeyword(accountId);
+    // Satır başına ayrı sorgu yerine tek toplu okuma.
+    final rows = await _db.messagesByUids(mailbox.id, [
+      for (final remote in states) remote.uid,
+    ]);
 
-    var changed = 0;
+    final updates = <(int, MessagesCompanion)>[];
     for (final remote in states) {
       if (locked.contains(remote.uid)) continue;
-      final row = await _db.messageByUid(mailbox.id, remote.uid);
+      final row = rows[remote.uid];
       if (row == null) continue;
 
       final isSeen = remote.flags.contains(r'\Seen');
@@ -720,7 +865,7 @@ class SyncEngine {
         continue;
       }
 
-      await _db.updateMessage(
+      updates.add((
         row.id,
         MessagesCompanion(
           isSeen: Value(isSeen),
@@ -729,10 +874,17 @@ class SyncEngine {
           isForwarded: Value(isForwarded),
           labelsJson: Value(labelsJson),
         ),
-      );
-      changed++;
+      ));
     }
-    return changed;
+    if (updates.isEmpty) return const Ok(0);
+
+    // Tek transaction: liste akışları yazma başına değil bir kez yenilenir.
+    await _db.transaction(() async {
+      for (final (id, patch) in updates) {
+        await _db.updateMessage(id, patch);
+      }
+    });
+    return Ok(updates.length);
   }
 
   /// Bekleyen işlem kuyruğundaki iletilerin UID'leri.

@@ -202,15 +202,23 @@ class ShareNavigator with WidgetsBindingObserver {
     );
   }
 
-  /// Artık hiçbir taslağın eki olmayan eski paylaşım dosyalarını siler.
+  /// Artık hiçbir taslağın eki olmayan eski paylaşım dosyalarını ve yazma
+  /// ekranının kalıcı ek kopyalarını (bkz. `OutgoingAttachmentStore`) siler.
   Future<void> _sweep() async {
+    final database = _ref.read(databaseProvider);
     try {
-      final referenced = await _ref
-          .read(databaseProvider)
-          .outgoingAttachmentPaths();
+      final referenced = await database.outgoingAttachmentPaths();
       await _service.sweep(referencedPaths: referenced);
     } on Object catch (error) {
       debugPrint('Paylaşım dosyaları temizlenemedi: $error');
+    }
+    try {
+      final active = await database.activeOutgoingAttachmentPaths();
+      await _ref
+          .read(outgoingAttachmentStoreProvider)
+          .sweep(activePaths: active);
+    } on Object catch (error) {
+      debugPrint('Giden ek kopyaları temizlenemedi: $error');
     }
   }
 }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:enough_mail/enough_mail.dart' as em;
 
@@ -8,8 +9,9 @@ import '../../domain/models/mail_models.dart';
 
 /// Gönderim sonucu.
 ///
-/// [mimeSource] gönderilen iletinin ham hâlidir; Gönderilenler klasörüne
-/// `APPEND` etmek için gerekir. SMTP gönderimi ile APPEND ayrı iki adımdır:
+/// [mimeSource] gönderilen iletinin ham hâlidir (Bcc alıcıları dahil: kendi
+/// kopyamızda görünmeleri gerekir); Gönderilenler klasörüne `APPEND` etmek
+/// için gerekir. SMTP gönderimi ile APPEND ayrı iki adımdır:
 /// tek işlem sayılırsa APPEND hatasında gönderim tekrarlanır ve alıcı
 /// iletiyi iki kez alır.
 class SentMessage {
@@ -37,18 +39,26 @@ class EnoughMailSmtpService implements SmtpService {
     required MailServerConfig config,
     required OutgoingMessage message,
   }) async {
-    final built = MimeBuilder.build(message);
-    if (built is Err<BuiltMessage>) return Err(built.failure);
-    final builtMessage = (built as Ok<BuiltMessage>).value;
+    // Dosya okuma, base64 ve MIME oluşturma ağırdır (25 MB'lık bir ek yüzlerce
+    // MB'lık geçici metne dönüşür); arayüz isolate'inde çalışsaydı ekran
+    // donar, düşük belleği olan cihazda uygulama çökerdi.
+    final built = await MimeBuilder.buildForWire(message);
+    if (built is Err<WireMessage>) return Err(built.failure);
+    final wire = (built as Ok<WireMessage>).value;
 
     em.SmtpClient? client;
     try {
       client = await _connect(config);
 
-      final response = await client.sendMessage(
-        builtMessage.mime,
-        from: em.MailAddress(message.from.name, message.from.email),
-        recipients: message.allRecipients
+      // Bcc alıcıları YALNIZCA zarfta (`RCPT TO`) gider. İleti başlıklarına
+      // hiç yazılmaz: `enough_mail` gönderirken `^Bcc:.*` satırını siler ama
+      // uzun bir Bcc listesi 76 karakterde katlanır ve devam satırları
+      // silinmeden kalıp bir önceki başlığa (To/Cc) yapışırdı — yani gizli
+      // alıcılar diğer alıcılara görünürdü.
+      final response = await client.sendMessageText(
+        wire.source,
+        em.MailAddress(message.from.name, message.from.email),
+        message.allRecipients
             .map((a) => em.MailAddress(a.name, a.email))
             .toList(),
         use8BitEncoding: false,
@@ -60,8 +70,8 @@ class EnoughMailSmtpService implements SmtpService {
 
       return Ok(
         SentMessage(
-          messageId: builtMessage.messageId,
-          mimeSource: builtMessage.source,
+          messageId: wire.messageId,
+          mimeSource: MimeBuilder.withBccHeader(wire.source, message.bcc),
         ),
       );
     } catch (error) {
@@ -200,6 +210,15 @@ class _SmtpFailure implements Exception {
   final bool isTls;
 }
 
+/// SMTP'ye giden ham ileti: Bcc başlığı İÇERMEZ (bkz.
+/// `EnoughMailSmtpService.send`).
+class WireMessage {
+  const WireMessage({required this.source, required this.messageId});
+
+  final String source;
+  final String messageId;
+}
+
 /// Oluşturulmuş MIME iletisi.
 class BuiltMessage {
   const BuiltMessage({
@@ -218,8 +237,73 @@ class BuiltMessage {
 /// Yanıtlarda `In-Reply-To` ve `References` başlıkları yazılır; bunlar
 /// olmadan alıcının istemcisi yanıtı konuşmaya bağlayamaz.
 abstract final class MimeBuilder {
-  static Result<BuiltMessage> build(OutgoingMessage message) {
+  /// [message]'ı SMTP'ye gidecek ham metne çevirir — Bcc başlığı OLMADAN —
+  /// ve bunu ayrı bir isolate'te yapar. Sonuç yalnızca metin taşır (isolate
+  /// sınırından güvenle geçer).
+  static Future<Result<WireMessage>> buildForWire(OutgoingMessage message) =>
+      buildSourceInIsolate(message, includeBcc: false);
+
+  /// [build]'in ayrı bir isolate'te çalışan hâli: dosya okuma ve base64 ana
+  /// isolate'i (dolayısıyla ekranı) bloke etmez. Sonuç yalnızca metin taşır.
+  static Future<Result<WireMessage>> buildSourceInIsolate(
+    OutgoingMessage message, {
+    bool includeBcc = true,
+    bool skipMissingAttachments = false,
+  }) => Isolate.run(
+    () => _buildWireMessage(
+      message,
+      includeBcc: includeBcc,
+      skipMissingAttachments: skipMissingAttachments,
+    ),
+  );
+
+  /// Gönderilen iletinin KENDİ kopyası (Gönderilenler) için, Bcc alıcılarını
+  /// başlık olarak ham metnin başına ekler.
+  static String withBccHeader(String source, List<EmailAddress> bcc) {
+    if (bcc.isEmpty) return source;
+    final buffer = StringBuffer();
+    em.Header(
+      'Bcc',
+      bcc.map((a) => em.MailAddress(a.name, a.email).encode()).join(', '),
+    ).render(buffer);
+    buffer.write(source);
+    return buffer.toString();
+  }
+
+  /// [message]'dan MIME oluşturur.
+  ///
+  /// [includeBcc] `false` ise Bcc başlığı yazılmaz (SMTP gönderimi).
+  /// [skipMissingAttachments] `false` iken (varsayılan) cihazda artık olmayan
+  /// bir ek [AttachmentMissingFailure] ile reddedilir: ek olmadan göndermek
+  /// alıcıya, kullanıcının eklediğini sandığı dosya olmadan bir ileti
+  /// ulaştırır. Taslak/Gönderilenler kopyası gibi yedek kopyalarda `true`
+  /// verilir — orada eksik bir ek yüzünden kopyanın hiç yazılmaması daha
+  /// kötüdür.
+  static Result<BuiltMessage> build(
+    OutgoingMessage message, {
+    bool includeBcc = true,
+    bool skipMissingAttachments = false,
+  }) {
     try {
+      final attachmentFiles = <File>[];
+      final missing = <String>[];
+      for (final path in message.attachmentPaths) {
+        final file = File(path);
+        if (file.existsSync()) {
+          attachmentFiles.add(file);
+        } else {
+          missing.add(path.split(RegExp(r'[\\/]')).last);
+        }
+      }
+      if (missing.isNotEmpty && !skipMissingAttachments) {
+        return Err(
+          AttachmentMissingFailure(
+            fileNames: missing,
+            detail: 'ek dosyası yok: ${missing.join(', ')}',
+          ),
+        );
+      }
+
       final builder = em.MessageBuilder()
         ..from = [em.MailAddress(message.from.name, message.from.email)]
         ..to = message.to
@@ -232,7 +316,7 @@ abstract final class MimeBuilder {
         builder.cc =
             message.cc.map((a) => em.MailAddress(a.name, a.email)).toList();
       }
-      if (message.bcc.isNotEmpty) {
+      if (includeBcc && message.bcc.isNotEmpty) {
         builder.bcc =
             message.bcc.map((a) => em.MailAddress(a.name, a.email)).toList();
       }
@@ -253,7 +337,7 @@ abstract final class MimeBuilder {
       builder.setHeader('X-Mailer', 'KAYDET');
 
       final hasHtml = message.html != null && message.html!.trim().isNotEmpty;
-      final hasAttachments = message.attachmentPaths.isNotEmpty;
+      final hasAttachments = attachmentFiles.isNotEmpty;
 
       // Düz metin + HTML ASLA kardeş (`multipart/mixed`) parçalar olarak
       // gönderilmez: istemciler karışık parçaları art arda gösterir, yani
@@ -287,11 +371,9 @@ abstract final class MimeBuilder {
         builder.addTextPlain(message.plainText);
       }
 
-      for (final path in message.attachmentPaths) {
-        final file = File(path);
-        if (!file.existsSync()) continue;
+      for (final file in attachmentFiles) {
         final bytes = file.readAsBytesSync();
-        final name = path.split(RegExp(r'[\\/]')).last;
+        final name = file.path.split(RegExp(r'[\\/]')).last;
         builder.addBinary(
           bytes,
           em.MediaType.guessFromFileName(name),
@@ -328,3 +410,17 @@ abstract final class MimeBuilder {
     return value;
   }
 }
+
+/// [MimeBuilder.buildSourceInIsolate]'in isolate giriş noktası (üst düzey
+/// işlev: yalnızca verilen değerleri yakalar).
+Result<WireMessage> _buildWireMessage(
+  OutgoingMessage message, {
+  required bool includeBcc,
+  required bool skipMissingAttachments,
+}) => MimeBuilder.build(
+  message,
+  includeBcc: includeBcc,
+  skipMissingAttachments: skipMissingAttachments,
+).map(
+  (built) => WireMessage(source: built.source, messageId: built.messageId),
+);

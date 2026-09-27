@@ -67,7 +67,16 @@ class _SearchFiltersScreenState extends ConsumerState<SearchFiltersScreen> {
         ),
         title: const Text('Filtreler'),
         actions: [
-          TextButton(onPressed: _apply, child: const Text('Uygula')),
+          TextButton(
+            onPressed: _apply,
+            // Varsayılan metin düğmesi rengi (`t.accent`) artık üst çubuğun
+            // kendi zeminiyle (`appBarBg`) aynı mavi — üst çubuğun ana
+            // metin/ikon rengiyle ("onAppBar") eşleşecek şekilde ezilir.
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).appBarTheme.foregroundColor,
+            ),
+            child: const Text('Uygula'),
+          ),
           const SizedBox(width: Space.xs),
         ],
       ),

@@ -6,9 +6,11 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/sync_controller.dart';
+import '../../../core/result.dart' show AuthFailure;
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/actions/message_actions.dart';
+import '../../core/actions/password_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
@@ -76,7 +78,16 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     final itemsAsync = ref.watch(mailListItemsProvider);
     final selection = ref.watch(selectionProvider);
     final isSelectionMode = ref.watch(isSelectionModeProvider);
-    final sync = ref.watch(syncControllerProvider);
+    // `SyncState`in tamamı DEĞİL, yalnızca bu ekranın gösterdiği alanlar
+    // izlenir: her eşitleme turu `isSyncing`/`lastSyncAt`'i değiştirir ve tüm
+    // `SyncState` izlenseydi ekran (AppBar ve liste dahil) her turda baştan
+    // kurulurdu.
+    final isOffline = ref.watch(syncControllerProvider.select((s) => s.isOffline));
+    final syncError = ref.watch(syncControllerProvider.select((s) => s.lastError));
+    final isLoadingMore = ref.watch(
+      syncControllerProvider.select((s) => s.isLoadingMore),
+    );
+    final hasMoreLocal = ref.watch(syncControllerProvider.select((s) => s.hasMore));
     final mailbox = ref.watch(currentMailboxProvider);
     final folder = ref.watch(selectedFolderProvider);
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
@@ -91,7 +102,11 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
         context,
         isSelectionMode: isSelectionMode,
         selectionCount: selection.length,
-        visibleIds: messages.value?.map((m) => m.id).toList() ?? const [],
+        // Yalnızca "Tümünü seç" için gerekir: seçim modu dışında her yeniden
+        // kurulumda binlerce kimlikten liste üretmeye gerek yok.
+        visibleIds: isSelectionMode
+            ? (messages.value?.map((m) => m.id).toList() ?? const <int>[])
+            : const <int>[],
         title: folder?.isFlaggedView == true
             ? 'Sabitlenenler'
             : (mailbox?.name ?? 'Kaydet'),
@@ -99,21 +114,29 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       ),
       body: Column(
         children: [
-          if (sync.isOffline)
+          if (isOffline)
             const StatusBanner(
               message:
                   'Çevrimdışısınız. Değişiklikleriniz kaydedildi, '
                   'bağlantı gelince gönderilecek.',
               icon: LucideIcons.cloudOff,
             ),
-          if (sync.lastError != null && !sync.isOffline)
+          if (syncError != null && !isOffline)
             StatusBanner(
-              message: sync.lastError!.userMessage,
+              message: syncError.userMessage,
               icon: LucideIcons.triangleAlert,
               color: t.danger,
-              actionLabel: 'Yeniden dene',
-              onAction: () =>
-                  ref.read(syncControllerProvider.notifier).syncCurrentFolder(),
+              // Şifre değişmiş ya da kayıtlı şifre yoksa "yeniden dene" hiçbir
+              // şey düzeltmez: kullanıcı şifreyi girer, hesap ve yerel veri
+              // korunur.
+              actionLabel: syncError is AuthFailure
+                  ? 'Şifreyi güncelle'
+                  : 'Yeniden dene',
+              onAction: () => syncError is AuthFailure
+                  ? showUpdatePasswordDialog(context, ref)
+                  : ref
+                        .read(syncControllerProvider.notifier)
+                        .syncCurrentFolder(),
             ),
           Expanded(
             child: RefreshIndicator(
@@ -172,8 +195,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                       items: items,
                       labels: labels,
                       isSentLike: isSentLike,
-                      isLoadingMore: sync.isLoadingMore,
-                      hasMore: sync.hasMore && mailbox?.hasMoreOnServer == true,
+                      isLoadingMore: isLoadingMore,
+                      hasMore: hasMoreLocal && mailbox?.hasMoreOnServer == true,
                     ),
                   ),
                 ),
@@ -434,13 +457,18 @@ class _ComposeFab extends StatelessWidget {
 }
 
 /// Kaydırma hareketleriyle arşivle / sil — tek harekette, ikinci bir
-/// dokunuş gerektirmeden.
+/// dokunuş gerektirmeden. Çöp Kutusu'nda birincil yön (sağa kaydırma)
+/// bunun yerine Gelen Kutusuna geri yükler: o klasörde "arşivle" anlamsız,
+/// kullanıcının asıl istediği tek eylem geri yüklemektir (bkz.
+/// `restoreMessagesToInbox`) — daha önce bunun için uzun basıp seçim moduna
+/// girip "Taşı" menüsünden Gelen Kutusu'nu seçmek gerekiyordu.
 ///
-/// FİZİKSEL yönler: sağa kaydır → arşivle, sola kaydır → sil. `Dismissible`ın
-/// yönleri metin yönüne göredir (RTL'de `startToEnd` sola kaydırmadır); bu
-/// yüzden eşleme `Directionality`'ye bakılarak yapılır. Eşik aşılıp bırakılınca
-/// eylem çalışır ve satır yumuşakça daralarak kaybolur; eşik aşılmadan
-/// bırakılırsa satır yerine döner (açık kalan bir eylem paneli yoktur).
+/// FİZİKSEL yönler: sağa kaydır → arşivle/geri yükle, sola kaydır → sil.
+/// `Dismissible`ın yönleri metin yönüne göredir (RTL'de `startToEnd` sola
+/// kaydırmadır); bu yüzden eşleme `Directionality`'ye bakılarak yapılır. Eşik
+/// aşılıp bırakılınca eylem çalışır ve satır yumuşakça daralarak kaybolur;
+/// eşik aşılmadan bırakılırsa satır yerine döner (açık kalan bir eylem
+/// paneli yoktur).
 ///
 /// Seçim durumunu kendi diliminden (`selectionProvider.select`) okur —
 /// ebeveynden parametre olarak almaz. Böylece bir satır seçildiğinde/
@@ -490,13 +518,13 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
   }
 
   /// Kalıcı silme onay ister (bkz. `confirmDelete`); reddedilirse satır
-  /// yerine döner. Arşivde onay yoktur.
-  Future<bool> _confirm(bool isArchive) {
-    if (isArchive) return Future.value(true);
+  /// yerine döner. Birincil yönde (arşivle/geri yükle) onay yoktur.
+  Future<bool> _confirm(bool isPrimaryAction) {
+    if (isPrimaryAction) return Future.value(true);
     return confirmDelete(context, ref, [widget.message.id]);
   }
 
-  Future<void> _onDismissed(bool isArchive) async {
+  Future<void> _onDismissed(bool isPrimaryAction) async {
     setState(() {
       _removed = true;
       _armed = false;
@@ -504,13 +532,24 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     final id = widget.message.id;
     final database = ref.read(databaseProvider);
 
-    if (isArchive) {
-      await archiveMessages(
-        context,
-        ref,
-        [id],
-        bottomInset: _ComposeFab.footprint,
-      );
+    if (isPrimaryAction) {
+      final isTrash =
+          ref.read(currentMailboxProvider)?.specialUse == SpecialUse.trash;
+      if (isTrash) {
+        await restoreMessagesToInbox(
+          context,
+          ref,
+          [id],
+          bottomInset: _ComposeFab.footprint,
+        );
+      } else {
+        await archiveMessages(
+          context,
+          ref,
+          [id],
+          bottomInset: _ComposeFab.footprint,
+        );
+      }
     } else {
       await deleteMessagesWithUndo(
         context,
@@ -541,29 +580,44 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     final mailbox = ref.watch(currentMailboxProvider);
 
     final ltr = Directionality.of(context) == TextDirection.ltr;
-    final archiveDirection = ltr
+    final primaryDirection = ltr
         ? DismissDirection.startToEnd
         : DismissDirection.endToStart;
     final deleteDirection = ltr
         ? DismissDirection.endToStart
         : DismissDirection.startToEnd;
 
+    final isTrash = mailbox?.specialUse == SpecialUse.trash;
+
     // Arşivde/taslaklarda arşivleme anlamsız (zaten orada / sunucuya hiç
-    // gitmemiş yerel kayıt) — yalnızca sil yönü açık kalır.
+    // gitmemiş yerel kayıt) — yalnızca sil yönü açık kalır. Çöp Kutusu'nda
+    // birincil yön geri yüklemeye döndüğü için bu klasörler için hâlâ geçerli.
     final message = widget.message;
-    final canArchive =
+    final canPrimaryAction =
         mailbox?.specialUse != SpecialUse.archive &&
         mailbox?.specialUse != SpecialUse.drafts &&
         !message.isDraft &&
         !message.isLocalOnly;
 
-    final archivePane = _SwipeBackground(
-      color: t.success,
-      icon: LucideIcons.archive,
-      label: 'Arşivle',
-      alignment: Alignment.centerLeft,
-      armed: _armed,
-    );
+    final primaryPane = isTrash
+        ? _SwipeBackground(
+            // `accent` koyu temada zemin üzerinde METİN/ikon için ayarlıdır
+            // (açık bir ton) — dolgu olarak kullanılırsa üstündeki beyaz
+            // simge/yazı okunmaz olurdu. `accentFill` beyazla eşleşecek
+            // şekilde ayrıca ayarlanmış "dolgu" tonudur (bkz. `tokens.dart`).
+            color: t.accentFill,
+            icon: LucideIcons.inbox,
+            label: 'Gelen Kutusuna Taşı',
+            alignment: Alignment.centerLeft,
+            armed: _armed,
+          )
+        : _SwipeBackground(
+            color: t.success,
+            icon: LucideIcons.archive,
+            label: 'Arşivle',
+            alignment: Alignment.centerLeft,
+            armed: _armed,
+          );
     final deletePane = _SwipeBackground(
       color: t.dangerFill,
       icon: LucideIcons.trash2,
@@ -574,19 +628,21 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 
     return Dismissible(
       key: ValueKey('swipe-${message.id}'),
-      direction: canArchive ? DismissDirection.horizontal : deleteDirection,
+      direction: canPrimaryAction
+          ? DismissDirection.horizontal
+          : deleteDirection,
       dismissThresholds: {
-        archiveDirection: _threshold,
+        primaryDirection: _threshold,
         deleteDirection: _threshold,
       },
       resizeDuration: context.motion(Motion.slow),
       movementDuration: context.motion(Motion.base),
       // `background` startToEnd, `secondaryBackground` endToStart içindir.
-      background: ltr ? archivePane : deletePane,
-      secondaryBackground: ltr ? deletePane : archivePane,
+      background: ltr ? primaryPane : deletePane,
+      secondaryBackground: ltr ? deletePane : primaryPane,
       onUpdate: _onUpdate,
-      confirmDismiss: (direction) => _confirm(direction == archiveDirection),
-      onDismissed: (direction) => _onDismissed(direction == archiveDirection),
+      confirmDismiss: (direction) => _confirm(direction == primaryDirection),
+      onDismissed: (direction) => _onDismissed(direction == primaryDirection),
       child: MailRow(
         message: message,
         labels: widget.labels,
@@ -980,60 +1036,87 @@ class _LoadMoreControl extends StatelessWidget {
 /// kısa an için çalışır (bkz. `skipLoadingOnReload: true` kullanan çağrı
 /// yeri — klasör/filtre/hesap değişimi bunu artık tetiklemiyor). Mail
 /// gövdesindeki `_BodyShimmer` ile aynı `ShimmerSurface` mekanizmasını
-/// paylaşır: tek bir parlaklık bandı 8 satırın TAMAMI üzerinde birlikte
-/// kayar.
+/// paylaşır: tek bir parlaklık bandı TÜM satırların üzerinde birlikte kayar.
+///
+/// Satır sayısı sabit değil: `LayoutBuilder` ile bu widget'a ayrılan gerçek
+/// viewport yüksekliği (AppBar/SafeArea/alt gezinme zaten ölçüme dahil,
+/// çünkü bu widget onların ARASINDAKİ `Expanded` alana yerleşir) satır
+/// yüksekliğine (`Dimens.listRowMinHeight`) bölünüp yukarı yuvarlanır —
+/// böylece ekran ne kadar uzun olursa olsun iskelet satırları en alta kadar
+/// devam eder, sabit "8 satır"ın altında boşluk kalmaz. `ListView.builder`
+/// kullanılması (eskiden `Column`) bu yuvarlamanın (son satır viewport'tan
+/// az taşabilir) bir taşma hatasına yol açmadan, tembel biçimde çizilmesini
+/// sağlar; kaydırma `NeverScrollableScrollPhysics` ile devre dışı bırakılır,
+/// yükleniyor durumunda kaydırılacak gerçek içerik yoktur.
 class _ListSkeleton extends StatelessWidget {
   const _ListSkeleton();
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     return ShimmerSurface(
-      child: Column(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewportHeight = constraints.maxHeight.isFinite
+              ? constraints.maxHeight
+              : MediaQuery.sizeOf(context).height;
+          final itemCount = (viewportHeight / Dimens.listRowMinHeight)
+              .ceil()
+              .clamp(1, 64)
+              .toInt();
+          return ListView.builder(
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: itemCount,
+            itemBuilder: (context, index) => const _ListSkeletonRow(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ListSkeletonRow extends StatelessWidget {
+  const _ListSkeletonRow();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Container(
+      // Sabit yükseklik yerine minimum: gerçek MailRow'la aynı kural —
+      // Dimens küçüldükçe burada elle senkron tutmaya gerek kalmaz ve
+      // içerik sığmadığında taşma hatası vermez.
+      constraints: const BoxConstraints(minHeight: Dimens.listRowMinHeight),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Space.lg,
+        vertical: Space.sm,
+      ),
+      decoration: BoxDecoration(
+        border: Border(bottom: BorderSide(color: t.divider)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          for (var i = 0; i < 8; i++)
-            Container(
-              // Sabit yükseklik yerine minimum: gerçek MailRow'la aynı
-              // kural — Dimens küçüldükçe burada elle senkron tutmaya
-              // gerek kalmaz ve içerik sığmadığında taşma hatası vermez.
-              constraints: const BoxConstraints(
-                minHeight: Dimens.listRowMinHeight,
-              ),
-              padding: const EdgeInsets.symmetric(
-                horizontal: Space.lg,
-                vertical: Space.sm,
-              ),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: t.divider)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Container(
-                    width: Dimens.avatarSize,
-                    height: Dimens.avatarSize,
-                    decoration: BoxDecoration(
-                      color: t.surface,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: Space.md),
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        ShimmerBar(width: 140, height: 11),
-                        SizedBox(height: Space.xs),
-                        ShimmerBar(widthFactor: 0.85, height: 10),
-                        SizedBox(height: Space.xs),
-                        ShimmerBar(widthFactor: 0.65, height: 9),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
+          Container(
+            width: Dimens.avatarSize,
+            height: Dimens.avatarSize,
+            decoration: BoxDecoration(
+              color: t.surface,
+              shape: BoxShape.circle,
             ),
+          ),
+          const SizedBox(width: Space.md),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                ShimmerBar(width: 140, height: 11),
+                SizedBox(height: Space.xs),
+                ShimmerBar(widthFactor: 0.85, height: 10),
+                SizedBox(height: Space.xs),
+                ShimmerBar(widthFactor: 0.65, height: 9),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -1068,24 +1151,26 @@ class _FilterMenuButton extends ConsumerWidget {
     return MenuAnchor(
       animated: true,
       menuChildren: [
-        CheckboxMenuButton(
-          value: filter.unreadOnly,
-          onChanged: (value) => notifier.setUnreadOnly(value ?? false),
-          closeOnActivate: false,
-          child: _iconLabel(LucideIcons.mailOpen, 'Okunmamış'),
+        _FilterOptionButton(
+          icon: LucideIcons.mailOpen,
+          label: 'Okunmamış',
+          selected: filter.unreadOnly,
+          onPressed: () => notifier.setUnreadOnly(!filter.unreadOnly),
         ),
-        CheckboxMenuButton(
-          value: filter.flaggedOnly,
-          onChanged: (value) => notifier.setFlaggedOnly(value ?? false),
-          closeOnActivate: false,
-          child: _iconLabel(LucideIcons.pin, 'Sabitlenmiş'),
+        _FilterOptionButton(
+          icon: LucideIcons.pin,
+          label: 'Sabitlenmiş',
+          selected: filter.flaggedOnly,
+          onPressed: () => notifier.setFlaggedOnly(!filter.flaggedOnly),
         ),
-        CheckboxMenuButton(
-          value: filter.withAttachmentsOnly,
-          onChanged: (value) => notifier.setWithAttachmentsOnly(value ?? false),
-          closeOnActivate: false,
-          child: _iconLabel(LucideIcons.paperclip, 'Ek dosyalı'),
+        _FilterOptionButton(
+          icon: LucideIcons.paperclip,
+          label: 'Ek dosyalı',
+          selected: filter.withAttachmentsOnly,
+          onPressed: () =>
+              notifier.setWithAttachmentsOnly(!filter.withAttachmentsOnly),
         ),
+        const Divider(height: 1),
         if (labels.isNotEmpty)
           SubmenuButton(
             animated: true,
@@ -1136,17 +1221,55 @@ class _FilterMenuButton extends ConsumerWidget {
           ),
         ],
       ],
-      builder: (context, controller, child) => IconButton(
-        icon: Badge(
-          isLabelVisible: filter.isActive,
-          smallSize: 8,
-          backgroundColor: t.accent,
-          child: const Icon(LucideIcons.filter),
-        ),
-        tooltip: 'Filtrele',
-        onPressed: () =>
-            controller.isOpen ? controller.close() : controller.open(),
-      ),
+      builder: (context, controller, child) {
+        // Üst çubuğun kendi ana metin rengi (`onAppBar`) — açık temada beyaz,
+        // koyu temada `textPrimary`. Pilin zemini bilerek üst çubuktan
+        // (`appBarBg`) ayrışan `accentStrong` tonundadır, aksi halde referans
+        // görseldeki gibi düğme header'ın içinde görünmez olurdu.
+        final onAppBar =
+            Theme.of(context).appBarTheme.foregroundColor ?? t.textPrimary;
+        return Padding(
+          padding: const EdgeInsets.only(right: Space.xs),
+          child: Material(
+            color: t.accentStrong,
+            shape: const StadiumBorder(),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: () =>
+                  controller.isOpen ? controller.close() : controller.open(),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Space.md,
+                  vertical: Space.sm,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Filtrele',
+                      style: AppText.labelMedium.copyWith(
+                        color: onAppBar,
+                        fontSize: 13 * AppText.scale,
+                      ),
+                    ),
+                    if (filter.isActive) ...[
+                      const SizedBox(width: Space.xs),
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: onAppBar,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -1165,6 +1288,91 @@ class _FilterMenuButton extends ConsumerWidget {
     MessageSort.senderAZ => 'Gönderene göre (A-Z)',
     MessageSort.subjectAZ => 'Konuya göre (A-Z)',
   };
+}
+
+/// Filtre menüsündeki tek bir aç/kapa satırı — alttaki "Etiket ile"/"Sırala"
+/// [SubmenuButton]'larıyla AYNI [MenuItemButton] yuvalarını kullanır
+/// (`leadingIcon`/`child`/`trailingIcon`): böylece yazı tipi, ikon boyutu ve
+/// satır yüksekliği menünün geri kalanıyla otomatik olarak birebir eşleşir —
+/// yalnızca sağdaki ok yerine seçili durumu gösteren bir radyo halkası var
+/// (bkz. [_FilterRadioMark]). Altta yatan durum hâlâ bağımsız aç/kapa
+/// (checkbox mantığı, [notifier]'daki `setX` çağrıları birbirini
+/// etkilemez) — yalnızca görünüm referans görseldeki radyo düğmesine
+/// benzetildi.
+class _FilterOptionButton extends StatelessWidget {
+  const _FilterOptionButton({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final accentColor = selected ? t.accent : null;
+
+    return MenuItemButton(
+      onPressed: onPressed,
+      closeOnActivate: false,
+      leadingIcon: Icon(icon, color: accentColor),
+      trailingIcon: _FilterRadioMark(
+        selected: selected,
+        color: selected ? t.accent : t.textTertiary,
+      ),
+      child: Text(
+        label,
+        style: accentColor == null
+            ? null
+            : TextStyle(color: accentColor, fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+}
+
+/// [_FilterOptionButton]'ın sağındaki durum göstergesi — referans görseldeki
+/// gibi düz bir daire: seçili değilken ince bir halka, seçiliyken dolu bir
+/// iç noktayla vurgulanan bir halka.
+class _FilterRadioMark extends StatelessWidget {
+  const _FilterRadioMark({required this.selected, required this.color});
+
+  final bool selected;
+  final Color color;
+
+  static const double _diameter = 20;
+  static const double _dotDiameter = 10;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedContainer(
+      duration: context.motion(Motion.fast),
+      curve: Motion.standard,
+      width: _diameter,
+      height: _diameter,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: color, width: 1.5),
+      ),
+      child: AnimatedSwitcher(
+        duration: context.motion(Motion.fast),
+        child: selected
+            ? Center(
+                key: const ValueKey(true),
+                child: Container(
+                  width: _dotDiameter,
+                  height: _dotDiameter,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+                ),
+              )
+            : const SizedBox.shrink(key: ValueKey(false)),
+      ),
+    );
+  }
 }
 
 /// Gelen Kutusu normal-mod üst çubuğu.
@@ -1247,6 +1455,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                               size: Dimens.avatarSize,
                               color:
                                   theme.appBarTheme.iconTheme?.color ??
+                                  theme.appBarTheme.foregroundColor ??
                                   t.textPrimary,
                             ),
                     ),
@@ -1278,7 +1487,13 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                         style: AppText.bodyMedium.copyWith(
                           fontSize: 12.5 * AppText.scale,
                           fontWeight: FontWeight.w500,
-                          color: t.textSecondary,
+                          // Üst çubuğun kendi ana metin rengi (`onAppBar`)
+                          // hafif saydamlaştırılır — başlıkla aynı beyaz
+                          // yerine ikincil bir hiyerarşi kalsın diye.
+                          color:
+                              (theme.appBarTheme.titleTextStyle?.color ??
+                                      t.textSecondary)
+                                  .withValues(alpha: 0.82),
                         ),
                       ),
                   ],
@@ -1292,6 +1507,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                 color:
                     theme.appBarTheme.actionsIconTheme?.color ??
                     theme.appBarTheme.iconTheme?.color ??
+                    theme.appBarTheme.foregroundColor ??
                     t.textPrimary,
                 onPressed: onSearchTap,
               ),

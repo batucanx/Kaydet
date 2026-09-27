@@ -31,34 +31,31 @@ abstract final class SendFeedback {
   ///
   /// [bottomInset], çağıran ekranın altındaki öğenin (ör. "Yeni" düğmesi)
   /// yüksekliğidir — bkz. [KaydetNotice.show].
+  ///
+  /// [undoDuration] ve [onUndo] sağlanırsa, kullanıcıya bu süre boyunca
+  /// "Geri Al" seçeneği sunulur. Süre dolduğunda [onUndoExpired] tetiklenir ve
+  /// normal gönderim sonucu izlenmeye devam eder.
   static void track(
     OverlayState overlay,
     Stream<OutboxState?> states, {
     double bottomInset = 0,
     Duration patience = defaultPatience,
+    Duration? undoDuration,
+    VoidCallback? onUndo,
+    VoidCallback? onUndoExpired,
   }) {
     void notify(String message) {
       if (!overlay.mounted) return;
       KaydetNotice.show(overlay, message: message, bottomInset: bottomInset);
     }
 
-    // "Gönderiliyor" bildirimi sonuç gelene kadar açık kalır; sonuç onu
-    // yumuşakça yenisiyle değiştirir. Süre, bekleme sınırının biraz üstündedir
-    // — bir aksilikte bile ekranda sonsuza dek kalmaz.
-    if (overlay.mounted) {
-      KaydetNotice.show(
-        overlay,
-        message: sendingMessage,
-        bottomInset: bottomInset,
-        duration: patience + const Duration(seconds: 5),
-      );
-    }
-
     late final StreamSubscription<OutboxState?> subscription;
-    Timer? timer;
+    Timer? patienceTimer;
+    Timer? undoTimer;
 
     void finish(String? message) {
-      timer?.cancel();
+      undoTimer?.cancel();
+      patienceTimer?.cancel();
       unawaited(subscription.cancel());
       if (message != null) {
         notify(message);
@@ -67,7 +64,44 @@ abstract final class SendFeedback {
       }
     }
 
-    timer = Timer(patience, () => finish(waitingMessage));
+    // "Gönderiliyor" bildirimi: Geri alma penceresi varsa "Geri Al" düğmesiyle,
+    // yoksa düz bildirim olarak açılır.
+    if (overlay.mounted) {
+      if (undoDuration != null && onUndo != null) {
+        KaydetNotice.show(
+          overlay,
+          message: sendingMessage,
+          actionLabel: 'Geri Al',
+          onAction: () {
+            finish(null);
+            onUndo();
+          },
+          bottomInset: bottomInset,
+          duration: undoDuration + const Duration(seconds: 1),
+        );
+
+        undoTimer = Timer(undoDuration, () {
+          onUndoExpired?.call();
+          if (overlay.mounted) {
+            KaydetNotice.show(
+              overlay,
+              message: sendingMessage,
+              bottomInset: bottomInset,
+              duration: patience + const Duration(seconds: 5),
+            );
+          }
+        });
+      } else {
+        KaydetNotice.show(
+          overlay,
+          message: sendingMessage,
+          bottomInset: bottomInset,
+          duration: patience + const Duration(seconds: 5),
+        );
+      }
+    }
+
+    patienceTimer = Timer(patience, () => finish(waitingMessage));
     subscription = states.listen(
       (state) {
         switch (state) {

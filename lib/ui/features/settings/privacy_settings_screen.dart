@@ -40,6 +40,20 @@ class PrivacySettingsScreen extends ConsumerWidget {
                       .setConfirmBeforeDelete(value),
                 ),
               ),
+              SettingsTile(
+                icon: LucideIcons.image,
+                title: 'Gönderen logoları',
+                subtitle:
+                    'Kapalıyken gönderenlerin alan adları hiçbir dış servise '
+                    'iletilmez; avatarlarda renkli baş harf görünür. Açıkken '
+                    'logolar Google favicon servisinden alınır.',
+                trailing: Switch(
+                  value: settings.showBrandLogos,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setShowBrandLogos(value),
+                ),
+              ),
             ],
           ),
         ],

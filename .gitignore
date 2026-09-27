@@ -46,3 +46,7 @@ app.*.map.json
 
 # Local tool runtime state
 .claude/*.lock
+
+# Push backend secrets — gerçek değerler yalnızca yerelde (bkz.
+# lib/app/push_backend_config.example.dart).
+/lib/app/push_backend_config.dart

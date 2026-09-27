@@ -5,12 +5,30 @@
 /// kullanılır. Detay ekranındaki tam render gerçek bir WebView ile
 /// yapılır (bkz. `mail_detail_screen.dart` içindeki `_HtmlWebView`).
 abstract final class TextExtraction {
-  static final RegExp _scriptStyle = RegExp(
-    r'<(script|style|head|title)[^>]*>.*?</\1\s*>',
+  /// Atılan bloklar: `<script|style|head|title …> … </aynı etiket>`. Açılış
+  /// etiketinin SONU (`>`) `_stripBlocks`ta `indexOf` ile bulunur: `[^>]*>`
+  /// kuyruğu `>`sız çok sayıda açılış içeren bir iletide her açılışta belgenin
+  /// sonuna dek taradığı için karesel süre alırdı.
+  static final RegExp _blockOpen = RegExp(
+    r'<(script|style|head|title)\b',
     caseSensitive: false,
-    dotAll: true,
   );
-  static final RegExp _comments = RegExp(r'<!--.*?-->', dotAll: true);
+  static final Map<String, RegExp> _blockClose = {
+    for (final name in const ['script', 'style', 'head', 'title'])
+      name: RegExp('</$name\\s*>', caseSensitive: false),
+  };
+  static final RegExp _quoteHeader = RegExp(
+    r'(yazdı|wrote|schrieb)\s*:$',
+    caseSensitive: false,
+  );
+  static final RegExp _forwardHeader = RegExp(
+    r'^-{3,}\s*(Orijinal|Original|İletilen|Forwarded)',
+    caseSensitive: false,
+  );
+  static final RegExp _whitespaceRun = RegExp(r'\s+');
+  static final RegExp _entityPattern = RegExp(
+    r'&(#[xX][0-9a-fA-F]+|#\d+|[a-zA-Z][a-zA-Z0-9]*);',
+  );
   static final RegExp _blockEnd = RegExp(
     r'</\s*(p|div|tr|li|h[1-6]|blockquote|table|section|article)\s*>',
     caseSensitive: false,
@@ -19,7 +37,6 @@ abstract final class TextExtraction {
     r'<\s*(br|hr)\s*/?\s*>',
     caseSensitive: false,
   );
-  static final RegExp _tags = RegExp(r'<[^>]+>');
   static final RegExp _manySpaces = RegExp(r'[ \t ]+');
   static final RegExp _manyNewlines = RegExp(r'\n{3,}');
 
@@ -49,11 +66,11 @@ abstract final class TextExtraction {
   /// HTML'i okunabilir düz metne çevirir.
   static String htmlToPlain(String html) {
     var text = html;
-    text = text.replaceAll(_comments, ' ');
-    text = text.replaceAll(_scriptStyle, ' ');
+    text = _stripComments(text);
+    text = _stripBlocks(text);
     text = text.replaceAll(_lineBreak, '\n');
     text = text.replaceAll(_blockEnd, '\n');
-    text = text.replaceAll(_tags, ' ');
+    text = _stripTags(text);
     text = decodeEntities(text);
     text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
     text = text
@@ -64,24 +81,115 @@ abstract final class TextExtraction {
     return text.trim();
   }
 
-  /// HTML varlıklarını çözer (adlandırılmış + sayısal).
-  static String decodeEntities(String input) {
-    var text = input;
-    _entities.forEach((entity, value) {
-      if (text.contains(entity)) text = text.replaceAll(entity, value);
-    });
-    text = text.replaceAllMapped(RegExp(r'&#(\d+);'), (m) {
-      final code = int.tryParse(m.group(1)!);
-      if (code == null || code < 0 || code > 0x10FFFF) return m.group(0)!;
-      return String.fromCharCode(code);
-    });
-    text = text.replaceAllMapped(RegExp(r'&#[xX]([0-9a-fA-F]+);'), (m) {
-      final code = int.tryParse(m.group(1)!, radix: 16);
-      if (code == null || code < 0 || code > 0x10FFFF) return m.group(0)!;
-      return String.fromCharCode(code);
-    });
-    return text;
+  /// Kalan etiketleri (`<…>`) boşlukla değiştirir; `<[^>]+>` ile aynı eşleşme
+  /// kuralı, ama doğrusal sürede: `>`sız çok sayıda `<` içeren bir iletide regex
+  /// her `<`de belgenin sonuna dek tarar ve karesel süre alırdı. `<>` (boş
+  /// gövde) etiket sayılmaz; sonrasında hiç `>` kalmadıysa geri kalan metin
+  /// olduğu gibi bırakılır.
+  static String _stripTags(String text) {
+    var open = text.indexOf('<');
+    if (open == -1) return text;
+    final out = StringBuffer();
+    var position = 0;
+    while (open != -1) {
+      final close = text.indexOf('>', open + 1);
+      if (close == -1) break;
+      if (close == open + 1) {
+        open = text.indexOf('<', close);
+        continue;
+      }
+      out
+        ..write(text.substring(position, open))
+        ..write(' ');
+      position = close + 1;
+      open = text.indexOf('<', position);
+    }
+    out.write(text.substring(position));
+    return out.toString();
   }
+
+  /// `<!-- … -->` yorumlarını atar (yerine bir boşluk konur). Kapatılmamış bir
+  /// `<!--` olduğu gibi kalır.
+  ///
+  /// `indexOf` ile doğrusal çalışır: `<!--.*?-->` regex'i kapatılmamış çok
+  /// sayıda `<!--` içeren (kötü niyetli) bir iletide her açılış için belgenin
+  /// sonuna dek yeniden tarar ve karesel süre alırdı.
+  static String _stripComments(String html) {
+    if (!html.contains('<!--')) return html;
+    final out = StringBuffer();
+    var position = 0;
+    while (true) {
+      final start = html.indexOf('<!--', position);
+      if (start == -1) break;
+      final end = html.indexOf('-->', start + 4);
+      if (end == -1) break;
+      out
+        ..write(html.substring(position, start))
+        ..write(' ');
+      position = end + 3;
+    }
+    out.write(html.substring(position));
+    return out.toString();
+  }
+
+  /// `<script>`, `<style>`, `<head>` ve `<title>` bloklarını (içerikleriyle)
+  /// atar; her biri bir boşlukla değişir. Kapatılmamış bir blok olduğu gibi
+  /// kalır.
+  ///
+  /// Bir etiket türü için kapanış BİR KEZ bulunamadıysa sonraki açılışlar için
+  /// de yoktur: her açılışta belgenin sonuna dek yeniden aramak, kapatılmamış
+  /// çok sayıda `<style>` içeren bir iletide karesel süre alırdı.
+  static String _stripBlocks(String html) {
+    final out = StringBuffer();
+    final unclosed = <String>{};
+    var position = 0;
+    for (final open in _blockOpen.allMatches(html)) {
+      // Az önce atılan bir bloğun içinde kalan (iç içe) açılışlar.
+      if (open.start < position) continue;
+      final name = open.group(1)!.toLowerCase();
+      if (unclosed.contains(name)) continue;
+      final tagEnd = html.indexOf('>', open.end);
+      // Bundan sonra hiç `>` yoksa hiçbir açılış etiketi tamamlanamaz.
+      if (tagEnd == -1) break;
+      final close = _blockClose[name]!.allMatches(html, tagEnd + 1).firstOrNull;
+      if (close == null) {
+        unclosed.add(name);
+        continue;
+      }
+      out
+        ..write(html.substring(position, open.start))
+        ..write(' ');
+      position = close.end;
+    }
+    out.write(html.substring(position));
+    return out.toString();
+  }
+
+  /// HTML varlıklarını çözer (adlandırılmış + sayısal).
+  ///
+  /// TEK geçişte çözülür: `&amp;` ayrıca ve önce çözülseydi `&amp;lt;`
+  /// (metin olarak "&lt;") önce `&lt;`e, sonra `<`e dönüşür, yani iki kez
+  /// çözülürdü. Tanınmayan varlıklar olduğu gibi kalır.
+  static String decodeEntities(String input) =>
+      input.replaceAllMapped(_entityPattern, (match) {
+        final body = match.group(1)!;
+        if (body.startsWith('#')) {
+          final hex = body.length > 1 && (body[1] == 'x' || body[1] == 'X');
+          final code = int.tryParse(
+            hex ? body.substring(2) : body.substring(1),
+            radix: hex ? 16 : 10,
+          );
+          // NUL ve yalnız vekil (surrogate) kod noktaları geçerli metin değildir.
+          if (code == null ||
+              code <= 0 ||
+              code > 0x10FFFF ||
+              (code >= 0xD800 && code <= 0xDFFF)) {
+            return match.group(0)!;
+          }
+          return String.fromCharCode(code);
+        }
+        return _entities['&$body;'] ?? match.group(0)!;
+      });
 
   /// Liste satırındaki özet metni.
   ///
@@ -100,25 +208,15 @@ abstract final class TextExtraction {
       // İmza ayracı — sonrasındaki her şey imzadır
       if (line == '--' || line == '-- ') break;
       // "14 Eylül 2026 Pazartesi tarihinde X <a@b> yazdı:" gibi alıntı başlığı
-      if (RegExp(
-        r'(yazdı|wrote|schrieb)\s*:$',
-        caseSensitive: false,
-      ).hasMatch(line)) {
-        break;
-      }
-      if (RegExp(
-        r'^-{3,}\s*(Orijinal|Original|İletilen|Forwarded)',
-        caseSensitive: false,
-      ).hasMatch(line)) {
-        break;
-      }
+      if (_quoteHeader.hasMatch(line)) break;
+      if (_forwardHeader.hasMatch(line)) break;
       kept.add(line);
       if (kept.join(' ').length >= maxLength) break;
     }
 
-    var preview = kept.join(' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    var preview = kept.join(' ').replaceAll(_whitespaceRun, ' ').trim();
     if (preview.isEmpty) {
-      preview = plainText.replaceAll(RegExp(r'\s+'), ' ').trim();
+      preview = plainText.replaceAll(_whitespaceRun, ' ').trim();
     }
     if (preview.length <= maxLength) return preview;
     return '${preview.substring(0, maxLength).trimRight()}…';
@@ -161,6 +259,19 @@ abstract final class TextExtraction {
   static final RegExp _colorSchemeQuery = RegExp(
     r'\(\s*prefers-color-scheme\s*:\s*(dark|light)\s*\)',
     caseSensitive: false,
+  );
+
+  /// `<meta http-equiv="refresh">` etiketlerini kaldırır.
+  ///
+  /// Bu etiket iletiyi açar açmaz, kullanıcı hiçbir şeye dokunmadan başka bir
+  /// adrese yönlendirir (oltalama/izleme). WebView'da bu gezinme harici
+  /// tarayıcıyı kendiliğinden açardı.
+  static String stripMetaRefresh(String html) => html.replaceAll(
+    RegExp(
+      r'<meta\b(?=[^>]*\bhttp-equiv\s*=\s*["\x27]?\s*refresh\b)[^>]*>',
+      caseSensitive: false,
+    ),
+    '',
   );
 
   /// Kaynak e-postanın kendi `<meta name="viewport">` etiketini kaldırır.

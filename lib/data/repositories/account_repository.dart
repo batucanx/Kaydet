@@ -93,8 +93,9 @@ class AccountRepository {
       return const Err(AuthFailure(detail: 'şifre boş'));
     }
 
-    // 1. IMAP doğrulaması
-    final imapResult = await _imap.connect(
+    // 1. IMAP doğrulaması — ayrı, geçici bir bağlantıyla (`verify`): uygulamanın
+    // canlı oturumu (etkin hesabın bağlantısı) bu sırada kapanmaz.
+    final imapResult = await _imap.verify(
       MailServerConfig(
         host: request.imapHost.trim(),
         port: request.imapPort,
@@ -103,11 +104,7 @@ class AccountRepository {
         credential: PasswordCredential(request.password),
       ),
     );
-    if (imapResult is Err<ServerCapabilities>) {
-      await _imap.disconnect();
-      return Err(imapResult.failure);
-    }
-    await _imap.disconnect();
+    if (imapResult is Err<void>) return Err(imapResult.failure);
 
     // 2. SMTP doğrulaması
     final smtpResult = await _smtp.verify(
@@ -228,13 +225,21 @@ class AccountRepository {
   /// — aksi hâlde aradaki "hiçbir hesap etkin değil" anı uygulama kökünü
   /// anlık olarak Giriş ekranına düşürür.
   Future<void> switchAccount(int accountId) async {
+    final previous = (await _db.activeAccount())?.id;
     await _db.activateAccount(accountId);
-    unawaited(_disconnectPrevious());
+    if (previous != null && previous != accountId) {
+      unawaited(_disconnectPrevious(previous));
+    }
   }
 
-  Future<void> _disconnectPrevious() async {
+  /// Yalnızca bağlantı HÂLÂ eski hesaba aitse kapatır (bkz.
+  /// `MailConnection.disconnectAccount`): yeni hesabın bu arada kurulan
+  /// bağlantısına dokunulmaz.
+  Future<void> _disconnectPrevious(int previousAccountId) async {
     try {
-      await _connection.disconnect().timeout(_disconnectTimeout);
+      await _connection
+          .disconnectAccount(previousAccountId)
+          .timeout(_disconnectTimeout);
     } on Object catch (_) {
       // Bağlantı kapanmasa da sorun değil; yeni hesap zaten etkin.
     }
@@ -264,18 +269,33 @@ class AccountRepository {
   /// `imapKeyword` burada üretilip saklanır; [SyncEngine] sunucudan gelen
   /// ham IMAP anahtar kelimesini bu değerle eşleştirip tekrar görünen ada
   /// çevirir — aksi hâlde arayüzde "kaydet_..." gibi ham değer görünür.
+  ///
+  /// Anahtar kelime hesap içinde BENZERSİZDİR: "Kişisel" ve "Kisisel" aynı
+  /// ASCII karşılığına düşer; ortak bir anahtar kelime iki etiketin birbirini
+  /// açıp kapatmasına ve sunucudan okunan etiketin yanlış adla görünmesine yol
+  /// açardı. Ad zaten varsa mevcut anahtar kelimesi korunur.
   Future<void> createLabel({
     required int accountId,
     required String name,
     required int toneIndex,
-  }) => _db.insertLabel(
-    LabelsCompanion.insert(
-      accountId: accountId,
-      name: name,
-      toneIndex: Value(toneIndex),
-      imapKeyword: Value(labelImapKeyword(name)),
-    ),
-  );
+  }) async {
+    final existing = await _db.labelsOf(accountId);
+    final sameName = existing.where((l) => l.name == name).firstOrNull;
+    final keyword =
+        sameName?.imapKeyword ??
+        uniqueLabelKeyword(name, [
+          for (final label in existing)
+            if (label.imapKeyword != null) label.imapKeyword!,
+        ]);
+    await _db.insertLabel(
+      LabelsCompanion.insert(
+        accountId: accountId,
+        name: name,
+        toneIndex: Value(toneIndex),
+        imapKeyword: Value(keyword),
+      ),
+    );
+  }
 
   Future<void> deleteLabel(int labelId) => _db.deleteLabel(labelId);
 
@@ -428,7 +448,57 @@ class AccountRepository {
     });
   }
 
-  /// Şifre yeniden istenince günceller (kimlik doğrulama hatası sonrası).
-  Future<void> updatePassword(int accountId, String password) =>
-      _secureStore.writePassword(accountId, password);
+  /// Kimlik doğrulama hatası sonrası (şifre sunucuda değişti ya da cihazın
+  /// Keystore'u sıfırlandı) şifreyi günceller.
+  ///
+  /// Yeni şifre IMAP ve SMTP'ye karşı DOĞRULANIR ve yalnızca doğruysa
+  /// saklanır: yanlış şifreyi kaydetmek hesabı yeniden hatalı denemelere
+  /// sokar. Hesap, yerel iletiler ve taslaklar korunur — çıkış yapıp yeniden
+  /// girmek hepsini silerdi. Doğrulama uygulamanın canlı oturumuna dokunmaz.
+  Future<Result<void>> updatePassword(int accountId, String password) async {
+    if (password.isEmpty) {
+      return const Err(AuthFailure(detail: 'şifre boş'));
+    }
+    final account = await _db.accountById(accountId);
+    if (account == null) {
+      return const Err(AuthFailure(detail: 'hesap bulunamadı'));
+    }
+
+    final credential = PasswordCredential(password);
+    final imapResult = await _imap.verify(
+      MailServerConfig(
+        host: account.imapHost,
+        port: account.imapPort,
+        security: account.imapSecurity,
+        username: account.username,
+        credential: credential,
+      ),
+    );
+    if (imapResult is Err<void>) return Err(imapResult.failure);
+
+    final smtpResult = await _smtp.verify(
+      MailServerConfig(
+        host: account.smtpHost,
+        port: account.smtpPort,
+        security: account.smtpSecurity,
+        username: account.username,
+        credential: credential,
+      ),
+    );
+    if (smtpResult is Err<void>) {
+      final failure = smtpResult.failure;
+      return Err(
+        failure is AuthFailure
+            ? AuthFailure(detail: 'SMTP: ${failure.detail}')
+            : failure,
+      );
+    }
+
+    try {
+      await _secureStore.writePassword(accountId, password);
+    } on Object catch (error) {
+      return Err(StorageFailure(detail: '$error'));
+    }
+    return okVoid;
+  }
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show DartPluginRegistrant;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:workmanager/workmanager.dart';
@@ -79,6 +80,40 @@ void backgroundCallbackDispatcher() {
     if (taskName != BackgroundSync.taskName) return true;
     return runBackgroundSync();
   });
+}
+
+/// iOS push backend'inin gönderdiği `content-available` push'un giriş
+/// noktası (bkz. `AppDelegate.swift` -> `didReceiveRemoteNotification`, ki o
+/// yeni bir `FlutterEngine`i doğrudan bu fonksiyonla başlatır).
+///
+/// AYRI bir motor/isolate'te çalışır — `backgroundCallbackDispatcher` gibi
+/// bağımlılıklarını sıfırdan kurar. Kasıtlı olarak AYNI `runBackgroundSync()`
+/// çağrılır: iOS'ta paralel bir senkron yolu yok, push yalnızca WorkManager
+/// yedeğinin de kullandığı turu ERKEN tetikleyen ikinci bir tetikleyici.
+/// Sonuç, native tarafın `UIBackgroundFetchResult`ü çözebilmesi için
+/// `tr.com.pazarlik.kaydet/push_background` kanalından geri bildirilir —
+/// bildirilmezse ya da ~25 sn içinde bildirilmezse native taraf zaman
+/// aşımıyla başarısız sayar (bkz. AppDelegate.swift).
+@pragma('vm:entry-point')
+void pushBackgroundSync() {
+  WidgetsFlutterBinding.ensureInitialized();
+  const channel = MethodChannel('tr.com.pazarlik.kaydet/push_background');
+
+  Future<void> run() async {
+    var success = false;
+    try {
+      success = await runBackgroundSync();
+    } catch (_) {
+      success = false;
+    }
+    try {
+      await channel.invokeMethod<void>('syncComplete', {'success': success});
+    } on Object catch (_) {
+      // Native taraf zaten zaman aşımıyla başarısız sayar.
+    }
+  }
+
+  unawaited(run());
 }
 
 /// Arka planda tek bir eşitleme turu — cihazdaki TÜM hesapları sırayla

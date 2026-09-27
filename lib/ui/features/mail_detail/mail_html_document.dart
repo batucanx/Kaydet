@@ -24,7 +24,9 @@ import '../../core/theme/tokens.dart';
 /// 3. **CSP** — yalnızca bu belgeye özgü rastgele bir nonce'a izin verir; yani
 ///    çalışan tek betik yukarıdaki render betiğidir, e-postanın kendi
 ///    `<script>`leri, `on*=` olay nitelikleri ve `javascript:` adresleri
-///    çalışmaz. Kurum içi kullanımda bile dış göndericilerden (bülten,
+///    çalışmaz. `<iframe>` ve `<form>` gönderimi de kapalıdır (`frame-src`,
+///    `form-action`): iletiyi açmak, kullanıcı dokunmadan başka bir sayfayı
+///    yüklememeli/POST etmemeli. Kurum içi kullanımda bile dış göndericilerden (bülten,
 ///    tedarikçi) posta geldiği için bu emniyet kemeri çıkarılmaz; render'a
 ///    hiçbir etkisi yoktur.
 ///
@@ -81,7 +83,7 @@ abstract final class MailHtmlDocument {
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="script-src 'nonce-$nonce'; object-src 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="script-src 'nonce-$nonce'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width">
 <style>
 :root { color-scheme: ${dark ? 'dark' : 'light'}; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }

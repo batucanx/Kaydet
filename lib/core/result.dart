@@ -174,6 +174,32 @@ final class StorageFailure extends AppFailure {
   String get userMessage => 'Cihaz depolamasına yazılamadı.';
 }
 
+/// İleti sunucuda bulunamadı (başka bir yerden silinmiş ya da klasör yeniden
+/// numaralanmış). Bir sonraki eşitleme yerel kaydı temizler.
+final class MessageNotFoundFailure extends AppFailure {
+  const MessageNotFoundFailure({super.detail});
+
+  @override
+  String get userMessage => 'İleti sunucuda bulunamadı. Silinmiş olabilir.';
+}
+
+/// Gönderilecek iletinin eki cihazda artık yok (geçici klasör temizlenmiş,
+/// dosya silinmiş). Ek olmadan göndermek alıcıya eksik bir ileti ulaştırır;
+/// bu yüzden gönderim durdurulur ve kullanıcı bilgilendirilir.
+final class AttachmentMissingFailure extends AppFailure {
+  const AttachmentMissingFailure({required this.fileNames, super.detail});
+
+  final List<String> fileNames;
+
+  @override
+  String get userMessage =>
+      'Ek dosyası bulunamadı: ${fileNames.join(', ')}. Eki yeniden ekleyip '
+      'gönderin.';
+
+  @override
+  bool get isActionable => true;
+}
+
 /// Alıcı sunucu tarafından reddedildi (kalıcı).
 final class RecipientRejectedFailure extends AppFailure {
   const RecipientRejectedFailure({required this.recipients, super.detail});

@@ -47,11 +47,15 @@
 	<string>Söylediklerinizi metne çevirmek için konuşma tanımaya erişim gerekir.</string>
 	<!-- Arka plan eşitleme (workmanager → BGTaskScheduler). `processing` App
 	     Store incelemesinde gerekçelendirilmesi gerekebilir; yalnızca
-	     bağlantı varken çalışacak şekilde kısıtlıdır (bkz. background_sync.dart). -->
+	     bağlantı varken çalışacak şekilde kısıtlıdır (bkz. background_sync.dart).
+	     `remote-notification`: push backend'in gönderdiği `content-available`
+	     push'u AppDelegate'teki didReceiveRemoteNotification'ı tetikleyip arka
+	     planda mail senkronu çalıştırabilsin diye (bkz. AppDelegate.swift). -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>
 		<string>processing</string>
+		<string>remote-notification</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>

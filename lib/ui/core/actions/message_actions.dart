@@ -53,6 +53,31 @@ Future<void> archiveMessages(
   );
 }
 
+/// Gelen Kutusuna geri yükler: Çöp Kutusu'nda swipe-sağ jestinin (bkz.
+/// `_SwipeRowState` — normal klasörlerde aynı jest arşivler) TEK yolu.
+/// `archiveMessages` ile birebir aynı iyimser + "Geri al" akışını izler.
+Future<void> restoreMessagesToInbox(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (messageIds.isEmpty) return;
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final handle = await ref
+      .read(mailRepositoryProvider)
+      .restoreToInbox(messageIds, undoWindow: ref.read(mailUndoWindowProvider));
+  if (handle == null || !overlay.mounted) return;
+  _showUndoNotice(
+    overlay,
+    message: messageIds.length == 1
+        ? 'İleti Gelen Kutusuna taşındı'
+        : '${messageIds.length} ileti Gelen Kutusuna taşındı',
+    handle: handle,
+    bottomInset: bottomInset,
+  );
+}
+
 /// Siler: kalıcı silme gerektiren klasörlerde (Çöp Kutusu/İstenmeyen/
 /// Taslaklar) onay ister; Çöp Kutusu'na taşıma "Geri al" ile geri alınabilir.
 Future<bool> deleteWithConfirmation(

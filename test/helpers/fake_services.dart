@@ -19,6 +19,13 @@ class FakeImapService implements ImapService {
   /// Ayarlanırsa `moveMessages` bu hatayla döner (taşıma başarısızlığı).
   AppFailure? failMove;
 
+  /// Ayarlanırsa `fetchFlags` bu hatayla döner (bayrak eşitleme hatası).
+  AppFailure? failFlags;
+
+  /// `fetchBody`/`fetchAttachment` yanıt vermeden önce beklenen süre; iki
+  /// işlemin sıralanıp sıralanmadığını sınamak için.
+  Duration bodyDelay = Duration.zero;
+
   bool _connected = false;
   String? selectedPath;
   final StreamController<void> _changes = StreamController<void>.broadcast();
@@ -116,6 +123,15 @@ class FakeImapService implements ImapService {
     selectedPath = null;
   }
 
+  /// Gerçek servis gibi canlı oturuma (`_connected`, `selectedPath`) dokunmaz.
+  @override
+  Future<Result<void>> verify(MailServerConfig config) async {
+    commandLog.add('verify:${config.host}:${config.port}');
+    final failure = failOnConnect;
+    if (failure != null) return Err(failure);
+    return okVoid;
+  }
+
   @override
   Future<Result<List<RemoteMailbox>>> listMailboxes() async {
     commandLog.add('list');
@@ -145,6 +161,7 @@ class FakeImapService implements ImapService {
 
   @override
   Future<Result<List<int>>> searchAllUids() async {
+    commandLog.add('search');
     final box = _box(selectedPath ?? 'INBOX');
     return Ok(box.keys.toList()..sort());
   }
@@ -176,6 +193,9 @@ class FakeImapService implements ImapService {
     List<int> uids, {
     int? changedSinceModSeq,
   }) async {
+    commandLog.add('flags:${uids.length}');
+    final failure = failFlags;
+    if (failure != null) return Err(failure);
     final box = _box(selectedPath ?? 'INBOX');
     return Ok([
       for (final uid in uids)
@@ -187,6 +207,8 @@ class FakeImapService implements ImapService {
   @override
   Future<Result<FetchedBody>> fetchBody(int uid) async {
     final path = selectedPath ?? 'INBOX';
+    commandLog.add('body:$path:$uid');
+    if (bodyDelay > Duration.zero) await Future<void>.delayed(bodyDelay);
     return Ok(bodies[path]?[uid] ?? const FetchedBody(plainText: ''));
   }
 

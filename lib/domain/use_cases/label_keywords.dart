@@ -11,3 +11,20 @@ import '../../core/turkish.dart';
 /// etikete göre filtreleme hiçbir sonuç bulamaz.
 String labelImapKeyword(String name) =>
     'kaydet_${foldForSearch(name).replaceAll(RegExp(r'[^a-z0-9]'), '_')}';
+
+/// [labelImapKeyword]'ün hesap içinde ÇAKIŞMAYAN hâli.
+///
+/// Farklı adlar aynı ASCII karşılığına düşebilir ("Kişisel" / "Kisisel",
+/// "A B" / "A-B"): ortak bir anahtar kelime iki etiketin birbirini açıp
+/// kapatmasına yol açar. [taken] hesabın mevcut anahtar kelimeleridir; çakışma
+/// varsa `_2`, `_3`… eklenir.
+String uniqueLabelKeyword(String name, Iterable<String> taken) {
+  final base = labelImapKeyword(name);
+  final used = taken.toSet();
+  if (!used.contains(base)) return base;
+  var suffix = 2;
+  while (used.contains('${base}_$suffix')) {
+    suffix++;
+  }
+  return '${base}_$suffix';
+}

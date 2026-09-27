@@ -54,9 +54,11 @@ class FolderRepository {
         return const Err(DuplicateFolderFailure());
       }
 
-      final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) return Err(connected.failure);
-      final created = await _connection.imap.createMailbox(path);
+      // Bağlanma + komut tek mantıksal işlemdir (bkz. `MailConnection`).
+      final created = await _connection.exclusive<void>(
+        accountId,
+        () => _connection.imap.createMailbox(path),
+      );
       if (created is Err<void>) return Err(created.failure);
 
       final nextOrder = mailboxes.isEmpty
@@ -140,13 +142,14 @@ class FolderRepository {
         return const Err(DuplicateFolderFailure());
       }
 
-      final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) return Err(connected.failure);
-      final renamed = await _connection.imap.renameMailbox(
-        path: mailbox.path,
-        encodedPath: mailbox.encodedPath,
-        delimiter: mailbox.delimiter,
-        newPath: newPath,
+      final renamed = await _connection.exclusive<void>(
+        accountId,
+        () => _connection.imap.renameMailbox(
+          path: mailbox.path,
+          encodedPath: mailbox.encodedPath,
+          delimiter: mailbox.delimiter,
+          newPath: newPath,
+        ),
       );
       if (renamed is Err<void>) return Err(renamed.failure);
       await _db.renameMailboxTree(
@@ -197,13 +200,14 @@ class FolderRepository {
         return const Err(DuplicateFolderFailure());
       }
 
-      final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) return Err(connected.failure);
-      final renamed = await _connection.imap.renameMailbox(
-        path: mailbox.path,
-        encodedPath: mailbox.encodedPath,
-        delimiter: mailbox.delimiter,
-        newPath: newPath,
+      final renamed = await _connection.exclusive<void>(
+        accountId,
+        () => _connection.imap.renameMailbox(
+          path: mailbox.path,
+          encodedPath: mailbox.encodedPath,
+          delimiter: mailbox.delimiter,
+          newPath: newPath,
+        ),
       );
       if (renamed is Err<void>) return Err(renamed.failure);
       await _db.renameMailboxTree(
@@ -234,12 +238,13 @@ class FolderRepository {
       if (all.any((m) => m.id != mailboxId && m.path.startsWith(prefix))) {
         return const Err(FolderHasChildrenFailure());
       }
-      final connected = await _connection.ensureConnected(accountId);
-      if (connected is Err<void>) return Err(connected.failure);
-      final deleted = await _connection.imap.deleteMailbox(
-        path: mailbox.path,
-        encodedPath: mailbox.encodedPath,
-        delimiter: mailbox.delimiter,
+      final deleted = await _connection.exclusive<void>(
+        accountId,
+        () => _connection.imap.deleteMailbox(
+          path: mailbox.path,
+          encodedPath: mailbox.encodedPath,
+          delimiter: mailbox.delimiter,
+        ),
       );
       if (deleted is Err<void>) return Err(deleted.failure);
       await _db.deleteMailboxWithMessages(mailboxId);

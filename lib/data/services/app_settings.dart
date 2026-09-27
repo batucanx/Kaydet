@@ -52,6 +52,7 @@ class AppSettings {
     this.themeMode = AppThemeMode.dark,
     this.notificationsEnabled = true,
     this.notificationPermissionAsked = false,
+    this.showBrandLogos = true,
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
     this.markSeenDelayMs = 1500,
@@ -63,6 +64,11 @@ class AppSettings {
   /// Sistem bildirim izni daha önce bir kez soruldu mu? (bkz.
   /// `SettingsNotifier.requestNotificationPermissionOnce`)
   final bool notificationPermissionAsked;
+
+  /// Gönderen avatarlarında marka logosu (bkz. `BrandAvatar`) gösterilsin mi?
+  /// Açıkken gönderenlerin ALAN ADLARI Google'ın favicon servisine iletilir;
+  /// kapalıyken hiçbir ağ isteği yapılmaz, renkli baş harf gösterilir.
+  final bool showBrandLogos;
   final SyncFrequency syncFrequency;
   final bool confirmBeforeDelete;
 
@@ -76,6 +82,7 @@ class AppSettings {
     AppThemeMode? themeMode,
     bool? notificationsEnabled,
     bool? notificationPermissionAsked,
+    bool? showBrandLogos,
     SyncFrequency? syncFrequency,
     bool? confirmBeforeDelete,
     int? markSeenDelayMs,
@@ -85,6 +92,7 @@ class AppSettings {
         notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
         notificationPermissionAsked:
             notificationPermissionAsked ?? this.notificationPermissionAsked,
+        showBrandLogos: showBrandLogos ?? this.showBrandLogos,
         syncFrequency: syncFrequency ?? this.syncFrequency,
         confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
         markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
@@ -100,11 +108,16 @@ class AppSettingsStore {
   static const _kTheme = 'kaydet.themeMode';
   static const _kNotifications = 'kaydet.notifications';
   static const _kPermissionAsked = 'kaydet.notificationPermissionAsked';
+  static const _kBrandLogos = 'kaydet.showBrandLogos';
   static const _kSync = 'kaydet.syncFrequency';
   static const _kConfirmDelete = 'kaydet.confirmDelete';
 
   static Future<AppSettingsStore> create() async =>
       AppSettingsStore(await SharedPreferences.getInstance());
+
+  /// `RemotePushSync`'in kendi kayıt anahtarlarını (token, hesap parmak
+  /// izleri) tuttuğu ham depo — bkz. `SharedPrefsRegistrationStore`.
+  SharedPreferences get preferences => _prefs;
 
   AppSettings read() {
     final themeIndex = _prefs.getInt(_kTheme);
@@ -118,6 +131,7 @@ class AppSettingsStore {
             )],
       notificationsEnabled: _prefs.getBool(_kNotifications) ?? true,
       notificationPermissionAsked: _prefs.getBool(_kPermissionAsked) ?? false,
+      showBrandLogos: _prefs.getBool(_kBrandLogos) ?? true,
       syncFrequency: syncIndex == null
           ? SyncFrequency.push
           : SyncFrequency
@@ -147,6 +161,7 @@ class AppSettingsStore {
     await _prefs.setInt(_kTheme, settings.themeMode.index);
     await _prefs.setBool(_kNotifications, settings.notificationsEnabled);
     await _prefs.setBool(_kPermissionAsked, settings.notificationPermissionAsked);
+    await _prefs.setBool(_kBrandLogos, settings.showBrandLogos);
     await _prefs.setInt(_kSync, settings.syncFrequency.index);
     await _prefs.setBool(_kConfirmDelete, settings.confirmBeforeDelete);
   }

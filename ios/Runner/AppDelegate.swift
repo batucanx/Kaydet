@@ -6,6 +6,22 @@ import workmanager_apple
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var shareChannel: ShareChannel?
+  private var notificationChannel: FlutterMethodChannel?
+
+  /// `didRegisterForRemoteNotificationsWithDeviceToken` motor hazır olmadan
+  /// (ör. soğuk başlangıçta) önce tetiklenebilir; `notificationChannel` o an
+  /// hâlâ `nil` olabilir. Token burada saklanır, kanal kurulunca iletilir.
+  private var pendingApnsToken: String?
+
+  /// Arka plan push'uyla (bkz. `didReceiveRemoteNotification`) tetiklenen
+  /// headless motorlar — güçlü referans tutulmazsa ARC senkron bitmeden
+  /// serbest bırakır.
+  private var backgroundSyncEngines: [ObjectIdentifier: FlutterEngine] = [:]
+
+  private static let backgroundSyncChannelName = "tr.com.pazarlik.kaydet/push_background"
+  /// iOS'un arka plan push bütçesi ~30 sn; aşılırsa gelecekteki push'lar için
+  /// bütçe kısıtlanır, bu yüzden erken pes edilir.
+  private static let backgroundSyncTimeout: TimeInterval = 25
 
   override func application(
     _ application: UIApplication,
@@ -35,6 +51,14 @@ import workmanager_apple
       withIdentifier: "kaydet.periodic.sync",
       earliestBeginInSeconds: NSNumber(value: 15 * 60)
     )
+
+    // Uzak bildirim (APNs) cihaz token'ı ister; bildirim ALERT izninden
+    // BAĞIMSIZDIR (kullanıcı henüz izin vermese de sessiz/arka plan push
+    // için token alınabilir) — bu yüzden Dart tarafının tetiklemesini
+    // beklemeden koşulsuz, başlangıçta çağrılır (bkz. push_backend_client.dart
+    // / remote_push_sync.dart: token olmadan hiçbir hesap sunucuya kaydolmaz).
+    application.registerForRemoteNotifications()
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -49,6 +73,7 @@ import workmanager_apple
       name: "tr.com.pazarlik.kaydet/notifications",
       binaryMessenger: notificationsRegistrar.messenger()
     )
+    notificationChannel = channel
 
     // Share Extension'in App Group'a biraktigi paylasimlari Flutter'a acar
     // (bkz. ShareChannel.swift, lib/app/share_navigator.dart). Paylasim
@@ -81,6 +106,90 @@ import workmanager_apple
       default:
         result(FlutterMethodNotImplemented)
       }
+    }
+
+    // Motor, token geldikten SONRA hazır olduysa (olağan sıra: token bir ağ
+    // gidiş-dönüşü gerektirir, motor kurulumu senkrondur) bekleyen token'ı
+    // şimdi ilet.
+    if let token = pendingApnsToken {
+      channel.invokeMethod("onApnsToken", arguments: token)
+    }
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    super.application(application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
+    let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+    pendingApnsToken = token
+    notificationChannel?.invokeMethod("onApnsToken", arguments: token)
+    // Kasıtlı olarak `#if DEBUG` DEĞİL: Release/TestFlight/ad-hoc derlemede
+    // kayıt başarısız olursa bunu görmenin tek yolu Console.app'teki bu
+    // günlük — token'ın kendisi yazılmaz.
+    NSLog("APNs device token received")
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didFailToRegisterForRemoteNotificationsWithError error: Error
+  ) {
+    super.application(application, didFailToRegisterForRemoteNotificationsWithError: error)
+    NSLog("APNs registration failed: %@", error.localizedDescription)
+  }
+
+  /// Push backend'in gönderdiği `content-available` push'u burayı tetikler
+  /// (bkz. backend/src/apns.ts `buildMailPayload`). Uygulama arka planda
+  /// canlıysa ya da sistem tarafından (KULLANICI DEĞİL) sonlandırılmışsa
+  /// çalışır; kullanıcı uygulamayı son kullanılanlardan kaydırıp kapattıysa
+  /// iOS bunu hiç tetiklemez — bu Apple'ın belgelenmiş kısıtlaması, uygulama
+  /// kodunun aşabileceği bir şey değil (bkz. background_sync.dart dosya başı
+  /// açıklaması).
+  ///
+  /// `workmanager`ın BGTaskScheduler için zaten kurduğu headless-motor
+  /// kalıbının aynısı: yeni bir `FlutterEngine` ile `pushBackgroundSync`
+  /// giriş noktasını (bkz. background_sync.dart) çalıştırır; o da AYNI
+  /// `runBackgroundSync()`'i yürütür — paralel bir senkron yolu YOK, yalnızca
+  /// ikinci bir tetikleyici.
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    let engine = FlutterEngine(name: "kaydet.push-background-sync")
+    engine.run(withEntrypoint: "pushBackgroundSync")
+    GeneratedPluginRegistrant.register(with: engine)
+    let key = ObjectIdentifier(engine)
+    backgroundSyncEngines[key] = engine
+
+    var finished = false
+    let finish: (UIBackgroundFetchResult) -> Void = { [weak self] result in
+      guard !finished else { return }
+      finished = true
+      // Son güçlü referansın düşmesiyle motor ve Dart isolate'i ARC tarafından
+      // serbest bırakılır; ayrı bir "destroy" çağrısı gerekmez.
+      self?.backgroundSyncEngines.removeValue(forKey: key)
+      completionHandler(result)
+    }
+
+    let channel = FlutterMethodChannel(
+      name: AppDelegate.backgroundSyncChannelName,
+      binaryMessenger: engine.binaryMessenger
+    )
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "syncComplete" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let success = (call.arguments as? [String: Any])?["success"] as? Bool ?? false
+      NSLog("Push background sync finished: %@", success ? "success" : "failed")
+      result(nil)
+      finish(success ? .newData : .failed)
+    }
+
+    DispatchQueue.main.asyncAfter(deadline: .now() + AppDelegate.backgroundSyncTimeout) {
+      NSLog("Push background sync timed out")
+      finish(.failed)
     }
   }
 }
