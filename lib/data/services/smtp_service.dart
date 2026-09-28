@@ -6,6 +6,7 @@ import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
+import 'attachment_files.dart';
 
 /// Gönderim sonucu.
 ///
@@ -292,7 +293,11 @@ abstract final class MimeBuilder {
         if (file.existsSync()) {
           attachmentFiles.add(file);
         } else {
-          missing.add(path.split(RegExp(r'[\\/]')).last);
+          final clean = AttachmentFiles.cleanPickedName(
+            path.split(RegExp(r'[\\/]')).last,
+            sourcePath: path,
+          );
+          missing.add(clean);
         }
       }
       if (missing.isNotEmpty && !skipMissingAttachments) {
@@ -373,7 +378,11 @@ abstract final class MimeBuilder {
 
       for (final file in attachmentFiles) {
         final bytes = file.readAsBytesSync();
-        final name = file.path.split(RegExp(r'[\\/]')).last;
+        final rawName = file.path.split(RegExp(r'[\\/]')).last;
+        final name = AttachmentFiles.cleanPickedName(
+          rawName,
+          sourcePath: file.path,
+        );
         builder.addBinary(
           bytes,
           em.MediaType.guessFromFileName(name),

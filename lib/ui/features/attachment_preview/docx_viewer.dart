@@ -10,6 +10,7 @@ import 'package:xml/xml.dart';
 
 import '../../../data/database/app_database.dart';
 import '../../core/actions/attachment_actions.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import 'docx_image_resolver.dart';
 
@@ -1761,6 +1762,7 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget>
                 color: Color(0xFF1E1E1E),
                 fontSize: 13.5,
                 fontWeight: FontWeight.w600,
+                fontVariations: AppText.semibold,
                 height: 1.45,
               ),
             ),
@@ -1884,12 +1886,14 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget>
           color: Color(0xFF1F2937),
           fontSize: 15.0,
           fontWeight: FontWeight.w600,
+          fontVariations: AppText.semibold,
           height: 1.4,
         ),
       DocxBlockType.heading3 => const TextStyle(
           color: Color(0xFF374151),
           fontSize: 13.5,
           fontWeight: FontWeight.w600,
+          fontVariations: AppText.semibold,
           height: 1.4,
         ),
       DocxBlockType.paragraph ||

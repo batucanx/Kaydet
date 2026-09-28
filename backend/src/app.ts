@@ -68,6 +68,21 @@ export function buildApp(opts: {
     }
   });
 
+  const tokenQuerySchema = z.object({
+    apnsToken: tokenSchema,
+  });
+
+  app.get('/v1/accounts', async (request, reply) => {
+    const parsed = tokenQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid_request', issues: parsed.error.issues });
+    }
+    const clientAccountIds = repo.listAccountClientIds(parsed.data.apnsToken);
+    return reply.send({ clientAccountIds });
+  });
+
   app.put('/v1/accounts', async (request, reply) => {
     const parsed = upsertSchema.safeParse(request.body);
     if (!parsed.success) {

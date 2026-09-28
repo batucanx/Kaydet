@@ -13,6 +13,17 @@ abstract final class AppText {
   /// Bütün ölçeği tek yerden ayarlamak için yalnızca bu sabit değiştirilir.
   static const double scale = 1.0;
 
+  // Satoshi'nin statik seti SemiBold (600) içermez (bkz. pubspec.yaml).
+  // 600 ağırlığındaki roller bu yüzden tek değişken font dosyasından
+  // `wght` eksenini açıkça talep eder — motorun kayıtlı ağırlıklar
+  // arasından örtük tahmin yapmasına (ve platforma göre farklı sonuç
+  // vermesine) izin vermemek için. 400/500/700 statik dosyalardan
+  // geldiğinden onlara ihtiyaç yok. Bir widget `fontWeight: w600`
+  // kullanıp taban `AppText` stilini `copyWith` DIŞINDA bir yolla
+  // (ör. yeni bir `TextStyle`) kendi başına kuruyorsa bu listeyi de
+  // birlikte geçmesi gerekir — yoksa 600 için motor yine tahmine döner.
+  static const List<FontVariation> semibold = [FontVariation('wght', 600)];
+
   static const TextStyle titleLarge = TextStyle(
     fontFamily: family,
     fontSize: 18 * scale,
@@ -26,6 +37,7 @@ abstract final class AppText {
     fontSize: 15 * scale,
     height: 20 / 15,
     fontWeight: FontWeight.w600,
+    fontVariations: semibold,
   );
 
   /// Mail gövdesi — Outlook'un okuma bölmesindeki 12 pt'nin karşılığı,
@@ -73,6 +85,7 @@ abstract final class AppText {
     fontSize: 14 * scale,
     height: 18 / 14,
     fontWeight: FontWeight.w600,
+    fontVariations: semibold,
   );
 
   static const TextStyle listPreview = TextStyle(
@@ -87,6 +100,7 @@ abstract final class AppText {
     fontSize: 11 * scale,
     height: 15 / 11,
     fontWeight: FontWeight.w600,
+    fontVariations: semibold,
   );
 
   static const TextStyle labelSmall = TextStyle(
@@ -94,6 +108,7 @@ abstract final class AppText {
     fontSize: 10.5 * scale,
     height: 13 / 10.5,
     fontWeight: FontWeight.w600,
+    fontVariations: semibold,
   );
 
   static const TextStyle overline = TextStyle(

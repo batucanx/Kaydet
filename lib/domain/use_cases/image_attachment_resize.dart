@@ -6,6 +6,8 @@ import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../data/services/attachment_files.dart';
+
 /// "Resim boyutunu küçült" seçilince uygulanan hedef: gerçek Outlook/Gmail'in
 /// varsayılan küçültmesiyle aynı büyüklük sınıfı — en uzun kenar 1600px,
 /// JPEG kalite 85. Tipik bir telefon fotoğrafını (ör. 4000x3000, birkaç MB)
@@ -21,7 +23,7 @@ const int _jpegQuality = 85;
 /// adımdır, ekin gönderilmesini engellemez. Diğer görsel biçimleri (GIF,
 /// HEIC/HEIF, WEBP, BMP) bilerek dokunulmadan bırakılır: GIF'te animasyon,
 /// HEIC'te decoder desteği riske girer.
-Future<File> resizeImageAttachment(File source) async {
+Future<File> resizeImageAttachment(File source, {String? originalName}) async {
   final extension = p.extension(source.path).toLowerCase();
   if (extension != '.jpg' && extension != '.jpeg' && extension != '.png') {
     return source;
@@ -40,11 +42,16 @@ Future<File> resizeImageAttachment(File source) async {
   );
   if (resizedBytes == null) return source;
 
+  final baseName = (originalName != null && originalName.trim().isNotEmpty)
+      ? originalName.trim()
+      : p.basename(source.path);
+  final cleanName = AttachmentFiles.cleanPickedName(baseName, sourcePath: source.path);
+
   final dir = await getTemporaryDirectory();
   final outFile = File(
     p.join(
       dir.path,
-      'kaydet_resized_${DateTime.now().microsecondsSinceEpoch}_${p.basename(source.path)}',
+      'kaydet_resized_${DateTime.now().microsecondsSinceEpoch}_$cleanName',
     ),
   );
   await outFile.writeAsBytes(resizedBytes, flush: true);

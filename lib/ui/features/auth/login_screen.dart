@@ -184,6 +184,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               fontSize: 28 * AppText.scale,
                               letterSpacing: -0.7,
                               fontWeight: FontWeight.w600,
+                              fontVariations: AppText.semibold,
                             ),
                           ),
                           SizedBox(height: compact ? Space.xl : Space.xxxl),

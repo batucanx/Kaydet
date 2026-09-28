@@ -64,6 +64,10 @@ class PushBackendException implements Exception {
 
 /// Push sunucusunun uygulamaya açtığı yüzey (bkz. `backend/src/app.ts`).
 abstract interface class RemotePushApi {
+  String get baseUrl;
+
+  Future<List<int>> listRegisteredAccountIds(String apnsToken);
+
   Future<void> upsertAccount(RemotePushAccount account);
 
   Future<void> deleteAccount({
@@ -89,6 +93,17 @@ class HttpPushBackendClient implements RemotePushApi {
   final PushBackendConfig _config;
   final HttpClient _http;
   final Duration _timeout;
+
+  @override
+  String get baseUrl => _config.baseUrl;
+
+  @override
+  Future<List<int>> listRegisteredAccountIds(String apnsToken) async {
+    final res = await _send('GET', '/v1/accounts?apnsToken=$apnsToken');
+    final decoded = jsonDecode(res) as Map<String, dynamic>;
+    final list = decoded['clientAccountIds'] as List<dynamic>? ?? const [];
+    return list.map((e) => (e as num).toInt()).toList();
+  }
 
   @override
   Future<void> upsertAccount(RemotePushAccount account) =>
@@ -129,26 +144,39 @@ class HttpPushBackendClient implements RemotePushApi {
     if (base.scheme != 'https' && !loopback) {
       throw StateError('Push sunucusu adresi https olmalı');
     }
+    final questionIdx = path.indexOf('?');
+    final rawPath = questionIdx >= 0 ? path.substring(0, questionIdx) : path;
+    final queryString =
+        questionIdx >= 0 ? path.substring(questionIdx + 1) : null;
+    final mergedPath = '${base.path.replaceAll(RegExp(r'/+$'), '')}$rawPath';
     return base.replace(
-      path: '${base.path.replaceAll(RegExp(r'/+$'), '')}$path',
+      path: mergedPath,
+      query: queryString,
     );
   }
 
-  Future<void> _send(
+  Future<String> _send(
     String method,
-    String path,
-    Map<String, Object?> body,
-  ) async {
+    String path, [
+    Map<String, Object?>? body,
+  ]) async {
     final request = await _http.openUrl(method, _uri(path)).timeout(_timeout);
-    request.headers
-      ..set(HttpHeaders.authorizationHeader, 'Bearer ${_config.apiKey}')
-      ..contentType = ContentType.json;
-    request.add(utf8.encode(jsonEncode(body)));
+    request.headers.set(
+      HttpHeaders.authorizationHeader,
+      'Bearer ${_config.apiKey}',
+    );
+    if (body != null) {
+      request.headers.contentType = ContentType.json;
+      request.add(utf8.encode(jsonEncode(body)));
+    }
     final response = await request.close().timeout(_timeout);
-    // Gövde kullanılmasa da boşaltılmazsa bağlantı havuza dönmez.
-    await response.drain<void>().timeout(_timeout);
+    final responseBody = await response
+        .transform(utf8.decoder)
+        .join()
+        .timeout(_timeout);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw PushBackendException(response.statusCode);
     }
+    return responseBody;
   }
 }

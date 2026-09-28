@@ -746,14 +746,19 @@ class MailRepository {
     for (final path in paths) {
       if (known.contains(path)) continue;
       final file = File(path);
+      final rawName = p.basename(path);
+      final cleanName = AttachmentFiles.cleanPickedName(
+        rawName,
+        sourcePath: path,
+      );
       await _db.addAttachment(
         AttachmentsCompanion.insert(
           messageId: messageId,
-          fileName: Value(p.basename(path)),
+          fileName: Value(cleanName),
           sizeBytes: Value(file.existsSync() ? file.lengthSync() : 0),
           localPath: Value(path),
           isOutgoing: const Value(true),
-          mimeType: Value(_guessMime(path)),
+          mimeType: Value(_guessMime(cleanName)),
         ),
       );
     }

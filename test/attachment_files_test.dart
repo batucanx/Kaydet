@@ -174,5 +174,102 @@ void main() {
     test('süpürme: klasör hiç yoksa hata vermez', () async {
       expect(await store.sweep(activePaths: const {}), 0);
     });
+
+    test('image_picker veya UUID isimleri standart temiz isimle kalıcı depoya aktarılır', () async {
+      final original = source('image_picker_8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.jpg', 'görsel');
+      final stored = await store.persist(original.path);
+
+      final storedName = p.basename(stored);
+      expect(storedName, startsWith('IMG_'));
+      expect(storedName, endsWith('.jpg'));
+      expect(storedName, isNot(contains('image_picker')));
+    });
+
+    test('orijinal dosya adı (originalName) verildiğinde kalıcı depoda korunur', () async {
+      final original = source('tmp_12345.bin', 'içerik');
+      final stored = await store.persist(original.path, originalName: 'tatil_fotografi.jpg');
+
+      expect(p.basename(stored), 'tatil_fotografi.jpg');
+    });
+
+    test('zaten depoda olan dosya eski geçici isim taşıyorsa temiz ada yeniden adlandırılır', () async {
+      final original = source('image_picker_old.jpg', 'veri');
+      // İlk persist yapıldı
+      final stored = await store.persist(original.path);
+      // İkinci çağrıda clean name uygulanır
+      final refreshed = await store.persist(stored, originalName: 'gercek_resim.jpg');
+
+      expect(p.basename(refreshed), 'gercek_resim.jpg');
+      expect(File(refreshed).existsSync(), isTrue);
+    });
+  });
+
+  group('AttachmentFiles.cleanPickedName', () {
+    test('orijinal adı ve uzantıyı aynen korur', () {
+      expect(AttachmentFiles.cleanPickedName('tatil_fotografi.jpg'), 'tatil_fotografi.jpg');
+      expect(AttachmentFiles.cleanPickedName('sozlesme.pdf'), 'sozlesme.pdf');
+      expect(AttachmentFiles.cleanPickedName('rapor.docx'), 'rapor.docx');
+      expect(AttachmentFiles.cleanPickedName('tablo.xlsx'), 'tablo.xlsx');
+      expect(AttachmentFiles.cleanPickedName('arsiv.zip'), 'arsiv.zip');
+    });
+
+    test('Türkçe ve Unicode karakterleri korur', () {
+      expect(AttachmentFiles.cleanPickedName('tatil_fotoğrafı.jpg'), 'tatil_fotoğrafı.jpg');
+      expect(AttachmentFiles.cleanPickedName('Çözüm Önerisi.docx'), 'Çözüm Önerisi.docx');
+      expect(AttachmentFiles.cleanPickedName('İş_Sözleşmesi.pdf'), 'İş_Sözleşmesi.pdf');
+    });
+
+    test('URL encoded karakterleri çözer', () {
+      expect(AttachmentFiles.cleanPickedName('tatil%20fotografi.jpg'), 'tatil fotografi.jpg');
+      expect(AttachmentFiles.cleanPickedName('%C3%B6rnek%20belge.pdf'), 'örnek belge.pdf');
+    });
+
+    test('yol bileşenlerini ayıklayıp sadece dosya adını alır', () {
+      expect(AttachmentFiles.cleanPickedName('/private/var/mobile/tatil_fotografi.jpg'), 'tatil_fotografi.jpg');
+      expect(AttachmentFiles.cleanPickedName(r'C:\Users\User\Documents\belge.pdf'), 'belge.pdf');
+    });
+
+    test('kaydet_pick ve kaydet_resized ön eklerini temizler', () {
+      expect(
+        AttachmentFiles.cleanPickedName('kaydet_pick_1727521831234_tatil_fotografi.jpg'),
+        'tatil_fotografi.jpg',
+      );
+      expect(
+        AttachmentFiles.cleanPickedName('kaydet_resized_1727521835678_tatil_fotografi.jpg'),
+        'tatil_fotografi.jpg',
+      );
+      expect(
+        AttachmentFiles.cleanPickedName('kaydet_resized_1727521835678_kaydet_pick_1727521831234_tatil_fotografi.jpg'),
+        'tatil_fotografi.jpg',
+      );
+      expect(
+        AttachmentFiles.cleanPickedName('scaled_tatil_fotografi.jpg'),
+        'tatil_fotografi.jpg',
+      );
+    });
+
+    test('image_picker_ UUID adlarını temiz IMG_ adı ve orijinal uzantıya çevirir', () {
+      final cleaned = AttachmentFiles.cleanPickedName('image_picker_8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.jpg');
+      expect(cleaned, startsWith('IMG_'));
+      expect(cleaned, endsWith('.jpg'));
+      expect(cleaned, isNot(contains('image_picker')));
+    });
+
+    test('yalın UUID dosya adlarını uzantısına göre temiz ada çevirir', () {
+      final img = AttachmentFiles.cleanPickedName('8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.png');
+      expect(img, startsWith('IMG_'));
+      expect(img, endsWith('.png'));
+
+      final doc = AttachmentFiles.cleanPickedName('8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.pdf');
+      expect(doc, startsWith('Belge_'));
+      expect(doc, endsWith('.pdf'));
+    });
+
+    test('uzantısı olmayan adın uzantısını kaynak yoldan tamamlar', () {
+      expect(
+        AttachmentFiles.cleanPickedName('tatil_fotografi', sourcePath: '/tmp/gecici.jpg'),
+        'tatil_fotografi.jpg',
+      );
+    });
   });
 }

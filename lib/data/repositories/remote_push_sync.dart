@@ -105,7 +105,7 @@ class RemotePushSync {
   /// Bir hesabın sunucuda yeniden kaydedilmesini gerektiren her şey. Şifre
   /// bilerek yok: değiştiğinde [sync]'e `force` verilir.
   String fingerprint(String token, AccountRow a) =>
-      '$token|$environment|${a.imapHost}|${a.imapPort}|'
+      '${_api.baseUrl}|$token|$environment|${a.imapHost}|${a.imapPort}|'
       '${a.imapSecurity.index}|${a.username}';
 
   /// Sunucuyu istenen duruma getirir. Her şey eşitse `true` döner; ağ/sunucu
@@ -159,14 +159,45 @@ class RemotePushSync {
     var allSynced = true;
     final currentIds = {for (final a in accounts) a.id};
 
-    for (final id in fingerprints.keys.toList()) {
-      if (currentIds.contains(id)) continue;
-      try {
-        await _api.deleteAccount(apnsToken: token, clientAccountId: id);
-        fingerprints.remove(id);
-      } on Object catch (e) {
-        _logFailure('hesap silinemedi', e);
-        allSynced = false;
+    // 1. Sunucu ile mutabakat: sunucudaki kayıtlı hesap kimliklerini sorgula.
+    // Sunucu yeniden başladıysa (ör. Railway deploy/restart), veritabanı
+    // sıfırlandıysa veya sunucu adresi değiştiyse yerel parmak izi önbelleği
+    // yanıltıcı olmasın.
+    List<int>? remoteAccountIds;
+    try {
+      remoteAccountIds = await _api.listRegisteredAccountIds(token);
+    } on Object catch (e) {
+      log?.call('sunucu hesap listesi sorgulanamadı: $e');
+    }
+
+    if (remoteAccountIds != null) {
+      final remoteSet = remoteAccountIds.toSet();
+      // Sunucuda artık OLMAYAN hesapları yerel parmak izi önbelleğinden düşür;
+      // böylece aşağıdaki döngüde sunucuya gönderilmeleri tetiklensin.
+      fingerprints.removeWhere((id, _) => !remoteSet.contains(id));
+
+      // Sunucuda kalmış ama telefondan silinmiş yetim hesapları sunucudan sil:
+      for (final remoteId in remoteAccountIds) {
+        if (!currentIds.contains(remoteId)) {
+          try {
+            await _api.deleteAccount(apnsToken: token, clientAccountId: remoteId);
+            fingerprints.remove(remoteId);
+          } on Object catch (e) {
+            _logFailure('sunucudaki yetim hesap silinemedi', e);
+            allSynced = false;
+          }
+        }
+      }
+    } else {
+      for (final id in fingerprints.keys.toList()) {
+        if (currentIds.contains(id)) continue;
+        try {
+          await _api.deleteAccount(apnsToken: token, clientAccountId: id);
+          fingerprints.remove(id);
+        } on Object catch (e) {
+          _logFailure('hesap silinemedi', e);
+          allSynced = false;
+        }
       }
     }
 

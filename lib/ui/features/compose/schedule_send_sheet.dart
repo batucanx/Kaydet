@@ -441,6 +441,7 @@ class _ScheduleOptionTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: AppText.bodyMedium.copyWith(
                       fontWeight: FontWeight.w600,
+                      fontVariations: AppText.semibold,
                       color: t.textPrimary,
                     ),
                   ),
@@ -469,6 +470,7 @@ class _ScheduleOptionTile extends StatelessWidget {
                   fontSize: 12,
                   color: t.accent,
                   fontWeight: FontWeight.w600,
+                  fontVariations: AppText.semibold,
                 ),
               ),
             ],

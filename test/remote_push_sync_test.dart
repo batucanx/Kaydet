@@ -7,15 +7,26 @@ import 'package:kaydet/data/services/secure_store.dart';
 import 'helpers/test_db.dart';
 
 class _FakeApi implements RemotePushApi {
+  @override
+  String baseUrl = 'https://test.example.com';
+
   final List<RemotePushAccount> upserted = [];
   final List<({String apnsToken, int clientAccountId})> deletedAccounts = [];
   final List<String> deletedDevices = [];
+  final Set<int> registeredAccountIds = {};
   Object? failWith;
+
+  @override
+  Future<List<int>> listRegisteredAccountIds(String apnsToken) async {
+    if (failWith != null) throw failWith!;
+    return registeredAccountIds.toList();
+  }
 
   @override
   Future<void> upsertAccount(RemotePushAccount account) async {
     if (failWith != null) throw failWith!;
     upserted.add(account);
+    registeredAccountIds.add(account.clientAccountId);
   }
 
   @override
@@ -25,12 +36,14 @@ class _FakeApi implements RemotePushApi {
   }) async {
     if (failWith != null) throw failWith!;
     deletedAccounts.add((apnsToken: apnsToken, clientAccountId: clientAccountId));
+    registeredAccountIds.remove(clientAccountId);
   }
 
   @override
   Future<void> deleteDevice(String apnsToken) async {
     if (failWith != null) throw failWith!;
     deletedDevices.add(apnsToken);
+    registeredAccountIds.clear();
   }
 }
 
@@ -204,5 +217,49 @@ void main() {
 
     expect(ok, isFalse);
     expect(store.read().fingerprints, isEmpty);
+  });
+
+  test('sunucu sıfırlandığında yerel parmak izi olsa bile eksik hesaplar otomatik yeniden gönderilir', () async {
+    final id1 = await addAccount('a@example.com');
+    final id2 = await addAccount('b@example.com');
+    await secureStore.writePassword(id1, 'sifre1');
+    await secureStore.writePassword(id2, 'sifre2');
+    final a1 = (await db.accountById(id1))!;
+    final a2 = (await db.accountById(id2))!;
+
+    // İlk eşitleme: her iki hesap da sunucuya kaydedilir
+    await sync.sync(token: token, enabled: true, accounts: [a1, a2]);
+    expect(api.registeredAccountIds, {id1, id2});
+    expect(api.upserted, hasLength(2));
+
+    // Sunucu tarafında veritabanı sıfırlandı (ör. redeploy), sunucu sadece id1'i hatırlıyor
+    api.registeredAccountIds.remove(id2);
+    api.upserted.clear();
+
+    // İkinci eşitleme: telefon id2'nin sunucuda olmadığını fark edip yeniden gönderir
+    final ok = await sync.sync(token: token, enabled: true, accounts: [a1, a2]);
+    expect(ok, isTrue);
+    expect(api.upserted, hasLength(1));
+    expect(api.upserted.single.clientAccountId, id2);
+    expect(api.registeredAccountIds, {id1, id2});
+  });
+
+  test('sunucu adresi (baseUrl) değişirse tüm hesaplar yeni sunucuya kaydedilir', () async {
+    final id = await addAccount('a@example.com');
+    await secureStore.writePassword(id, 'sifre');
+    final account = (await db.accountById(id))!;
+
+    await sync.sync(token: token, enabled: true, accounts: [account]);
+    expect(api.upserted, hasLength(1));
+
+    // Yeni sunucuya geçildi
+    api.baseUrl = 'https://new-backend.example.com';
+    api.registeredAccountIds.clear(); // yeni sunucu boş
+    api.upserted.clear();
+
+    final ok = await sync.sync(token: token, enabled: true, accounts: [account]);
+    expect(ok, isTrue);
+    expect(api.upserted, hasLength(1));
+    expect(api.upserted.single.clientAccountId, id);
   });
 }

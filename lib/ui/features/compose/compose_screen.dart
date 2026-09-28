@@ -20,6 +20,7 @@ import '../../../app/providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/turkish.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/services/attachment_files.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/attachment_type.dart';
 import '../../../domain/use_cases/compose_formatting.dart';
@@ -28,11 +29,13 @@ import '../../../domain/use_cases/image_attachment_resize.dart';
 import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
+import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import '../attachment_preview/attachment_preview_screen.dart';
 import 'attachment_reminder.dart';
 import 'image_size_prompt.dart';
 import 'quick_contacts_strip.dart';
@@ -141,7 +144,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _toFocus = FocusNode();
   final _ccFocus = FocusNode();
   final _bccFocus = FocusNode();
-  bool _toFocusRequested = false;
 
   /// `PopScope.canPop`in kendisi — açılışta `false`, gerçekten kapatma
   /// kararı verildiğinde (bkz. [_closeScreen]) anlık olarak `true`ya
@@ -236,37 +238,35 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     ),
   );
 
-  void _focusToFieldAndShowKeyboard() {
+  /// Yalnızca gerçekten YENİ bir ileti — taslak düzenlemelerde ve
+  /// yanıt/iletmelerde "Kime" zaten dolu, odak gövdeye düşebilir.
+  bool get _isBrandNewMessage =>
+      widget.mode == ComposeMode.newMessage && widget.draftId == null;
+
+  void _showKeyboard() {
     if (!mounted) return;
-    FocusScope.of(context).requestFocus(_toFocus);
     SystemChannels.textInput.invokeMethod<void>('TextInput.show');
   }
 
-  /// Yeni ileti açıldığında "Kime" alanına odak verir. `_prefill` tamamlanıp
-  /// `setState` çağrıldıktan SONRA, ilk yeniden çizim karesinin sonunda
-  /// çalışır — bu sayede `QuillEditor`'ın belge değişikliğiyle olası odak
-  /// çalması engellenir. Rota geçiş animasyonu bitene kadar da beklenir;
-  /// aksi hâlde platform klavyeyi görmezden gelir (bkz. eski
-  /// `didChangeDependencies` notu).
-  void _requestToFocusAfterPrefill() {
-    if (_toFocusRequested) return;
-    // Yalnızca gerçekten YENİ bir ileti — taslak düzenlemelerde ve
-    // yanıt/iletmelerde "Kime" zaten dolu, odak gövdeye düşebilir.
-    if (widget.mode != ComposeMode.newMessage || widget.draftId != null) return;
-    _toFocusRequested = true;
+  /// Yeni ileti açıldığında "Kime" alanına odağı platform klavyesine
+  /// yansıtır. Odağın kendisi zaten `_RecipientField`'ın `autofocus`'uyla,
+  /// ilk kare boyanmadan önce "Kime"ye verilmiştir (bkz. aşağıdaki
+  /// `_RecipientField(label: 'Kime', autofocus: _isBrandNewMessage, ...)`)
+  /// — gövde hiçbir karede odağı almaz. Yalnızca rota geçiş animasyonu
+  /// bitene kadar beklenir; aksi hâlde platform klavyeyi görmezden gelir.
+  void _showKeyboardAfterTransition() {
+    if (!_isBrandNewMessage) return;
 
-    // Bir kare sonrasına ertele: `setState` yeniden çizimi tetikler,
-    // `QuillEditor` dahil tüm çocuklar oluşturulur; ondan SONRA odak istenir.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final animation = ModalRoute.of(context)?.animation;
       if (animation == null || animation.isCompleted) {
-        _focusToFieldAndShowKeyboard();
+        _showKeyboard();
       } else {
         void listener(AnimationStatus status) {
           if (status != AnimationStatus.completed) return;
           animation.removeStatusListener(listener);
-          _focusToFieldAndShowKeyboard();
+          _showKeyboard();
         }
         animation.addStatusListener(listener);
       }
@@ -375,7 +375,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _initialised = true);
     _hasRecipientChips.value =
         EmailAddress.parseInput(_to.text).any((a) => a.isValid);
-    _requestToFocusAfterPrefill();
+    _showKeyboardAfterTransition();
     // Paylaşımdan gelen dosyalar henüz hiçbir yerde kayıtlı değil; ilk
     // kullanıcı dokunuşunu beklemeden otomatik kaydetmeyi başlat ki uygulama
     // hemen kapanırsa da taslak (ve ek) kaybolmasın. Cihazda bulunamayan ekler
@@ -791,9 +791,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     if (!mounted) return;
     switch (source) {
       case _AttachSource.gallery:
-        await _pickFromImagePicker(ImageSource.gallery);
+        await _pickFromGallery();
       case _AttachSource.camera:
-        await _pickFromImagePicker(ImageSource.camera);
+        await _pickFromCamera();
       case _AttachSource.files:
         await _pickFilesFromDisk();
     }
@@ -816,31 +816,66 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
-  Future<void> _pickFromImagePicker(ImageSource source) async {
+  Future<void> _pickFromGallery() async {
+    final List<PlatformFile> files;
+    try {
+      files = await FilePicker.pickFiles(type: FileType.image);
+    } on Object catch (_) {
+      // Fallback: FilePicker başarısız olursa ImagePicker dene
+      try {
+        final multi = await ImagePicker().pickMultiImage();
+        if (multi.isNotEmpty) {
+          final picks = <({String path, String? originalName})>[];
+          for (final xfile in multi) {
+            final clean = AttachmentFiles.cleanPickedName(
+              xfile.name,
+              sourcePath: xfile.path,
+            );
+            picks.add((path: xfile.path, originalName: clean));
+          }
+          await _addPickedPaths(picks);
+          return;
+        }
+      } on Object catch (_) {
+        if (!mounted) return;
+        _showError('Galeriye erişilemedi.');
+        return;
+      }
+      if (!mounted) return;
+      _showError('Galeriye erişilemedi.');
+      return;
+    }
+    if (files.isEmpty) return;
+    await _addPlatformFiles(files);
+  }
+
+  Future<void> _pickFromCamera() async {
     final XFile? picked;
     try {
-      picked = await ImagePicker().pickImage(source: source, imageQuality: 90);
+      picked = await ImagePicker().pickImage(source: ImageSource.camera);
     } on Object catch (_) {
       if (!mounted) return;
-      _showError(
-        source == ImageSource.camera
-            ? 'Kameraya erişilemedi.'
-            : 'Galeriye erişilemedi.',
-      );
+      _showError('Kameraya erişilemedi.');
       return;
     }
     if (picked == null) return;
-    final name = picked.name.isNotEmpty ? picked.name : p.basename(picked.path);
+    final now = DateTime.now();
+    final dateStr = '${now.year}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}_'
+        '${now.hour.toString().padLeft(2, '0')}'
+        '${now.minute.toString().padLeft(2, '0')}'
+        '${now.second.toString().padLeft(2, '0')}';
+    final ext = p.extension(picked.path).isNotEmpty
+        ? p.extension(picked.path)
+        : '.jpg';
+    final name = 'IMG_$dateStr$ext';
     await _addPickedPaths([
       (path: picked.path, originalName: name),
     ]);
   }
 
   Future<void> _pickFilesFromDisk() async {
-    // iOS'ta FilePicker bazı kaynaklarda (iCloud Drive, Fotoğraflar kitaplığı)
-    // geçici diske kopyalamaz ve `PlatformFile.path` null döner.
-    // `PlatformFile.readAsByteStream()` bu durumda dosyayı stream üzerinden
-    // okuyabilir; geçici diske yazılıp `_addAttachmentPath`'e verilir.
     final List<PlatformFile> files;
     try {
       files = await FilePicker.pickFiles();
@@ -849,12 +884,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
     if (files.isEmpty) return;
+    await _addPlatformFiles(files);
+  }
+
+  Future<void> _addPlatformFiles(List<PlatformFile> files) async {
     final picks = <({String path, String? originalName})>[];
     for (final file in files) {
-      final originalName = file.name;
+      final cleanName = AttachmentFiles.cleanPickedName(
+        file.name,
+        sourcePath: file.path,
+      );
       final path = file.path;
       if (path != null) {
-        picks.add((path: path, originalName: originalName));
+        picks.add((path: path, originalName: cleanName));
       } else {
         // iOS: path null — readAsByteStream ile oku, geçici dosyaya yaz.
         try {
@@ -862,16 +904,16 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
           final tmpFile = File(
             p.join(
               tmpDir.path,
-              'kaydet_pick_${DateTime.now().microsecondsSinceEpoch}_$originalName',
+              'kaydet_pick_${DateTime.now().microsecondsSinceEpoch}_$cleanName',
             ),
           );
           final sink = tmpFile.openWrite();
           await sink.addStream(file.readAsByteStream());
           await sink.flush();
           await sink.close();
-          picks.add((path: tmpFile.path, originalName: originalName));
+          picks.add((path: tmpFile.path, originalName: cleanName));
         } on Object catch (_) {
-          if (mounted) _showError('"$originalName" okunamadı, eklenemedi.');
+          if (mounted) _showError('"$cleanName" okunamadı, eklenemedi.');
         }
       }
     }
@@ -909,7 +951,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (!mounted) return;
       final pick = picks[i];
       if (reduce && imageIndexes.contains(i)) {
-        final resized = await resizeImageAttachment(File(pick.path));
+        final resized = await resizeImageAttachment(
+          File(pick.path),
+          originalName: pick.originalName,
+        );
         await _addAttachmentPath(resized.path, originalName: pick.originalName);
       } else {
         await _addAttachmentPath(pick.path, originalName: pick.originalName);
@@ -929,11 +974,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   ///   silinebilir.
   Future<void> _addAttachmentPath(String path, {String? originalName}) async {
     if (_attachments.contains(path) || _storedBySource.containsKey(path)) return;
-    // iOS'ta orijinal ad verilmişse kullan, yoksa path'ten türet.
-    final name =
-        (originalName != null && originalName.trim().isNotEmpty)
-            ? originalName.trim()
-            : path.split(RegExp(r'[\\/]')).last;
+    // Orijinal ad verilmişse onu, yoksa path'ten temizlenmiş adı al.
+    final name = AttachmentFiles.cleanPickedName(
+      (originalName != null && originalName.trim().isNotEmpty)
+          ? originalName
+          : path.split(RegExp(r'[\\/]')).last,
+      sourcePath: path,
+    );
 
     // Boyut kontrolü ve `persist` kopyası bitene kadar kullanıcı bir
     // yükleniyor ikonu görür — aksi hâlde ek, işlem bitene kadar listede hiç
@@ -986,7 +1033,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     try {
       stored = await ref
           .read(outgoingAttachmentStoreProvider)
-          .persist(path, originalName: originalName);
+          .persist(path, originalName: name);
     } on Object catch (_) {
       dropPending();
       if (mounted) _showError('“$name” eklenemedi.');
@@ -1204,6 +1251,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                           style: TextStyle(
                             color: onAppBar,
                             fontWeight: FontWeight.w600,
+                            fontVariations: AppText.semibold,
                             fontSize: 18 * AppText.scale,
                           ),
                         ),
@@ -1295,6 +1343,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     label: 'Kime',
                     controller: _to,
                     focusNode: _toFocus,
+                    autofocus: _isBrandNewMessage,
                     accountId: fromAccountId,
                     onChipsChanged: (chips) {
                       _hasRecipientChips.value = chips.any((a) => a.isValid);
@@ -1417,6 +1466,7 @@ class _RecipientField extends StatelessWidget {
     this.trailing,
     this.focusNode,
     this.isSubject = false,
+    this.autofocus = false,
     this.accountId,
     this.onChipsChanged,
   });
@@ -1426,6 +1476,7 @@ class _RecipientField extends StatelessWidget {
   final Widget? trailing;
   final FocusNode? focusNode;
   final bool isSubject;
+  final bool autofocus;
 
   /// Kişi otomatik tamamlaması hangi hesabın kişi defterinden gelsin — bkz.
   /// `ComposeScreen._fromAccountId`. Yalnızca e-posta alanlarında (Kime/
@@ -1449,6 +1500,7 @@ class _RecipientField extends StatelessWidget {
         label: label,
         controller: controller,
         focusNode: focusNode!,
+        autofocus: autofocus,
         accountId: accountId,
         trailing: trailing,
         onChipsChanged: onChipsChanged,
@@ -1477,9 +1529,10 @@ class _RecipientField extends StatelessWidget {
               focusNode: focusNode,
               keyboardType: TextInputType.text,
               textCapitalization: TextCapitalization.sentences,
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                fontVariations: AppText.semibold,
+              ),
               decoration: _fieldDecoration,
             ),
           ),
@@ -1509,6 +1562,7 @@ class _RecipientChipsField extends ConsumerStatefulWidget {
     required this.label,
     required this.controller,
     required this.focusNode,
+    this.autofocus = false,
     this.accountId,
     this.trailing,
     this.onChipsChanged,
@@ -1517,6 +1571,7 @@ class _RecipientChipsField extends ConsumerStatefulWidget {
   final String label;
   final TextEditingController controller;
   final FocusNode focusNode;
+  final bool autofocus;
   final int? accountId;
   final Widget? trailing;
   final ValueChanged<List<EmailAddress>>? onChipsChanged;
@@ -1852,6 +1907,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                                     child: TextField(
                                       controller: controller,
                                       focusNode: focusNode,
+                                      autofocus: widget.autofocus,
                                       keyboardType: TextInputType.emailAddress,
                                       textInputAction: TextInputAction.next,
                                       onChanged: _onInputChanged,
@@ -2160,6 +2216,39 @@ class _PendingAttachment {
   final String name;
 }
 
+/// [path]'ten (yerel dosya) `AttachmentPreviewScreen`in beklediği
+/// `AttachmentRow`u üretir. Bu ek henüz gönderilmediği için sunucuda karşılığı
+/// yok — `id`/`messageId` yalnızca birer yer tutucu, önizleme ekranı bu
+/// alanları kullanmaz (bkz. `localPathOf`: indirme adımı atlanır, dosya zaten
+/// yerelde).
+AttachmentRow _localAttachmentRow(String path) {
+  final fileName = AttachmentFiles.cleanPickedName(
+    path.split(RegExp(r'[\\/]')).last,
+    sourcePath: path,
+  );
+  int size;
+  try {
+    size = File(path).lengthSync();
+  } on FileSystemException {
+    size = 0;
+  }
+  return AttachmentRow(
+    id: 0,
+    messageId: 0,
+    partId: '',
+    fileName: fileName,
+    mimeType: '',
+    sizeBytes: size,
+    isInline: false,
+    localPath: path,
+    isOutgoing: true,
+  );
+}
+
+/// Eklenen dosyaların düzenli kart ızgarası — dosya sayısı/ad uzunluğu ne
+/// olursa olsun tutarlı kart boyutu/dolgusu (bkz. `_AttachmentCardShell`) ve
+/// ekran genişliğine göre kendiliğinden satır kıran `Wrap` (taşma yok, dış
+/// yazma ekranı kaydırmasını bozmaz — burada kendi iç kaydırması YOK).
 class _AttachmentList extends StatelessWidget {
   const _AttachmentList({
     required this.paths,
@@ -2173,6 +2262,20 @@ class _AttachmentList extends StatelessWidget {
   final Set<String> justUploaded;
   final ValueChanged<String> onRemove;
 
+  /// Dokunulan karttan başlayarak TÜM hazır ekler arasında kaydırılabilir
+  /// galeriyi açar (bkz. `AttachmentPreviewScreen`, mail detay ekranındaki
+  /// aynı mantık) — `localPathOf` verildiği için indirme adımı atlanır.
+  void _openPreview(BuildContext context, int index) {
+    context.pushScreen(
+      AttachmentPreviewScreen(
+        attachments: [for (final path in paths) _localAttachmentRow(path)],
+        initialIndex: index,
+        localPathOf: (attachment) => attachment.localPath,
+      ),
+      transitionStyle: KaydetTransitionStyle.horizontalPush,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
@@ -2185,9 +2288,76 @@ class _AttachmentList extends StatelessWidget {
         spacing: Space.sm,
         runSpacing: Space.sm,
         children: [
-          for (final item in pending)
-            Chip(
-              avatar: SizedBox(
+          for (final item in pending) _PendingAttachmentCard(name: item.name),
+          for (var i = 0; i < paths.length; i++)
+            _AttachmentCard(
+              path: paths[i],
+              justUploaded: justUploaded.contains(paths[i]),
+              onTap: () => _openPreview(context, i),
+              onRemove: () => onRemove(paths[i]),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Tüm ek kartlarının ortak kabuğu — dolgu, kenar yuvarlaklığı, kenarlık ve
+/// minimum yükseklik TEK yerden gelir, böylece yükleniyor/hazır durumları
+/// arasında görünüm asla kaymaz. `maxWidth`, uzun dosya adının kartı
+/// şişirmesini engeller (bkz. `_AttachmentCard`daki `Flexible`+ellipsis) ve
+/// `Wrap` ile birlikte ekran genişliğine göre kendiliğinden 1/2/3 sütuna
+/// bölünmesini sağlar.
+class _AttachmentCardShell extends StatelessWidget {
+  const _AttachmentCardShell({required this.child, this.onTap});
+
+  final Widget child;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final content = Container(
+      constraints: const BoxConstraints(maxWidth: 260, minHeight: 44),
+      padding: const EdgeInsetsDirectional.only(
+        start: Space.md,
+        top: Space.sm,
+        bottom: Space.sm,
+        end: Space.xs,
+      ),
+      decoration: BoxDecoration(
+        color: t.surface,
+        borderRadius: BorderRadius.circular(Radii.sm),
+        border: Border.all(color: t.divider),
+      ),
+      child: child,
+    );
+    if (onTap == null) return content;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(Radii.sm),
+      child: content,
+    );
+  }
+}
+
+class _PendingAttachmentCard extends StatelessWidget {
+  const _PendingAttachmentCard({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return _AttachmentCardShell(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: IconSize.lg,
+            height: IconSize.lg,
+            child: Center(
+              child: SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(
@@ -2195,30 +2365,96 @@ class _AttachmentList extends StatelessWidget {
                   color: t.textSecondary,
                 ),
               ),
-              label: Text(
-                item.name,
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-              backgroundColor: t.surface,
-              side: BorderSide(color: t.divider),
             ),
-          for (final path in paths)
-            Chip(
-              avatar: justUploaded.contains(path)
-                  ? Icon(LucideIcons.checkCircle, size: 18, color: t.success)
-                  : AttachmentTypeIcon(
-                      fileName: path.split(RegExp(r'[\\/]')).last,
-                      size: 18,
-                    ),
-              label: Text(
-                path.split(RegExp(r'[\\/]')).last,
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-              deleteIcon: const Icon(LucideIcons.x, size: 14),
-              onDeleted: () => onRemove(path),
-              backgroundColor: t.surface,
-              side: BorderSide(color: t.divider),
+          ),
+          const SizedBox(width: Space.sm),
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Hazır (kalıcı depoya kopyalanmış) bir ekin kartı — tamamı tıklanabilir
+/// (önizlemeyi açar), sağdaki "x" ile kaldırılır. Uzantı + boyut altyazısı
+/// (bkz. `AttachmentType.label`/`formatBytes`) mail detay ekranındaki
+/// `_AttachmentChip` ile aynı bilgiyi verir.
+class _AttachmentCard extends StatelessWidget {
+  const _AttachmentCard({
+    required this.path,
+    required this.justUploaded,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  final String path;
+  final bool justUploaded;
+  final VoidCallback onTap;
+  final VoidCallback onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final fileName = AttachmentFiles.cleanPickedName(
+      path.split(RegExp(r'[\\/]')).last,
+      sourcePath: path,
+    );
+    int size;
+    try {
+      size = File(path).lengthSync();
+    } on FileSystemException {
+      size = 0;
+    }
+    return _AttachmentCardShell(
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          justUploaded
+              ? Icon(
+                  LucideIcons.checkCircle,
+                  size: IconSize.lg,
+                  color: t.success,
+                )
+              : AttachmentTypeIcon(fileName: fileName, size: IconSize.lg),
+          const SizedBox(width: Space.sm),
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  '${AttachmentType.label(fileName)} · ${formatBytes(size)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: const Icon(LucideIcons.x, size: IconSize.sm),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Kaldır',
+            onPressed: onRemove,
+          ),
         ],
       ),
     );

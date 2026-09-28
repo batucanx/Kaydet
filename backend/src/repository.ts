@@ -102,6 +102,18 @@ export class Repository {
     return this.db.prepare('SELECT * FROM accounts').all() as AccountRow[];
   }
 
+  /** Cihazın sunucuda kayıtlı hesaplarının client_account_id listesini döndürür. */
+  listAccountClientIds(apnsToken: string): number[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.client_account_id FROM accounts a
+         JOIN devices d ON d.id = a.device_id
+         WHERE d.apns_token = ?`,
+      )
+      .all(apnsToken) as { client_account_id: number }[];
+    return rows.map((r) => r.client_account_id);
+  }
+
   getAccount(id: number): AccountRow | undefined {
     return this.db.prepare('SELECT * FROM accounts WHERE id = ?').get(id) as
       | AccountRow

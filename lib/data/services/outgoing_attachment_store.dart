@@ -37,20 +37,41 @@ class OutgoingAttachmentStore {
   /// biliyorsa buraya verir; verilmezse yol'dan türetilen ad kullanılır.
   Future<String> persist(String sourcePath, {String? originalName}) async {
     final root = await _rootProvider();
-    if (p.isWithin(root.path, sourcePath)) return sourcePath;
+    if (p.isWithin(root.path, sourcePath)) {
+      final currentName = p.basename(sourcePath);
+      final rawName = (originalName != null && originalName.trim().isNotEmpty)
+          ? originalName.trim()
+          : currentName;
+      final cleanName = AttachmentFiles.safeFileName(
+        AttachmentFiles.cleanPickedName(rawName, sourcePath: sourcePath),
+      );
+      if (currentName == cleanName) return sourcePath;
+      final target = File(p.join(File(sourcePath).parent.path, cleanName));
+      try {
+        if (await File(sourcePath).exists()) {
+          await File(sourcePath).rename(target.path);
+          return target.path;
+        }
+      } catch (_) {}
+      return sourcePath;
+    }
 
     // Her ek kendi klasöründe: aynı adlı iki dosya birbirinin üstüne yazılmaz.
     // `createTemp` benzersizliği işletim sistemi garanti eder (saat tabanlı bir
     // ad, düşük çözünürlüklü saatlerde iki eki aynı klasöre düşürebilirdi).
     await root.create(recursive: true);
     final folder = await root.createTemp('ek_');
-    // Orijinal ad verilmişse onu, yoksa path'teki son bileşeni kullan.
+    // Orijinal ad verilmişse onu, yoksa path'teki son bileşeni kullan ve temizle.
     final rawName =
         (originalName != null && originalName.trim().isNotEmpty)
             ? originalName.trim()
             : p.basename(sourcePath);
+    final cleanName = AttachmentFiles.cleanPickedName(
+      rawName,
+      sourcePath: sourcePath,
+    );
     final target = File(
-      p.join(folder.path, AttachmentFiles.safeFileName(rawName)),
+      p.join(folder.path, AttachmentFiles.safeFileName(cleanName)),
     );
     try {
       await File(sourcePath).copy(target.path);

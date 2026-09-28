@@ -8,6 +8,7 @@ import 'package:xml/xml.dart';
 
 import '../../../data/database/app_database.dart';
 import '../../core/actions/attachment_actions.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import 'ods_parser.dart';
 import 'xls_parser.dart';
@@ -708,6 +709,7 @@ class _SpreadsheetPreviewWidgetState extends State<SpreadsheetPreviewWidget> {
                         fontSize: 11,
                         color: t.textTertiary,
                         fontWeight: FontWeight.w600,
+                        fontVariations: AppText.semibold,
                       ),
                     ),
                   ),

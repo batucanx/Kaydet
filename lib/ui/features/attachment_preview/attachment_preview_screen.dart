@@ -45,10 +45,18 @@ class AttachmentPreviewScreen extends ConsumerStatefulWidget {
     super.key,
     required this.attachments,
     required this.initialIndex,
+    this.localPathOf,
   });
 
   final List<AttachmentRow> attachments;
   final int initialIndex;
+
+  /// Verilirse indirme adımı atlanır: ek zaten cihazda yereldir (ör. yazma
+  /// ekranından eklenmiş, henüz gönderilmemiş dosya — bkz. `compose_screen.
+  /// dart`daki `_AttachmentList`). `null` dönerse dosya eksik say (bkz.
+  /// `_futureFor`). Verilmezse (varsayılan `null`) eski davranış sürer:
+  /// `mailRepositoryProvider.downloadAttachment` ile sunucudan indirilir.
+  final String? Function(AttachmentRow attachment)? localPathOf;
 
   @override
   ConsumerState<AttachmentPreviewScreen> createState() =>
@@ -73,21 +81,27 @@ class _AttachmentPreviewScreenState
   /// çakışır.
   bool _swipeLocked = false;
 
+  Future<Result<String>> _resolve(int index) {
+    final localPathOf = widget.localPathOf;
+    if (localPathOf != null) {
+      final path = localPathOf(widget.attachments[index]);
+      return Future.value(
+        path != null
+            ? Result.ok(path)
+            : const Result.err(StorageFailure()),
+      );
+    }
+    return ref
+        .read(mailRepositoryProvider)
+        .downloadAttachment(widget.attachments[index].id);
+  }
+
   Future<Result<String>> _futureFor(int index) {
-    return _futures.putIfAbsent(
-      index,
-      () => ref
-          .read(mailRepositoryProvider)
-          .downloadAttachment(widget.attachments[index].id),
-    );
+    return _futures.putIfAbsent(index, () => _resolve(index));
   }
 
   void _retry(int index) {
-    setState(() {
-      _futures[index] = ref
-          .read(mailRepositoryProvider)
-          .downloadAttachment(widget.attachments[index].id);
-    });
+    setState(() => _futures[index] = _resolve(index));
   }
 
   void _setSwipeLocked(bool locked) {

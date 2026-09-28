@@ -122,4 +122,35 @@ describe('API', () => {
     expect(s.repo.listAccounts()).toHaveLength(0);
     expect(s.hooks.onAccountsRemoved).toHaveBeenCalledWith(ids);
   });
+
+  it('cihazın kayıtlı hesap kimliklerini döner (GET /v1/accounts)', async () => {
+    // Başlangıçta boş
+    const emptyRes = await s.app.inject({
+      method: 'GET',
+      url: `/v1/accounts?apnsToken=${TOKEN}`,
+      headers: auth,
+    });
+    expect(emptyRes.statusCode).toBe(200);
+    expect(emptyRes.json()).toEqual({ clientAccountIds: [] });
+
+    // 2 hesap ekle
+    await put(body({ clientAccountId: 101 }));
+    await put(body({ clientAccountId: 102 }));
+
+    const res = await s.app.inject({
+      method: 'GET',
+      url: `/v1/accounts?apnsToken=${TOKEN}`,
+      headers: auth,
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ clientAccountIds: [101, 102] });
+
+    // Geçersiz token ile 400
+    const badRes = await s.app.inject({
+      method: 'GET',
+      url: '/v1/accounts?apnsToken=kisa',
+      headers: auth,
+    });
+    expect(badRes.statusCode).toBe(400);
+  });
 });

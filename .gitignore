@@ -46,3 +46,4 @@ app.*.map.json
 
 # Local tool runtime state
 .claude/*.lock
+Satoshi_Complete/

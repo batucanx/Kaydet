@@ -26,6 +26,7 @@ import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/actions/attachment_actions.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
+import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_notice.dart';
@@ -435,7 +436,10 @@ class _Header extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.bodyLarge
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                              ?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                fontVariations: AppText.semibold,
+                              ),
                         ),
                       ),
                       if (message.isFlagged)
