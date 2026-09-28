@@ -1,5 +1,5 @@
 import { buildMailPayload, type ApnsClient } from './apns.js';
-import type { AccountRow } from './db.js';
+import type { AccountRow, ApnsEnvironment } from './db.js';
 import type { Repository } from './repository.js';
 
 export interface NewMessage {
@@ -64,12 +64,31 @@ export class Notifier {
           });
 
     for (let attempt = 0; ; attempt++) {
-      const result = await this.apns.send(device.apns_token, device.environment, payload);
+      let currentEnv = device.environment;
+      let result = await this.apns.send(device.apns_token, currentEnv, payload);
       if (result.status === 'sent') {
-        this.opts.log?.(`hesap ${account.id}: push gönderildi (${device.environment})`);
+        this.opts.log?.(`hesap ${account.id}: push gönderildi (${currentEnv})`);
         return;
       }
       if (result.status === 'invalid_token') {
+        // Ortam uyuşmazlığında (geliştirici sertifikasıyla Release derlemesi vb.)
+        // hemen silmek yerine diğer APNs ortamını (development <-> production) dene:
+        if (result.reason === 'BadDeviceToken' || result.reason === 'BadEnvironmentKeyInToken') {
+          const altEnv: ApnsEnvironment =
+            currentEnv === 'production' ? 'development' : 'production';
+          this.opts.log?.(
+            `hesap ${account.id}: ${currentEnv} ortamında ${result.reason} alındı, alternatif ${altEnv} deneniyor...`,
+          );
+          const altResult = await this.apns.send(device.apns_token, altEnv, payload);
+          if (altResult.status === 'sent') {
+            this.opts.log?.(
+              `hesap ${account.id}: Alternatif ortamda (${altEnv}) push BAŞARIYLA gönderildi! Cihaz ortamı güncelleniyor.`,
+            );
+            this.repo.updateDeviceEnvironment(device.id, altEnv);
+            return;
+          }
+        }
+
         this.opts.log?.(
           `hesap ${account.id}: APNs token'ı geçersiz sayıldı (${result.reason}), cihaz siliniyor`,
         );

@@ -137,4 +137,10 @@ export class Repository {
   decryptPassword(account: AccountRow): string {
     return this.box.decrypt(account.password_enc);
   }
+
+  updateDeviceEnvironment(deviceId: number, environment: ApnsEnvironment): void {
+    this.db
+      .prepare('UPDATE devices SET environment = ? WHERE id = ?')
+      .run(environment, deviceId);
+  }
 }
