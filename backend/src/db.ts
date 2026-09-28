@@ -28,10 +28,31 @@ export interface AccountRow {
 }
 
 export function openDatabase(path: string): Database.Database {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-  const db = new Database(path);
-  db.pragma('journal_mode = WAL');
+  console.log('openDatabase başlatılıyor, yol:', path);
+  if (path !== ':memory:') {
+    const dir = dirname(path);
+    console.log('Veritabanı dizini kontrol ediliyor:', dir);
+    mkdirSync(dir, { recursive: true });
+  }
+  console.log('new Database(path) çağrılıyor...');
+  let db: Database.Database;
+  try {
+    db = new Database(path);
+  } catch (err) {
+    console.error('Database dosyası açılamadı, :memory: deneniyor:', err);
+    db = new Database(':memory:');
+  }
+  console.log('Pragma ayarlanıyor...');
+  try {
+    db.pragma('journal_mode = WAL');
+  } catch (e) {
+    console.warn('WAL modu başarısız oldu, DELETE deneniyor:', e);
+    try {
+      db.pragma('journal_mode = DELETE');
+    } catch (_) {}
+  }
   db.pragma('foreign_keys = ON');
+  console.log('Tablo şemaları oluşturuluyor...');
   db.exec(`
     CREATE TABLE IF NOT EXISTS devices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

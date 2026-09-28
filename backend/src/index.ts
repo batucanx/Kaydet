@@ -23,12 +23,14 @@ try {
   console.log('Veritabanı hazır. APNs istemcisi kuruluyor...');
   const repo = new Repository(db, new SecretBox(config.ENCRYPTION_KEY));
 
+  console.log('APNs PEM/Base64 anahtarı çözümleniyor...');
   const keyPem = config.APNS_KEY_PEM?.trim()
     ? (config.APNS_KEY_PEM.includes('-----BEGIN')
         ? config.APNS_KEY_PEM
         : Buffer.from(config.APNS_KEY_PEM, 'base64').toString('utf8'))
     : readFileSync(config.APNS_KEY_PATH!, 'utf8');
 
+  console.log('ApnsClient örneği oluşturuluyor...');
   const apns = new ApnsClient({
     keyPem,
     keyId: config.APNS_KEY_ID,
@@ -36,9 +38,10 @@ try {
     topic: config.APNS_BUNDLE_ID,
   });
 
+  console.log('Apple APNs ile anahtar doğrulaması (verifyKey) yapılıyor...');
   await apns.verifyKey();
   console.log(
-    `APNs anahtarı doğrulandı (Key ID: ${config.APNS_KEY_ID}, Team ID: ${config.APNS_TEAM_ID}, ` +
+    `APNs anahtarı başarıyla doğrulandı (Key ID: ${config.APNS_KEY_ID}, Team ID: ${config.APNS_TEAM_ID}, ` +
       `topic: ${config.APNS_BUNDLE_ID})`,
   );
 
