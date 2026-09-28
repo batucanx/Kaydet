@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -1479,8 +1480,23 @@ class DocxPreviewWidget extends StatefulWidget {
   State<DocxPreviewWidget> createState() => _DocxPreviewWidgetState();
 }
 
-class _DocxPreviewWidgetState extends State<DocxPreviewWidget> {
+class _DocxPreviewWidgetState extends State<DocxPreviewWidget>
+    with SingleTickerProviderStateMixin {
   late Future<DocxDocument> _docFuture;
+
+  /// Bkz. `PdfPreviewWidget._doubleTapZoomScale` — `_ImagePreview`in
+  /// `PhotoView` çift-dokunma döngüsüyle aynı his: sığdırılmış görünüm
+  /// (ölçek 1.0) ile bu hedef ölçek arasında geçiş yapar.
+  static const double _doubleTapZoomScale = 2.5;
+
+  final TransformationController _transformController =
+      TransformationController();
+  late final AnimationController _zoomAnimController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 200),
+  );
+  Animation<Matrix4>? _zoomAnimation;
+  TapDownDetails? _doubleTapDetails;
 
   @override
   void initState() {
@@ -1494,6 +1510,57 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget> {
     if (oldWidget.path != widget.path) {
       _docFuture = DocxParser.parseFile(widget.path);
     }
+  }
+
+  @override
+  void dispose() {
+    _zoomAnimController.dispose();
+    _transformController.dispose();
+    super.dispose();
+  }
+
+  void _handleDoubleTapDown(TapDownDetails details) {
+    _doubleTapDetails = details;
+  }
+
+  void _handleDoubleTap() {
+    final details = _doubleTapDetails;
+    if (details == null) return;
+
+    final isZoomedIn = _transformController.value.row0[0] > 1.05;
+    if (isZoomedIn) {
+      widget.onZoomChanged?.call(false);
+      _animateZoomTo(Matrix4.identity());
+      return;
+    }
+
+    final position = details.localPosition;
+    final zoomed = Matrix4.identity()
+      ..translateByDouble(
+        -position.dx * (_doubleTapZoomScale - 1),
+        -position.dy * (_doubleTapZoomScale - 1),
+        0,
+        1,
+      )
+      ..scaleByDouble(
+        _doubleTapZoomScale,
+        _doubleTapZoomScale,
+        _doubleTapZoomScale,
+        1,
+      );
+    widget.onZoomChanged?.call(true);
+    _animateZoomTo(zoomed);
+  }
+
+  void _animateZoomTo(Matrix4 target) {
+    _zoomAnimController.reset();
+    _zoomAnimation =
+        Matrix4Tween(begin: _transformController.value, end: target).animate(
+          CurvedAnimation(parent: _zoomAnimController, curve: Curves.easeInOut),
+        )..addListener(() {
+          _transformController.value = _zoomAnimation!.value;
+        });
+    unawaited(_zoomAnimController.forward());
   }
 
   @override
@@ -1563,26 +1630,40 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget> {
         }
 
         final doc = snapshot.data!;
-        return Container(
-          color: t.surfaceDeep,
-          child: InteractiveViewer(
-            minScale: 0.6,
-            maxScale: 3.5,
-            onInteractionStart: widget.onZoomChanged == null
-                ? null
-                : (_) => widget.onZoomChanged!(true),
-            onInteractionEnd: widget.onZoomChanged == null
-                ? null
-                : (_) => widget.onZoomChanged!(false),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isNarrow = constraints.maxWidth < 600;
-                final horizontalMargin = isNarrow ? Space.xs : Space.md;
-                final pagePadding = isNarrow
-                    ? const EdgeInsets.symmetric(horizontal: Space.md, vertical: Space.xl)
-                    : const EdgeInsets.symmetric(horizontal: 40, vertical: 48);
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final viewportWidth = constraints.maxWidth;
+            final isNarrow = viewportWidth < 600;
+            final horizontalMargin = isNarrow ? Space.xs : Space.md;
+            final pagePadding = isNarrow
+                ? const EdgeInsets.symmetric(horizontal: Space.md, vertical: Space.xl)
+                : const EdgeInsets.symmetric(horizontal: 40, vertical: 48);
 
-                return SingleChildScrollView(
+            // Bkz. `PdfPreviewWidget`in `PdfViewPinch`i: tek bir
+            // `InteractiveViewer` HEM yakınlaştırmayı HEM kaydırmayı (pan)
+            // yönetir — resimdeki `PhotoView` ile aynı mantık. Önceden bunun
+            // içine ayrıca bir `SingleChildScrollView` sarılıydı; iki ayrı
+            // gesture yöneticisi (kaydırma ve pan) tek parmakla sürüklemede
+            // birbiriyle çakışıp zoom/pan hissini resim ve PDF'ten farklı ve
+            // tutarsız kılıyordu.
+            return GestureDetector(
+              onDoubleTapDown: _handleDoubleTapDown,
+              onDoubleTap: _handleDoubleTap,
+              child: InteractiveViewer(
+                transformationController: _transformController,
+                minScale: 1.0,
+                maxScale: 4.5,
+                constrained: false,
+                boundaryMargin: EdgeInsets.zero,
+                onInteractionStart: widget.onZoomChanged == null
+                    ? null
+                    : (_) => widget.onZoomChanged!(true),
+                onInteractionEnd: widget.onZoomChanged == null
+                    ? null
+                    : (_) => widget.onZoomChanged!(false),
+                child: Container(
+                  width: viewportWidth,
+                  color: t.surfaceDeep,
                   padding: EdgeInsets.symmetric(
                     horizontal: horizontalMargin,
                     vertical: Space.md,
@@ -1616,10 +1697,10 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget> {
                       ),
                     ),
                   ),
-                );
-              },
-            ),
-          ),
+                ),
+              ),
+            );
+          },
         );
       },
     );

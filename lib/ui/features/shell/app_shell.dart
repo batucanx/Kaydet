@@ -375,6 +375,18 @@ class _SideRail extends StatelessWidget {
     final railDivider = isLight
         ? t.onAccentFill.withValues(alpha: 0.3)
         : t.divider;
+    // Aktif hesap (optimistik seçim varsa o) her zaman şeridin en üstünde
+    // görünür — kullanıcı hangi hesapta olduğunu ilk bakışta anlasın diye.
+    // Yalnızca görüntü sırası değişir; `accounts`'un kendi kaynağı
+    // (`allAccountsProvider`) ve hesap kimlikleri dokunulmaz.
+    final effectiveActiveId = pendingAccountId ?? activeAccountId;
+    final orderedAccounts = List<AccountRow>.of(accounts);
+    final activeIndex = effectiveActiveId == null
+        ? -1
+        : orderedAccounts.indexWhere((a) => a.id == effectiveActiveId);
+    if (activeIndex > 0) {
+      orderedAccounts.insert(0, orderedAccounts.removeAt(activeIndex));
+    }
     return NavigationRail(
       backgroundColor: railBg,
       minWidth: 76,
@@ -391,7 +403,7 @@ class _SideRail extends StatelessWidget {
       leading: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final account in accounts)
+          for (final account in orderedAccounts)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: Space.xs),
               child: _AccountAvatarButton(
@@ -399,7 +411,7 @@ class _SideRail extends StatelessWidget {
                 // Optimistik seçim varsa (halka daha az önce tıklanmış
                 // hesaba doğru anında kaymış olsun diye) DB'deki gerçek
                 // aktif hesabın önüne geçer.
-                isActive: account.id == (pendingAccountId ?? activeAccountId),
+                isActive: account.id == effectiveActiveId,
                 onTap: () => onSelectAccount(account.id),
               ),
             ),
@@ -605,13 +617,20 @@ class _AccountAvatarButton extends StatelessWidget {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: t.accentFill,
+                      // Rozet dolgusu halkayla AYNI renk (`ringColor`) —
+                      // bu ton zaten rayın zeminine karşı görünür olacak
+                      // şekilde seçilmişti (bkz. yukarıdaki yorum), o yüzden
+                      // rozet de otomatik olarak zeminle karışmaz.
+                      color: ringColor,
                       border: Border.all(color: railBg, width: 2),
                     ),
                     child: Icon(
                       LucideIcons.check,
                       size: 10,
-                      color: t.onAccentFill,
+                      // İkon rengi rayın zeminiyle aynı — `ringColor`
+                      // zaten o zemine karşı kontrastlı seçildiği için
+                      // bu ikili ters çevrilmiş hâliyle de kontrastlı kalır.
+                      color: railBg,
                     ),
                   ),
                 ),

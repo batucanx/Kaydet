@@ -460,11 +460,13 @@ class _ComposeFab extends StatelessWidget {
 }
 
 /// Kaydırma hareketleriyle arşivle / sil — tek harekette, ikinci bir
-/// dokunuş gerektirmeden. Çöp Kutusu'nda birincil yön (sağa kaydırma)
-/// bunun yerine Gelen Kutusuna geri yükler: o klasörde "arşivle" anlamsız,
-/// kullanıcının asıl istediği tek eylem geri yüklemektir (bkz.
-/// `restoreMessagesToInbox`) — daha önce bunun için uzun basıp seçim moduna
-/// girip "Taşı" menüsünden Gelen Kutusu'nu seçmek gerekiyordu.
+/// dokunuş gerektirmeden. Çöp Kutusu'nda VE Arşiv'de birincil yön (sağa
+/// kaydırma) bunun yerine Gelen Kutusuna geri yükler: o klasörlerde
+/// "arşivle" anlamsız (Arşiv'de zaten arşivli, Çöp Kutusu'nda "geri yükle"
+/// asıl istenen eylem) — ikisi de aynı `restoreMessagesToInbox`'ı kullanır
+/// (bkz. `mailRepository.restoreToInbox` — hedefi Gelen Kutusu olan genel bir
+/// taşıma, kaynak klasöre bakmaz) — daha önce bunun için uzun basıp seçim
+/// moduna girip "Taşı" menüsünden Gelen Kutusu'nu seçmek gerekiyordu.
 ///
 /// FİZİKSEL yönler: sağa kaydır → arşivle/geri yükle, sola kaydır → sil.
 /// `Dismissible`ın yönleri metin yönüne göredir (RTL'de `startToEnd` sola
@@ -536,9 +538,10 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     final database = ref.read(databaseProvider);
 
     if (isPrimaryAction) {
-      final isTrash =
-          ref.read(currentMailboxProvider)?.specialUse == SpecialUse.trash;
-      if (isTrash) {
+      final specialUse = ref.read(currentMailboxProvider)?.specialUse;
+      final movesToInbox =
+          specialUse == SpecialUse.trash || specialUse == SpecialUse.archive;
+      if (movesToInbox) {
         await restoreMessagesToInbox(
           context,
           ref,
@@ -581,6 +584,8 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
       ),
     );
     final mailbox = ref.watch(currentMailboxProvider);
+    final scheduledSendTimes =
+        ref.watch(scheduledSendTimesProvider).value ?? const <int, DateTime>{};
 
     final ltr = Directionality.of(context) == TextDirection.ltr;
     final primaryDirection = ltr
@@ -591,18 +596,19 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         : DismissDirection.startToEnd;
 
     final isTrash = mailbox?.specialUse == SpecialUse.trash;
+    final isArchive = mailbox?.specialUse == SpecialUse.archive;
 
-    // Arşivde/taslaklarda arşivleme anlamsız (zaten orada / sunucuya hiç
-    // gitmemiş yerel kayıt) — yalnızca sil yönü açık kalır. Çöp Kutusu'nda
-    // birincil yön geri yüklemeye döndüğü için bu klasörler için hâlâ geçerli.
+    // Taslaklarda arşivleme/geri yükleme anlamsız (sunucuya hiç gitmemiş
+    // yerel kayıt) — yalnızca sil yönü açık kalır. Çöp Kutusu'nda VE
+    // Arşiv'de birincil yön geri yüklemeye döndüğü için bu klasörler için
+    // hâlâ geçerli.
     final message = widget.message;
     final canPrimaryAction =
-        mailbox?.specialUse != SpecialUse.archive &&
         mailbox?.specialUse != SpecialUse.drafts &&
         !message.isDraft &&
         !message.isLocalOnly;
 
-    final primaryPane = isTrash
+    final primaryPane = (isTrash || isArchive)
         ? _SwipeBackground(
             // `accent` koyu temada zemin üzerinde METİN/ikon için ayarlıdır
             // (açık bir ton) — dolgu olarak kullanılırsa üstündeki beyaz
@@ -651,6 +657,7 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         labels: widget.labels,
         isSelected: isSelected,
         isSentFolder: widget.isSentFolder,
+        scheduledSendAt: scheduledSendTimes[message.id],
         onTap: widget.onTap,
         onAvatarTap: widget.onAvatarTap,
         onLongPress: widget.onLongPress,

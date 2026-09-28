@@ -244,14 +244,15 @@ class _QuickTemplatesSheetState extends ConsumerState<QuickTemplatesSheet> {
                             widget.onSelect(template.content);
                             Navigator.of(context).pop();
                           },
-                          onEdit: template.isBuiltIn
-                              ? null
-                              : () => _openEditorDialog(context, template: template),
-                          onDelete: template.isBuiltIn
-                              ? null
-                              : () => ref
-                                  .read(quickTemplatesProvider.notifier)
-                                  .remove(template.id),
+                          // Yerleşik şablonlar da artık düzenlenebilir VE
+                          // silinebilir — kullanıcı hepsini kullanmak
+                          // istemeyebilir (bkz. `_openEditorDialog`'daki
+                          // `isBuiltIn` korunumu, düzenlerken rozet kalır).
+                          onEdit: () =>
+                              _openEditorDialog(context, template: template),
+                          onDelete: () => ref
+                              .read(quickTemplatesProvider.notifier)
+                              .remove(template.id),
                         );
                       },
                     ),
@@ -276,64 +277,158 @@ class _QuickTemplatesSheetState extends ConsumerState<QuickTemplatesSheet> {
       context: context,
       builder: (dialogCtx) {
         final t = dialogCtx.tokens;
-        return AlertDialog(
-          title: Text(
-            isNew ? 'Yeni Şablon Ekle' : 'Şablonu Düzenle',
-            style: AppText.titleMedium.copyWith(fontWeight: FontWeight.w700),
+        // Varsayılan `AlertDialog` içeriğe göre büzülüyordu (dar + kısa) —
+        // uzun bir şablon metni yazarken rahatsız ediciydi ve alttaki
+        // `actions` satırı da dengesiz duruyordu. Bunun yerine geniş,
+        // klavyeye duyarlı bir `Dialog` kurulur: başlık ve butonlar SABİT,
+        // yalnızca ortadaki form alanı (özellikle içerik kutusu) genişler.
+        // `backgroundColor`/`shape` özellikle verilmez — `Theme.dialogTheme`
+        // (bkz. `app_theme.dart`) üzerinden zaten aynı tasarım dilini alır.
+        return Dialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: Space.lg,
+            vertical: Space.xxl,
           ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleController,
-                  autofocus: isNew,
-                  textCapitalization: TextCapitalization.sentences,
-                  decoration: InputDecoration(
-                    labelText: 'Şablon Başlığı',
-                    hintText: 'Örn: Toplantı Onayı',
-                    filled: true,
-                    fillColor: t.surface,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(Radii.sm),
-                    ),
-                  ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // `Dialog` klavye açıldığında kendi `insetPadding`'ini
+              // otomatik büyütüp yukarı kayar (bkz. Flutter'ın `Dialog`
+              // implementasyonu) — bu yüzden burada ayrıca `viewInsets`
+              // hesaplamaya gerek yok; `constraints.maxHeight` o an
+              // gerçekten kullanılabilir alanı zaten yansıtır.
+              final width = constraints.maxWidth < 520
+                  ? constraints.maxWidth
+                  : 520.0;
+              return ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: width,
+                  maxHeight: constraints.maxHeight,
                 ),
-                const SizedBox(height: Space.md),
-                TextField(
-                  controller: contentController,
-                  minLines: 4,
-                  maxLines: 8,
-                  textCapitalization: TextCapitalization.sentences,
-                  decoration: InputDecoration(
-                    labelText: 'Şablon İçeriği',
-                    hintText: 'İletiye eklenecek metni yazın…',
-                    filled: true,
-                    fillColor: t.surface,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(Radii.sm),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        Space.xl,
+                        Space.xl,
+                        Space.xl,
+                        Space.md,
+                      ),
+                      child: Text(
+                        isNew ? 'Yeni Şablon Ekle' : 'Şablonu Düzenle',
+                        style: AppText.titleMedium.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: t.textPrimary,
+                        ),
+                      ),
                     ),
-                  ),
+                    Flexible(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(
+                          Space.xl,
+                          0,
+                          Space.xl,
+                          Space.lg,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            TextField(
+                              controller: titleController,
+                              autofocus: isNew,
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: InputDecoration(
+                                labelText: 'Şablon Başlığı',
+                                hintText: 'Örn: Toplantı Onayı',
+                                filled: true,
+                                fillColor: t.surface,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    Radii.sm,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: Space.md),
+                            // Asıl esneyen alan burası: modalın büyümesinin
+                            // asıl amacı uzun şablon metnini rahat
+                            // yazdırmak, o yüzden başlangıç yüksekliği de
+                            // (`minLines`) cömert tutulur.
+                            TextField(
+                              controller: contentController,
+                              minLines: 10,
+                              maxLines: null,
+                              textAlignVertical: TextAlignVertical.top,
+                              textCapitalization: TextCapitalization.sentences,
+                              decoration: InputDecoration(
+                                labelText: 'Şablon İçeriği',
+                                hintText: 'İletiye eklenecek metni yazın…',
+                                alignLabelWithHint: true,
+                                filled: true,
+                                fillColor: t.surface,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(
+                                    Radii.sm,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Divider(height: 1, color: t.divider),
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(
+                          Space.lg,
+                          Space.md,
+                          Space.lg,
+                          Space.md,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: TextButton(
+                                onPressed: () =>
+                                    Navigator.of(dialogCtx).pop(false),
+                                style: TextButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: Space.md,
+                                  ),
+                                ),
+                                child: const Text('Vazgeç'),
+                              ),
+                            ),
+                            const SizedBox(width: Space.md),
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: () {
+                                  if (titleController.text.trim().isEmpty ||
+                                      contentController.text.trim().isEmpty) {
+                                    return;
+                                  }
+                                  Navigator.of(dialogCtx).pop(true);
+                                },
+                                style: FilledButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: Space.md,
+                                  ),
+                                ),
+                                child: const Text('Kaydet'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              );
+            },
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogCtx).pop(false),
-              child: const Text('Vazgeç'),
-            ),
-            FilledButton(
-              onPressed: () {
-                if (titleController.text.trim().isEmpty ||
-                    contentController.text.trim().isEmpty) {
-                  return;
-                }
-                Navigator.of(dialogCtx).pop(true);
-              },
-              child: const Text('Kaydet'),
-            ),
-          ],
         );
       },
     );
@@ -343,7 +438,9 @@ class _QuickTemplatesSheetState extends ConsumerState<QuickTemplatesSheet> {
         id: template?.id ?? 'custom-${DateTime.now().millisecondsSinceEpoch}',
         title: titleController.text.trim(),
         content: contentController.text.trim(),
-        isBuiltIn: false,
+        // Düzenlenen şablon yerleşikse `isBuiltIn` korunur — aksi hâlde
+        // düzenleme onu sıradan (silinebilir) bir şablona düşürürdü.
+        isBuiltIn: template?.isBuiltIn ?? false,
       );
       await ref.read(quickTemplatesProvider.notifier).addOrUpdate(updated);
     }
@@ -450,40 +547,43 @@ class _TemplateCard extends StatelessWidget {
                 color: t.accent,
                 onPressed: onSelect,
               ),
-              if (!template.isBuiltIn)
-                PopupMenuButton<String>(
-                  icon: Icon(
-                    LucideIcons.moreVertical,
-                    size: 16,
-                    color: t.textTertiary,
-                  ),
-                  onSelected: (value) {
-                    if (value == 'edit') onEdit?.call();
-                    if (value == 'delete') onDelete?.call();
-                  },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: Row(
-                        children: [
-                          Icon(LucideIcons.pencil, size: 15),
-                          const SizedBox(width: Space.sm),
-                          const Text('Düzenle'),
-                        ],
-                      ),
-                    ),
-                    PopupMenuItem(
-                      value: 'delete',
-                      child: Row(
-                        children: [
-                          Icon(LucideIcons.trash2, size: 15, color: t.danger),
-                          const SizedBox(width: Space.sm),
-                          Text('Sil', style: TextStyle(color: t.danger)),
-                        ],
-                      ),
-                    ),
-                  ],
+              // Yerleşik şablonlar da düzenlenebilir VE silinebilir —
+              // kullanıcı gelen tüm hazır şablonları kullanmak
+              // istemeyebilir; "Yerleşik" rozeti yalnızca uygulamayla
+              // birlikte geldiğini belirtir, kısıtlama getirmez.
+              PopupMenuButton<String>(
+                icon: Icon(
+                  LucideIcons.moreVertical,
+                  size: 16,
+                  color: t.textTertiary,
                 ),
+                onSelected: (value) {
+                  if (value == 'edit') onEdit?.call();
+                  if (value == 'delete') onDelete?.call();
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: 'edit',
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.pencil, size: 15),
+                        const SizedBox(width: Space.sm),
+                        const Text('Düzenle'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.trash2, size: 15, color: t.danger),
+                        const SizedBox(width: Space.sm),
+                        Text('Sil', style: TextStyle(color: t.danger)),
+                      ],
+                    ),
+                    ),
+                ],
+              ),
             ],
           ),
         ),

@@ -932,6 +932,15 @@ final pendingOperationCountProvider = StreamProvider<int>((ref) {
   return ref.watch(databaseProvider).watchPendingCount(accountId);
 });
 
+/// Kuyruktaki zamanlanmış gönderimlerin ileti kimliğine göre gönderim zamanı
+/// eşlemesi — bkz. `AppDatabase.watchScheduledSends`. Gönderilenler'deki
+/// "Zamanlandı" rozeti (bkz. `mail_row.dart`) bunu kullanır.
+final scheduledSendTimesProvider = StreamProvider<Map<int, DateTime>>((ref) {
+  final accountId = ref.watch(accountIdProvider);
+  if (accountId == null) return Stream.value(const <int, DateTime>{});
+  return ref.watch(databaseProvider).watchScheduledSends(accountId);
+});
+
 // ------------------------------------------------------------- ileti detayı
 
 final messageProvider = StreamProvider.family<MessageRow?, int>(

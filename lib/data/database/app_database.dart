@@ -1583,6 +1583,40 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Kuyruktaki, kullanıcının açıkça ileri bir tarih seçtiği gönderimlerin
+  /// ileti kimliğine göre gönderim zamanı eşlemesi — Gönderilenler'deki
+  /// "Zamanlandı" rozetinde kullanılır (bkz. `mail_row.dart`).
+  ///
+  /// `scheduledAt`, `queueSend`'de yalnızca kullanıcı bir tarih seçtiğinde
+  /// payload'a yazılır (bkz. `mail_repository.dart`); "Geri al" penceresi
+  /// için ayarlanan sıradan `nextAttemptAt` bu alanı HİÇ içermez, bu yüzden
+  /// normal gönderimler burada yer almaz.
+  Stream<Map<int, DateTime>> watchScheduledSends(int accountId) => (select(
+    pendingOperations,
+  )..where(
+    (p) =>
+        p.accountId.equals(accountId) &
+        p.type.equalsValue(PendingOpType.send) &
+        p.status.equalsValue(PendingOpStatus.pending),
+  )).watch().map((ops) {
+    final result = <int, DateTime>{};
+    for (final op in ops) {
+      try {
+        final decoded = jsonDecode(op.payloadJson);
+        if (decoded is! Map) continue;
+        final messageId = decoded['messageId'];
+        final scheduledAtRaw = decoded['scheduledAt'];
+        if (messageId is int && scheduledAtRaw is String) {
+          final parsed = DateTime.tryParse(scheduledAtRaw);
+          if (parsed != null) result[messageId] = parsed.toLocal();
+        }
+      } on Object {
+        // Bozuk payload — sessizce atlanır, rozet basitçe görünmez.
+      }
+    }
+    return result;
+  });
+
   Stream<int> watchPendingCount(int accountId) {
     final count = countAll();
     return (selectOnly(pendingOperations)

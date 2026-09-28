@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:pdfx/pdfx.dart';
@@ -41,12 +43,53 @@ class _PdfPreviewWidgetState extends State<PdfPreviewWidget> {
     document: PdfDocument.openFile(widget.path),
   );
 
+  /// Resimdeki `PhotoView` çift-dokunma davranışıyla aynı his için: her zaman
+  /// aynı hedef ölçeğe yakınlaştırır, tekrar dokununca sığdırılmış görünüme
+  /// (ölçek 1.0) döner. Bkz. `_ImagePreview` — orada bu döngüyü `PhotoView`
+  /// kendi içinde yönetir, burada `PdfControllerPinch.goTo` ile elle taklit
+  /// edilir (pdfx paketi çift-dokunma sunmuyor).
+  static const double _doubleTapZoomScale = 2.5;
+
+  TapDownDetails? _doubleTapDetails;
   Object? _error;
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  void _handleDoubleTapDown(TapDownDetails details) {
+    _doubleTapDetails = details;
+  }
+
+  void _handleDoubleTap() {
+    final details = _doubleTapDetails;
+    if (details == null) return;
+
+    final isZoomedIn = _controller.zoomRatio > 1.05;
+    if (isZoomedIn) {
+      widget.onZoomChanged?.call(false);
+      unawaited(_controller.goTo(destination: Matrix4.identity()));
+      return;
+    }
+
+    final position = details.localPosition;
+    final zoomed = Matrix4.identity()
+      ..translateByDouble(
+        -position.dx * (_doubleTapZoomScale - 1),
+        -position.dy * (_doubleTapZoomScale - 1),
+        0,
+        1,
+      )
+      ..scaleByDouble(
+        _doubleTapZoomScale,
+        _doubleTapZoomScale,
+        _doubleTapZoomScale,
+        1,
+      );
+    widget.onZoomChanged?.call(true);
+    unawaited(_controller.goTo(destination: zoomed));
   }
 
   @override
@@ -64,16 +107,22 @@ class _PdfPreviewWidgetState extends State<PdfPreviewWidget> {
     }
     return Stack(
       children: [
-        PdfViewPinch(
-          controller: _controller,
-          backgroundDecoration: BoxDecoration(color: t.surfaceDeep),
-          onDocumentError: (error) => setState(() => _error = error),
-          onInteractionStart: widget.onZoomChanged == null
-              ? null
-              : (_) => widget.onZoomChanged!(true),
-          onInteractionEnd: widget.onZoomChanged == null
-              ? null
-              : (_) => widget.onZoomChanged!(false),
+        GestureDetector(
+          onDoubleTapDown: _handleDoubleTapDown,
+          onDoubleTap: _handleDoubleTap,
+          child: PdfViewPinch(
+            controller: _controller,
+            minScale: 1.0,
+            maxScale: 4.5,
+            backgroundDecoration: BoxDecoration(color: t.surfaceDeep),
+            onDocumentError: (error) => setState(() => _error = error),
+            onInteractionStart: widget.onZoomChanged == null
+                ? null
+                : (_) => widget.onZoomChanged!(true),
+            onInteractionEnd: widget.onZoomChanged == null
+                ? null
+                : (_) => widget.onZoomChanged!(false),
+          ),
         ),
         Positioned(
           left: 0,

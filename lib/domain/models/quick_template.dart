@@ -16,7 +16,9 @@ class QuickTemplate {
   /// Şablonun tam gövde metni.
   final String content;
 
-  /// Sistemin varsayılan olarak sunduğu şablon mu? (silinemez, sıfırlanabilir)
+  /// Sistemin varsayılan olarak sunduğu şablon mu? Yalnızca bilgi
+  /// amaçlıdır ("Yerleşik" rozeti) — kullanıcı bunları da diğerleri gibi
+  /// düzenleyebilir ve silebilir, hepsini kullanmak istemeyebilir.
   final bool isBuiltIn;
 
   QuickTemplate copyWith({

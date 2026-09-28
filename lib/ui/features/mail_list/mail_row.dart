@@ -25,6 +25,7 @@ class MailRow extends StatelessWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
+    this.scheduledSendAt,
   });
 
   final MessageRow message;
@@ -34,6 +35,12 @@ class MailRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
+
+  /// Kullanıcının bu ileti için seçtiği gönderim zamanı (yerel saat) —
+  /// yalnızca "queued" durumundaki gerçekten zamanlanmış gönderimlerde
+  /// dolu olur (bkz. `scheduledSendTimesProvider`). Diğer tüm iletilerde
+  /// (ve "Geri al" penceresindeki sıradan gönderimlerde) `null`'dur.
+  final DateTime? scheduledSendAt;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -310,7 +317,13 @@ class MailRow extends StatelessWidget {
 
   Widget _outboxBadge(BuildContext context, OutboxState outbox) {
     final t = context.tokens;
+    final scheduledAt = scheduledSendAt;
     final (icon, text, color) = switch (outbox) {
+      OutboxState.queued when scheduledAt != null => (
+        LucideIcons.clock,
+        'Zamanlandı: ${formatScheduleDate(scheduledAt)}',
+        t.textTertiary,
+      ),
       OutboxState.queued => (
         LucideIcons.clock,
         'Gönderilmeyi bekliyor',
