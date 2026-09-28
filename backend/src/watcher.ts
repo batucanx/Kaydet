@@ -82,11 +82,13 @@ export class AccountWatcher {
       } catch (e) {
         const err = e as Error & { authenticationFailed?: boolean };
         if (err.authenticationFailed) {
-          this.log(`hesap ${this.account.id}: kimlik doğrulama başarısız, izleme durdu`);
+          this.log(
+            `hesap ${this.account.id} (${this.account.username}): kimlik doğrulama başarısız (${err.message}), izleme durdu`,
+          );
           this.deps.onAuthFailed?.(this.account.id);
           return;
         }
-        this.log(`hesap ${this.account.id}: ${err.message}`);
+        this.log(`hesap ${this.account.id} (${this.account.username}): ${err.message}`);
       }
       if (this.stopped) return;
       await this.sleep(backoffDelay(attempt++));
@@ -257,7 +259,7 @@ export class WatcherManager implements AccountHooks {
 
   private begin(account: AccountRow): void {
     this.end(account.id);
-    this.deps.log?.(`hesap ${account.id}: izleme başlatıldı`);
+    this.deps.log?.(`hesap ${account.id} (${account.username} @ ${account.imap_host}): izleme başlatıldı`);
     const watcher = new AccountWatcher(account, {
       ...this.deps,
       onAuthFailed: (id) => {
