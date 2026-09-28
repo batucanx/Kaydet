@@ -338,6 +338,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       final allSelected =
           visibleIds.isNotEmpty && selectionCount >= visibleIds.length;
       return AppBar(
+        // Seçim moduna geçişte üst çubuk zıplamasın diye normal moddaki
+        // `_InboxAppBar._barHeight` ile aynı yükseklik kullanılır.
+        toolbarHeight: _InboxAppBar._barHeight,
         backgroundColor: t.accentFill,
         foregroundColor: t.onAccentFill,
         leading: IconButton(
@@ -1405,8 +1408,16 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onSearchTap;
   final Widget filterButton;
 
+  // Kullanıcı isteğiyle büyütüldü: hangi hesapta olunduğu tek bakışta
+  // net görünsün diye avatar ve başlık/email yazı boyutları standart
+  // `Dimens.avatarSize`/`AppText.titleMedium`'un üzerine çıkarılır.
+  // Bunlar liste satırlarındaki avatarla PAYLAŞILMAZ — yalnızca bu
+  // üst çubuğa özeldir, o yüzden global token yerine yerel sabitler.
+  static const double _avatarSize = 44;
+  static const double _barHeight = 68;
+
   @override
-  Size get preferredSize => const Size.fromHeight(Dimens.appBarHeight);
+  Size get preferredSize => const Size.fromHeight(_barHeight);
 
   @override
   Widget build(BuildContext context) {
@@ -1422,7 +1433,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
       child: SafeArea(
         bottom: false,
         child: SizedBox(
-          height: Dimens.appBarHeight,
+          height: _barHeight,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -1447,12 +1458,12 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                           ? KaydetAvatar(
                               name: account.displayName,
                               email: account.email,
-                              size: Dimens.avatarSize,
+                              size: _avatarSize,
                             )
                           // Hesap yüklenmemişse sade bir yer tutucu ikon.
                           : Icon(
                               LucideIcons.menu,
-                              size: Dimens.avatarSize,
+                              size: _avatarSize,
                               color:
                                   theme.appBarTheme.iconTheme?.color ??
                                   theme.appBarTheme.foregroundColor ??
@@ -1474,6 +1485,8 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: AppText.titleMedium.copyWith(
+                        fontSize: 17 * AppText.scale,
+                        fontWeight: FontWeight.w700,
                         color:
                             theme.appBarTheme.titleTextStyle?.color ??
                             t.textPrimary,
@@ -1485,7 +1498,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppText.bodyMedium.copyWith(
-                          fontSize: 12.5 * AppText.scale,
+                          fontSize: 13 * AppText.scale,
                           fontWeight: FontWeight.w500,
                           // Üst çubuğun kendi ana metin rengi (`onAppBar`)
                           // hafif saydamlaştırılır — başlıkla aynı beyaz

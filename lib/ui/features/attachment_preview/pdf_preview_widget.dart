@@ -17,12 +17,20 @@ class PdfPreviewWidget extends StatefulWidget {
     this.errorMessage = 'PDF açılamadı',
     this.errorDescription = 'Dosya bozuk olabilir.',
     this.errorAction,
+    this.onZoomChanged,
   });
 
   final String path;
   final String errorMessage;
   final String errorDescription;
   final Widget? errorAction;
+
+  /// Kullanıcı sayfa içinde pinch/pan ile etkileşime başlayıp bitirdiğinde
+  /// bildirir (`true`/`false`). Birden çok ek arasında geçişi sağlayan üst
+  /// pager (bkz. `attachment_preview_screen.dart`), etkileşim sürerken kendi
+  /// yatay kaydırmasını kilitler — aksi halde pinch/pan ile sayfa geçişi
+  /// gesture'ı çakışır.
+  final ValueChanged<bool>? onZoomChanged;
 
   @override
   State<PdfPreviewWidget> createState() => _PdfPreviewWidgetState();
@@ -60,6 +68,12 @@ class _PdfPreviewWidgetState extends State<PdfPreviewWidget> {
           controller: _controller,
           backgroundDecoration: BoxDecoration(color: t.surfaceDeep),
           onDocumentError: (error) => setState(() => _error = error),
+          onInteractionStart: widget.onZoomChanged == null
+              ? null
+              : (_) => widget.onZoomChanged!(true),
+          onInteractionEnd: widget.onZoomChanged == null
+              ? null
+              : (_) => widget.onZoomChanged!(false),
         ),
         Positioned(
           left: 0,

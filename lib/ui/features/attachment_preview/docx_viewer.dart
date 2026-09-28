@@ -87,6 +87,11 @@ class DocxParser {
     }
 
     if (docFile == null) {
+      // OOXML değil — OpenDocument Metin (.odt) olabilir; o da ZIP+XML'dir
+      // ama tamamen farklı bir şema kullanır (bkz. [_parseOdtArchive]).
+      if (archive.findFile('content.xml') != null) {
+        return _parseOdtArchive(archive);
+      }
       throw const FormatException(
         'word/document.xml bulunamadı (geçerli bir .docx değil)',
       );
@@ -148,6 +153,293 @@ class DocxParser {
       if (fallback.isNotEmpty) return DocxDocument(blocks: fallback, imageMap: imageMap);
     }
     return DocxDocument(blocks: blocks, imageMap: imageMap);
+  }
+
+  // ------------------------------------------------- OpenDocument (.odt)
+
+  /// OpenDocument Metin (.odt — LibreOffice/OpenOffice Writer) belgesini
+  /// ayrıştırır. `.odt` de `.docx` gibi bir ZIP arşividir ama İÇERİĞİ
+  /// tamamen farklı bir şemadır (ODF 1.2): tek dosya `content.xml`, gövde
+  /// `<office:text>`, paragraflar `<text:p>`/`<text:h>`, tablolar
+  /// `<table:table>`. Görseller bilerek desteklenmez (kapsam dışı — eski
+  /// `.doc`/RTF yolları da görsel içermez, tutarlı bir sınır).
+  static DocxDocument _parseOdtArchive(Archive archive) {
+    final contentFile = archive.findFile('content.xml');
+    if (contentFile == null) {
+      throw const FormatException(
+        'content.xml bulunamadı (geçerli bir ODF belgesi değil)',
+      );
+    }
+    final contentDoc = XmlDocument.parse(
+      utf8.decode(contentFile.readBytes() ?? Uint8List(0), allowMalformed: true),
+    );
+
+    // Karakter stilleri (kalın/italik/renk/punto) hem content.xml'in kendi
+    // otomatik stillerinde HEM DE ayrı styles.xml'de tanımlanabilir.
+    final textStyles = <String, _OdfTextStyle>{};
+    final stylesFile = archive.findFile('styles.xml');
+    if (stylesFile != null) {
+      try {
+        textStyles.addAll(
+          _parseOdfTextStyles(
+            XmlDocument.parse(
+              utf8.decode(stylesFile.readBytes() ?? Uint8List(0), allowMalformed: true),
+            ),
+          ),
+        );
+      } catch (_) {
+        // styles.xml bozuksa yalnızca biçimlendirme kaybolur, belge yine
+        // de düz metin olarak gösterilir.
+      }
+    }
+    textStyles.addAll(_parseOdfTextStyles(contentDoc));
+
+    final bodyElements =
+        contentDoc.findAllElements('*').where((e) => e.name.local == 'body');
+    if (bodyElements.isEmpty) {
+      return const DocxDocument(blocks: []);
+    }
+    final textRoot = _children(bodyElements.first, 'text').firstOrNull ?? bodyElements.first;
+
+    return DocxDocument(blocks: _odtBlocksFrom(textRoot, textStyles));
+  }
+
+  /// ODF `<style:style style:family="text|paragraph">` tanımlarından
+  /// stil adı -> karakter özellikleri eşlemesi üretir. Yalnızca DOĞRUDAN
+  /// tanımlanan özellikler okunur; `style:parent-style-name` üzerinden çok
+  /// katmanlı miras zinciri İZLENMEZ (önizleme için yeterli, gerçek
+  /// belgelerin ezici çoğunluğunda biçimlendirme doğrudan tanımlanır).
+  static Map<String, _OdfTextStyle> _parseOdfTextStyles(XmlDocument doc) {
+    final map = <String, _OdfTextStyle>{};
+    for (final styleElem in _descendants(doc, 'style')) {
+      final name = styleElem.getAttribute('style:name') ?? styleElem.getAttribute('name');
+      if (name == null) continue;
+      final props = _children(styleElem, 'text-properties').firstOrNull;
+      if (props == null) continue;
+      map[name] = _readOdfTextProperties(props);
+    }
+    return map;
+  }
+
+  static _OdfTextStyle _readOdfTextProperties(XmlElement props) {
+    bool? bold;
+    final weight = props.getAttribute('fo:font-weight') ?? props.getAttribute('font-weight');
+    if (weight != null) {
+      bold = weight.toLowerCase() == 'bold' || (int.tryParse(weight) ?? 0) >= 700;
+    }
+
+    bool? italic;
+    final fontStyle = props.getAttribute('fo:font-style') ?? props.getAttribute('font-style');
+    if (fontStyle != null) {
+      italic = fontStyle.toLowerCase() == 'italic' || fontStyle.toLowerCase() == 'oblique';
+    }
+
+    bool? underline;
+    final underlineStyle = props.getAttribute('style:text-underline-style') ??
+        props.getAttribute('text-underline-style');
+    if (underlineStyle != null) underline = underlineStyle != 'none';
+
+    bool? strike;
+    final strikeStyle = props.getAttribute('style:text-line-through-style') ??
+        props.getAttribute('text-line-through-style');
+    if (strikeStyle != null) strike = strikeStyle != 'none';
+
+    Color? color;
+    final colorHex = props.getAttribute('fo:color') ?? props.getAttribute('color');
+    if (colorHex != null && colorHex.length == 7 && colorHex.startsWith('#')) {
+      final intVal = int.tryParse(colorHex.substring(1), radix: 16);
+      if (intVal != null) color = Color(0xFF000000 | intVal);
+    }
+
+    double? fontSize;
+    final sizeStr = props.getAttribute('fo:font-size') ?? props.getAttribute('font-size');
+    if (sizeStr != null && sizeStr.endsWith('pt')) {
+      fontSize = double.tryParse(sizeStr.substring(0, sizeStr.length - 2));
+    }
+
+    return _OdfTextStyle(
+      bold: bold,
+      italic: italic,
+      underline: underline,
+      strike: strike,
+      color: color,
+      fontSize: fontSize,
+    );
+  }
+
+  static List<DocxBlock> _odtBlocksFrom(
+    XmlElement container,
+    Map<String, _OdfTextStyle> styles,
+  ) {
+    final blocks = <DocxBlock>[];
+
+    void walk(XmlElement parent, {bool inList = false}) {
+      for (final child in parent.children.whereType<XmlElement>()) {
+        final name = child.name.local;
+        if (name == 'p') {
+          final paragraph = _odtParagraph(
+            child,
+            styles,
+            type: inList ? DocxBlockType.bulletItem : DocxBlockType.paragraph,
+            listPrefix: inList ? '•' : null,
+          );
+          if (paragraph != null) blocks.add(DocxParagraphBlock(paragraph));
+        } else if (name == 'h') {
+          final level = int.tryParse(
+                child.getAttribute('text:outline-level') ??
+                    child.getAttribute('outline-level') ??
+                    '',
+              ) ??
+              1;
+          final type = switch (level) {
+            1 => DocxBlockType.heading1,
+            2 => DocxBlockType.heading2,
+            _ => DocxBlockType.heading3,
+          };
+          final paragraph = _odtParagraph(child, styles, type: type);
+          if (paragraph != null) blocks.add(DocxParagraphBlock(paragraph));
+        } else if (name == 'list') {
+          for (final item in _children(child, 'list-item')) {
+            walk(item, inList: true);
+          }
+        } else if (name == 'table') {
+          final table = _odtTable(child, styles);
+          if (table != null) blocks.add(DocxTableBlock(table));
+        } else if (name == 'section' || name == 'list-header') {
+          walk(child, inList: inList);
+        }
+      }
+    }
+
+    walk(container);
+    return blocks;
+  }
+
+  static DocxParagraph? _odtParagraph(
+    XmlElement pElem,
+    Map<String, _OdfTextStyle> styles, {
+    DocxBlockType type = DocxBlockType.paragraph,
+    String? listPrefix,
+  }) {
+    final styleName = pElem.getAttribute('text:style-name') ?? pElem.getAttribute('style-name');
+    final paragraphStyle = styleName != null ? styles[styleName] : null;
+    final runs = _odtRuns(pElem, styles, paragraphStyle);
+
+    if (runs.isEmpty) {
+      return DocxParagraph(
+        runs: const [DocxRun(text: '')],
+        type: type,
+        isSpacing: true,
+        listPrefix: listPrefix,
+      );
+    }
+    return DocxParagraph(runs: runs, type: type, listPrefix: listPrefix);
+  }
+
+  static List<DocxRun> _odtRuns(
+    XmlElement container,
+    Map<String, _OdfTextStyle> styles,
+    _OdfTextStyle? inheritedStyle,
+  ) {
+    final runs = <DocxRun>[];
+
+    void collect(XmlNode node, _OdfTextStyle? effectiveStyle) {
+      for (final child in node.children) {
+        if (child is XmlText) {
+          if (child.value.isNotEmpty) {
+            runs.add(_odtRunFromStyle(child.value, effectiveStyle));
+          }
+          continue;
+        }
+        if (child is! XmlElement) continue;
+        final name = child.name.local;
+        if (name == 'span' || name == 'a') {
+          final spanStyleName =
+              child.getAttribute('text:style-name') ?? child.getAttribute('style-name');
+          final spanStyle = spanStyleName != null ? styles[spanStyleName] : null;
+          collect(child, spanStyle ?? effectiveStyle);
+        } else if (name == 'tab') {
+          runs.add(_odtRunFromStyle('\t', effectiveStyle));
+        } else if (name == 'line-break') {
+          runs.add(_odtRunFromStyle('\n', effectiveStyle));
+        } else if (name == 's') {
+          final count = int.tryParse(
+                child.getAttribute('text:c') ?? child.getAttribute('c') ?? '1',
+              ) ??
+              1;
+          runs.add(_odtRunFromStyle(' ' * count.clamp(1, 200), effectiveStyle));
+        }
+      }
+    }
+
+    collect(container, inheritedStyle);
+    return runs;
+  }
+
+  static DocxRun _odtRunFromStyle(String text, _OdfTextStyle? style) {
+    return DocxRun(
+      text: text,
+      bold: style?.bold ?? false,
+      italic: style?.italic ?? false,
+      underline: style?.underline ?? false,
+      strike: style?.strike ?? false,
+      color: style?.color,
+      fontSize: style?.fontSize,
+    );
+  }
+
+  static DocxTable? _odtTable(XmlElement tableElem, Map<String, _OdfTextStyle> styles) {
+    const maxRepeat = 50;
+    final rows = <DocxTableRow>[];
+
+    for (final rowElem in _children(tableElem, 'table-row')) {
+      final cells = <DocxTableCell>[];
+      for (final cellElem in rowElem.children.whereType<XmlElement>()) {
+        final name = cellElem.name.local;
+        if (name == 'covered-table-cell') {
+          // Birleştirilmiş bir hücrenin kapladığı konum — boş sayılır, ama
+          // sütun hizasının bozulmaması için yer tutucu olarak eklenir.
+          cells.add(const DocxTableCell(paragraphs: []));
+          continue;
+        }
+        if (name != 'table-cell') continue;
+
+        final gridSpan = int.tryParse(
+              cellElem.getAttribute('table:number-columns-spanned') ??
+                  cellElem.getAttribute('number-columns-spanned') ??
+                  '1',
+            ) ??
+            1;
+        final repeat = int.tryParse(
+              cellElem.getAttribute('table:number-columns-repeated') ??
+                  cellElem.getAttribute('number-columns-repeated') ??
+                  '1',
+            ) ??
+            1;
+
+        final cellParagraphs = <DocxParagraph>[];
+        for (final p in _children(cellElem, 'p')) {
+          final paragraph = _odtParagraph(p, styles);
+          if (paragraph != null) cellParagraphs.add(paragraph);
+        }
+        final cell = DocxTableCell(
+          paragraphs: cellParagraphs,
+          gridSpan: gridSpan.clamp(1, 50),
+        );
+        // Boş, ızgarayı doldurmak için tekrarlanan hücreler (bkz.
+        // ods_parser.dart'taki aynı gerekçe) tek kopya eklenir; yalnızca
+        // GERÇEK içeriği olan hücreler tam tekrar sayısınca çoğaltılır.
+        final hasContent = cellParagraphs.any((p) => p.plainText.trim().isNotEmpty);
+        final effectiveRepeat = hasContent ? repeat.clamp(1, maxRepeat) : 1;
+        for (var i = 0; i < effectiveRepeat; i++) {
+          cells.add(cell);
+        }
+      }
+      if (cells.isNotEmpty) rows.add(DocxTableRow(cells: cells));
+    }
+
+    if (rows.isEmpty) return null;
+    return DocxTable(rows: rows);
   }
 
   /// word/numbering.xml dosyasını çözümleyip numId -> biçim (decimal, bullet vb.) eşlemesi üretir.
@@ -992,6 +1284,28 @@ class DocxParser {
   }
 }
 
+/// Bir ODF `<style:style>` tanımından okunan karakter özellikleri —
+/// `null` alanlar "bu stil bu özelliği belirtmiyor" anlamına gelir (bkz.
+/// `DocxParser._odtRunFromStyle`: belirtilmeyenler `false`/`null` sayılır,
+/// tam bir miras zinciri İZLENMEZ — bkz. `_parseOdfTextStyles`in belgesi).
+class _OdfTextStyle {
+  const _OdfTextStyle({
+    this.bold,
+    this.italic,
+    this.underline,
+    this.strike,
+    this.color,
+    this.fontSize,
+  });
+
+  final bool? bold;
+  final bool? italic;
+  final bool? underline;
+  final bool? strike;
+  final Color? color;
+  final double? fontSize;
+}
+
 // ----------------------------------------------------------- Veri Modelleri
 
 enum DocxBlockType {
@@ -1149,10 +1463,17 @@ class DocxPreviewWidget extends StatefulWidget {
     super.key,
     required this.path,
     required this.attachment,
+    this.onZoomChanged,
   });
 
   final String path;
   final AttachmentRow attachment;
+
+  /// Kullanıcı belge içinde pinch/pan ile etkileşime başlayıp bitirdiğinde
+  /// bildirir (`true`/`false`) — bkz. `PdfPreviewWidget.onZoomChanged`ın aynı
+  /// gerekçesi: birden çok ek arasında geçiş yapan üst pager, etkileşim
+  /// sürerken kendi yatay kaydırmasını kilitler.
+  final ValueChanged<bool>? onZoomChanged;
 
   @override
   State<DocxPreviewWidget> createState() => _DocxPreviewWidgetState();
@@ -1247,6 +1568,12 @@ class _DocxPreviewWidgetState extends State<DocxPreviewWidget> {
           child: InteractiveViewer(
             minScale: 0.6,
             maxScale: 3.5,
+            onInteractionStart: widget.onZoomChanged == null
+                ? null
+                : (_) => widget.onZoomChanged!(true),
+            onInteractionEnd: widget.onZoomChanged == null
+                ? null
+                : (_) => widget.onZoomChanged!(false),
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final isNarrow = constraints.maxWidth < 600;

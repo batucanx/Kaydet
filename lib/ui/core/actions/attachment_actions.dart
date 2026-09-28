@@ -104,10 +104,22 @@ Future<void> shareAttachment(
   required String fileName,
 }) async {
   final overlay = Overlay.of(context, rootOverlay: true);
+  Rect? origin;
   final box = context.findRenderObject();
-  final origin = box is RenderBox && box.attached
-      ? box.localToGlobal(Offset.zero) & box.size
-      : null;
+  if (box is RenderBox && box.attached && !box.size.isEmpty) {
+    origin = box.localToGlobal(Offset.zero) & box.size;
+  }
+  if (origin == null || origin.isEmpty) {
+    final mediaQuery = MediaQuery.maybeOf(context);
+    if (mediaQuery != null) {
+      final size = mediaQuery.size;
+      origin = Rect.fromCenter(
+        center: Offset(size.width / 2, size.height / 2),
+        width: 1,
+        height: 1,
+      );
+    }
+  }
   try {
     await SharePlus.instance.share(
       ShareParams(

@@ -5,8 +5,25 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../../core/turkish.dart';
 import '../../../data/services/quick_templates_store.dart';
 import '../../../domain/models/quick_template.dart';
+import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+
+final RegExp _htmlTagPattern = RegExp(r'<[a-zA-Z/][^>]*>');
+final RegExp _whitespaceRun = RegExp(r'\s+');
+
+/// Kart önizlemesi için şablon içeriğini tek satıra normalize eder.
+///
+/// Yerleşik şablonlar paragrafları `\n\n` ile ayırır; `Text` widget'ı bunu
+/// zorla satır sonu sayar, bu yüzden ham içerik `maxLines` ile birlikte
+/// kullanılırsa (ör. "Merhaba,\n\n...") ilk satırdan sonraki boş satır
+/// kotayı tüketip gerçek içerik hiç görünmeden kesilir. Satır sonları boşluğa
+/// çevrilip metin doğal olarak sarmaya bırakılır.
+String _templatePreviewText(String content) {
+  final plain =
+      _htmlTagPattern.hasMatch(content) ? TextExtraction.htmlToPlain(content) : content;
+  return plain.replaceAll(_whitespaceRun, ' ').trim();
+}
 
 /// Kullanıcının hazır yanıt ve şablonları seçebileceği, yeni şablon
 /// ekleyebileceği veya yönetebileceği alt sayfa (modal bottom sheet).
@@ -413,8 +430,8 @@ class _TemplateCard extends StatelessWidget {
                     ),
                     const SizedBox(height: Space.xs),
                     Text(
-                      template.content,
-                      maxLines: 2,
+                      _templatePreviewText(template.content),
+                      maxLines: 3,
                       overflow: TextOverflow.ellipsis,
                       style: AppText.bodyMedium.copyWith(
                         fontSize: 12,

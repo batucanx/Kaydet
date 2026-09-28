@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { ApnsClient } from './apns.js';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
@@ -11,7 +12,14 @@ const config = loadConfig();
 const db = openDatabase(config.DATABASE_PATH);
 const repo = new Repository(db, new SecretBox(config.ENCRYPTION_KEY));
 
-const apns = ApnsClient.fromKeyFile(config.APNS_KEY_PATH, {
+const keyPem = config.APNS_KEY_PEM?.trim()
+  ? (config.APNS_KEY_PEM.includes('-----BEGIN')
+      ? config.APNS_KEY_PEM
+      : Buffer.from(config.APNS_KEY_PEM, 'base64').toString('utf8'))
+  : readFileSync(config.APNS_KEY_PATH!, 'utf8');
+
+const apns = new ApnsClient({
+  keyPem,
   keyId: config.APNS_KEY_ID,
   teamId: config.APNS_TEAM_ID,
   topic: config.APNS_BUNDLE_ID,

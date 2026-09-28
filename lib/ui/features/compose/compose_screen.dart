@@ -11,15 +11,20 @@ import 'package:flutter_quill/quill_delta.dart' show Delta;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:speech_to_text/speech_to_text.dart';
+
 
 import '../../../app/providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/turkish.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/attachment_type.dart';
 import '../../../domain/use_cases/compose_formatting.dart';
 import '../../../domain/use_cases/email_html_codec.dart';
+import '../../../domain/use_cases/image_attachment_resize.dart';
 import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
@@ -29,6 +34,7 @@ import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import 'attachment_reminder.dart';
+import 'image_size_prompt.dart';
 import 'quick_contacts_strip.dart';
 import 'quick_templates_sheet.dart';
 import 'recipient_chip_layout.dart';
@@ -178,6 +184,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _inReplyTo;
   String? _references;
   final List<String> _attachments = [];
+
+  /// Henüz kalıcı depoya kopyalanmayı bekleyen (boyut kontrolü + `persist`)
+  /// ekler — listede bir yükleniyor ikonuyla gösterilir (bkz. `_AttachmentList`).
+  final List<_PendingAttachment> _pendingAttachments = [];
+
+  /// Kalıcı depoya az önce kopyalanmış eklerin yolu — kısa süreliğine bir
+  /// onay ikonuyla gösterilip ardından normal dosya türü ikonuna döner.
+  final Set<String> _justUploaded = {};
 
   /// Seçicinin verdiği ORİJİNAL yol → kalıcı kopyanın yolu. Aynı dosya iki kez
   /// seçilirse (kalıcı kopyanın yolu her seferinde farklı olduğundan) tekrar
@@ -816,17 +830,93 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
     if (picked == null) return;
-    await _addAttachmentPath(picked.path);
+    final name = picked.name.isNotEmpty ? picked.name : p.basename(picked.path);
+    await _addPickedPaths([
+      (path: picked.path, originalName: name),
+    ]);
   }
 
   Future<void> _pickFilesFromDisk() async {
-    final files = await FilePicker.pickFiles();
+    // iOS'ta FilePicker bazı kaynaklarda (iCloud Drive, Fotoğraflar kitaplığı)
+    // geçici diske kopyalamaz ve `PlatformFile.path` null döner.
+    // `PlatformFile.readAsByteStream()` bu durumda dosyayı stream üzerinden
+    // okuyabilir; geçici diske yazılıp `_addAttachmentPath`'e verilir.
+    final List<PlatformFile> files;
+    try {
+      files = await FilePicker.pickFiles();
+    } on Object catch (_) {
+      if (mounted) _showError('Dosya seçilemedi.');
+      return;
+    }
     if (files.isEmpty) return;
+    final picks = <({String path, String? originalName})>[];
     for (final file in files) {
+      final originalName = file.name;
       final path = file.path;
-      if (path != null) await _addAttachmentPath(path);
+      if (path != null) {
+        picks.add((path: path, originalName: originalName));
+      } else {
+        // iOS: path null — readAsByteStream ile oku, geçici dosyaya yaz.
+        try {
+          final tmpDir = await getTemporaryDirectory();
+          final tmpFile = File(
+            p.join(
+              tmpDir.path,
+              'kaydet_pick_${DateTime.now().microsecondsSinceEpoch}_$originalName',
+            ),
+          );
+          final sink = tmpFile.openWrite();
+          await sink.addStream(file.readAsByteStream());
+          await sink.flush();
+          await sink.close();
+          picks.add((path: tmpFile.path, originalName: originalName));
+        } on Object catch (_) {
+          if (mounted) _showError('"$originalName" okunamadı, eklenemedi.');
+        }
+      }
+    }
+    await _addPickedPaths(picks);
+  }
+
+  /// Az önce seçilen dosyaları ek listesine katar. Aralarında görsel varsa
+  /// önce boyut tercihi sorulur (bkz. `showImageSizePrompt`) — gerçek
+  /// Outlook/Gmail davranışı: küçültme yalnızca bu partideki GÖRSELLERE
+  /// uygulanır, diğer dosya türleri her zamanki gibi olduğu gibi eklenir.
+  Future<void> _addPickedPaths(
+    List<({String path, String? originalName})> picks,
+  ) async {
+    if (picks.isEmpty) return;
+    final imageIndexes = <int>{
+      for (var i = 0; i < picks.length; i++)
+        if (AttachmentType.resolve(
+              mimeType: '',
+              fileName: picks[i].originalName ?? picks[i].path,
+            ) ==
+            AttachmentKind.image)
+          i,
+    };
+
+    var reduce = false;
+    if (imageIndexes.isNotEmpty && mounted) {
+      final choice = await showImageSizePrompt(
+        context,
+        imageCount: imageIndexes.length,
+      );
+      reduce = choice == ImageSizeChoice.reduced;
+    }
+
+    for (var i = 0; i < picks.length; i++) {
+      if (!mounted) return;
+      final pick = picks[i];
+      if (reduce && imageIndexes.contains(i)) {
+        final resized = await resizeImageAttachment(File(pick.path));
+        await _addAttachmentPath(resized.path, originalName: pick.originalName);
+      } else {
+        await _addAttachmentPath(pick.path, originalName: pick.originalName);
+      }
     }
   }
+
 
   /// Seçilen dosyayı ek listesine katar.
   ///
@@ -837,17 +927,33 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// - Dosya kalıcı depoya kopyalanır (bkz. `OutgoingAttachmentStore`):
   ///   seçicinin verdiği yol geçici bir klasördedir ve taslak beklerken
   ///   silinebilir.
-  Future<void> _addAttachmentPath(String path) async {
+  Future<void> _addAttachmentPath(String path, {String? originalName}) async {
     if (_attachments.contains(path) || _storedBySource.containsKey(path)) return;
-    final name = path.split(RegExp(r'[\\/]')).last;
+    // iOS'ta orijinal ad verilmişse kullan, yoksa path'ten türet.
+    final name =
+        (originalName != null && originalName.trim().isNotEmpty)
+            ? originalName.trim()
+            : path.split(RegExp(r'[\\/]')).last;
+
+    // Boyut kontrolü ve `persist` kopyası bitene kadar kullanıcı bir
+    // yükleniyor ikonu görür — aksi hâlde ek, işlem bitene kadar listede hiç
+    // görünmez ve kullanıcı eklemenin gerçekten başladığını bilemez.
+    final pending = _PendingAttachment(path, name);
+    if (mounted) setState(() => _pendingAttachments.add(pending));
+    void dropPending() {
+      if (mounted) setState(() => _pendingAttachments.remove(pending));
+    }
+
     final int size;
     try {
       size = await File(path).length();
     } on FileSystemException {
+      dropPending();
       if (mounted) _showError('“$name” okunamadı, eklenemedi.');
       return;
     }
     if (size > ShareAttachmentPolicy.maxFileBytes) {
+      dropPending();
       if (mounted) {
         _showError(
           '“$name” çok büyük (en fazla '
@@ -865,6 +971,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       }
     }
     if (total > ShareAttachmentPolicy.maxTotalBytes) {
+      dropPending();
       if (mounted) {
         _showError(
           'Eklerin toplamı en fazla '
@@ -877,15 +984,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
     final String stored;
     try {
-      stored = await ref.read(outgoingAttachmentStoreProvider).persist(path);
+      stored = await ref
+          .read(outgoingAttachmentStoreProvider)
+          .persist(path, originalName: originalName);
     } on Object catch (_) {
+      dropPending();
       if (mounted) _showError('“$name” eklenemedi.');
       return;
     }
-    if (!mounted || _attachments.contains(stored)) return;
+    if (!mounted || _attachments.contains(stored)) {
+      dropPending();
+      return;
+    }
     _storedBySource[path] = stored;
-    setState(() => _attachments.add(stored));
+    setState(() {
+      _pendingAttachments.remove(pending);
+      _attachments.add(stored);
+      _justUploaded.add(stored);
+    });
     _onChanged();
+    Timer(const Duration(milliseconds: 900), () {
+      if (!mounted) return;
+      setState(() => _justUploaded.remove(stored));
+    });
   }
 
   /// Etiket anında değişir — "..." menüsündeki onay kutusuna dokunur
@@ -1208,9 +1329,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     controller: _subject,
                     isSubject: true,
                   ),
-                  if (_attachments.isNotEmpty)
+                  if (_attachments.isNotEmpty || _pendingAttachments.isNotEmpty)
                     _AttachmentList(
                       paths: _attachments,
+                      pending: _pendingAttachments,
+                      justUploaded: _justUploaded,
                       onRemove: (path) {
                         _storedBySource.removeWhere((_, stored) => stored == path);
                         setState(() => _attachments.remove(path));
@@ -2030,10 +2153,24 @@ class _ContactOptionsList extends StatelessWidget {
   }
 }
 
+/// Kalıcı depoya kopyalanmayı bekleyen bir ek — bkz. `_addAttachmentPath`.
+class _PendingAttachment {
+  const _PendingAttachment(this.path, this.name);
+  final String path;
+  final String name;
+}
+
 class _AttachmentList extends StatelessWidget {
-  const _AttachmentList({required this.paths, required this.onRemove});
+  const _AttachmentList({
+    required this.paths,
+    required this.onRemove,
+    this.pending = const [],
+    this.justUploaded = const {},
+  });
 
   final List<String> paths;
+  final List<_PendingAttachment> pending;
+  final Set<String> justUploaded;
   final ValueChanged<String> onRemove;
 
   @override
@@ -2048,12 +2185,31 @@ class _AttachmentList extends StatelessWidget {
         spacing: Space.sm,
         runSpacing: Space.sm,
         children: [
+          for (final item in pending)
+            Chip(
+              avatar: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: t.textSecondary,
+                ),
+              ),
+              label: Text(
+                item.name,
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+              backgroundColor: t.surface,
+              side: BorderSide(color: t.divider),
+            ),
           for (final path in paths)
             Chip(
-              avatar: AttachmentTypeIcon(
-                fileName: path.split(RegExp(r'[\\/]')).last,
-                size: 18,
-              ),
+              avatar: justUploaded.contains(path)
+                  ? Icon(LucideIcons.checkCircle, size: 18, color: t.success)
+                  : AttachmentTypeIcon(
+                      fileName: path.split(RegExp(r'[\\/]')).last,
+                      size: 18,
+                    ),
               label: Text(
                 path.split(RegExp(r'[\\/]')).last,
                 style: Theme.of(context).textTheme.labelSmall,

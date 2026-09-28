@@ -33,6 +33,7 @@ import '../../core/widgets/kaydet_widgets.dart';
 import '../attachment_preview/attachment_preview_screen.dart';
 import '../compose/compose_launcher.dart';
 import '../compose/compose_screen.dart' show ComposeMode;
+import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
 
 /// İleti okuma ekranı.
@@ -416,7 +417,7 @@ class _Header extends StatelessWidget {
             BrandAvatar(
               name: message.fromName,
               email: message.fromEmail,
-              size: 36,
+              size: 40,
             ),
             const SizedBox(width: Space.md),
             Expanded(
@@ -433,7 +434,7 @@ class _Header extends StatelessWidget {
                               : message.fromName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyMedium
+                          style: Theme.of(context).textTheme.bodyLarge
                               ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                       ),
@@ -448,18 +449,19 @@ class _Header extends StatelessWidget {
                         ),
                     ],
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     message.fromEmail,
                     style: Theme.of(
                       context,
-                    ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                    ).textTheme.bodyMedium?.copyWith(color: t.textSecondary),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     formatDetailDate(message.dateUtc),
                     style: Theme.of(
                       context,
-                    ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                    ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
                   ),
                 ],
               ),
@@ -468,8 +470,17 @@ class _Header extends StatelessWidget {
         ),
         if (to.isNotEmpty || cc.isNotEmpty) ...[
           const SizedBox(height: Space.md),
-          _RecipientLine(label: 'Kime', addresses: to),
-          if (cc.isNotEmpty) _RecipientLine(label: 'Bilgi', addresses: cc),
+          _RecipientLine(
+            label: 'Kime',
+            addresses: to,
+            accountId: message.accountId,
+          ),
+          if (cc.isNotEmpty)
+            _RecipientLine(
+              label: 'Bilgi',
+              addresses: cc,
+              accountId: message.accountId,
+            ),
         ],
       ],
     );
@@ -477,38 +488,89 @@ class _Header extends StatelessWidget {
 }
 
 class _RecipientLine extends StatelessWidget {
-  const _RecipientLine({required this.label, required this.addresses});
+  const _RecipientLine({
+    required this.label,
+    required this.addresses,
+    required this.accountId,
+  });
 
   final String label;
   final List<EmailAddress> addresses;
+  final int? accountId;
 
   @override
   Widget build(BuildContext context) {
     if (addresses.isEmpty) return const SizedBox.shrink();
     final t = context.tokens;
     return Padding(
-      padding: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.only(top: Space.xs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 44,
-            child: Text(
-              label,
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(
+                label,
+                style: Theme.of(
+                  context,
+                ).textTheme.labelMedium?.copyWith(color: t.textTertiary),
+              ),
             ),
           ),
           Expanded(
-            child: Text(
-              addresses.map((a) => a.display).join(', '),
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: t.textSecondary),
+            child: Wrap(
+              spacing: Space.xs,
+              runSpacing: Space.xs,
+              children: [
+                for (final address in addresses)
+                  _RecipientInfoChip(address: address, accountId: accountId),
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Salt-okunur alıcı çipi: dokunulunca [showRecipientDetails] ile aynı
+/// ayrıntı sayfasını açar (yazma ekranındaki alıcı çipiyle tutarlı davranış),
+/// ama kaldırma düğmesi taşımaz — burada alıcı listesi düzenlenmez.
+class _RecipientInfoChip extends StatelessWidget {
+  const _RecipientInfoChip({required this.address, required this.accountId});
+
+  final EmailAddress address;
+  final int? accountId;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Material(
+      color: t.isDark ? t.surfaceElevated : t.surfaceDeep,
+      borderRadius: BorderRadius.circular(Radii.sm),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => showRecipientDetails(
+          context,
+          address: address,
+          accountId: accountId,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: Space.sm,
+            vertical: 5,
+          ),
+          child: Text(
+            address.display,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(
+              context,
+            ).textTheme.labelMedium?.copyWith(color: t.textSecondary),
+          ),
+        ),
       ),
     );
   }
@@ -545,7 +607,7 @@ class _AttachmentStrip extends ConsumerWidget {
             separatorBuilder: (context, index) =>
                 const SizedBox(width: Space.sm),
             itemBuilder: (context, index) =>
-                _AttachmentChip(attachment: visible[index]),
+                _AttachmentChip(attachments: visible, index: index),
           ),
         ),
       ],
@@ -554,9 +616,12 @@ class _AttachmentStrip extends ConsumerWidget {
 }
 
 class _AttachmentChip extends ConsumerStatefulWidget {
-  const _AttachmentChip({required this.attachment});
+  const _AttachmentChip({required this.attachments, required this.index});
 
-  final AttachmentRow attachment;
+  final List<AttachmentRow> attachments;
+  final int index;
+
+  AttachmentRow get attachment => attachments[index];
 
   @override
   ConsumerState<_AttachmentChip> createState() => _AttachmentChipState();
@@ -565,11 +630,14 @@ class _AttachmentChip extends ConsumerStatefulWidget {
 class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
   /// Ekin varsayılan davranışı artık İNDİR değil ÖNİZLE: dokunma doğrudan
   /// `AttachmentPreviewScreen`i açar; ekran kendi içinde önbellek/indirme
-  /// durumunu ele alır (bkz. o ekranın belgesi). Burada ayrıca indirme
-  /// yapılmaz.
+  /// durumunu ele alır (bkz. o ekranın belgesi). Ekran, dokunulan ekten
+  /// başlayarak şerideki TÜM eklerin sırayla kaydırılabildiği bir galeridir.
   void _openPreview() {
     context.pushScreen(
-      AttachmentPreviewScreen(attachment: widget.attachment),
+      AttachmentPreviewScreen(
+        attachments: widget.attachments,
+        initialIndex: widget.index,
+      ),
       transitionStyle: KaydetTransitionStyle.horizontalPush,
     );
   }

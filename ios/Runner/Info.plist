@@ -33,6 +33,13 @@
 	<true/>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- file_saver'ın "Cihaza kaydet" (saveAs) diyaloğu: iOS Dosyalar uygulamasına
+	     dışa aktarma için gerekli. Bu anahtarlar olmadan UIDocumentPickerViewController
+	     açılmaz. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<!-- Yeni ileti oluştururken kamerayla fotoğraf çekmek için (bkz.
 	     AndroidManifest.xml'deki android.permission.CAMERA). -->
 	<key>NSCameraUsageDescription</key>
@@ -40,6 +47,8 @@
 	<!-- Yeni ileti oluştururken galeriden görsel eklemek için. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Eklenti olarak fotoğraf seçebilmek için galeriye erişim gerekir.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Fotoğrafları kaydedebilmek için galeriye erişim gerekir.</string>
 	<!-- Sesli yazma (bkz. AndroidManifest.xml'deki android.permission.RECORD_AUDIO). -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Sesli yazma için mikrofona erişim gerekir.</string>

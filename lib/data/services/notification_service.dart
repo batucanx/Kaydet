@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../domain/use_cases/notification_text.dart';
 import '../database/app_database.dart';
@@ -225,6 +226,10 @@ class NotificationService {
   /// Uygulamanın sistem bildirim ayarları sayfasını açar — kalıcı olarak
   /// reddedilmiş izin yalnızca buradan geri açılabilir.
   Future<void> openSystemSettings() async {
+    if (Platform.isIOS) {
+      await openAppSettings();
+      return;
+    }
     await initialize();
     await _plugin.openAppNotificationSettings();
   }
@@ -373,9 +378,10 @@ class NotificationService {
     final active = await _plugin.getActiveNotifications();
     return [
       for (final n in active)
-        if ((n.groupKey ?? '').startsWith(_groupPrefix) &&
-            n.id != null &&
-            n.id! >= 0)
+        if (n.id != null &&
+            n.id! >= 0 &&
+            (parseMessageId(n.payload) != null ||
+                (n.groupKey ?? '').startsWith(_groupPrefix)))
           n.id!,
     ];
   }

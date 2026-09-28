@@ -31,7 +31,11 @@ class OutgoingAttachmentStore {
 
   /// [sourcePath]'i kalıcı klasöre kopyalar ve YENİ yolu döner. Dosya zaten bu
   /// klasördeyse (ör. taslaktan yeniden açılan ek) aynen döner.
-  Future<String> persist(String sourcePath) async {
+  ///
+  /// [originalName]: iOS'ta `file_picker` dosyayı geçici dizine kopyalarken
+  /// adını değiştirebilir. Çağıran gerçek dosya adını (ör. `PlatformFile.name`)
+  /// biliyorsa buraya verir; verilmezse yol'dan türetilen ad kullanılır.
+  Future<String> persist(String sourcePath, {String? originalName}) async {
     final root = await _rootProvider();
     if (p.isWithin(root.path, sourcePath)) return sourcePath;
 
@@ -40,8 +44,13 @@ class OutgoingAttachmentStore {
     // ad, düşük çözünürlüklü saatlerde iki eki aynı klasöre düşürebilirdi).
     await root.create(recursive: true);
     final folder = await root.createTemp('ek_');
+    // Orijinal ad verilmişse onu, yoksa path'teki son bileşeni kullan.
+    final rawName =
+        (originalName != null && originalName.trim().isNotEmpty)
+            ? originalName.trim()
+            : p.basename(sourcePath);
     final target = File(
-      p.join(folder.path, AttachmentFiles.safeFileName(p.basename(sourcePath))),
+      p.join(folder.path, AttachmentFiles.safeFileName(rawName)),
     );
     try {
       await File(sourcePath).copy(target.path);
@@ -56,6 +65,7 @@ class OutgoingAttachmentStore {
     }
     return target.path;
   }
+
 
   /// [activePaths]'te OLMAYAN ve [grace]'ten eski kopyaları siler. Dönüş:
   /// silinen klasör sayısı.

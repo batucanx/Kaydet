@@ -547,36 +547,77 @@ class _AccountAvatarButton extends StatelessWidget {
     // `accent` halkası zeminle karışıp görünmez olurdu — beyaz halkaya döner.
     // Koyu temada dokunulmaz.
     final ringColor = t.isDark ? t.accent : t.onAccentFill;
+    // Rozetin kesim rengi (`border`) rayın kendi zeminiyle eşleşmeli, aksi
+    // hâlde avatarla rozet arasında görünür bir kare/daire sınırı kalır.
+    final railBg = t.isDark ? t.surfaceDeep : t.appBarBg;
     return Tooltip(
       message: account.email,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(Radii.full),
-        // Halka rengi/kalınlığı `isActive` değiştiğinde anlık atlamaz,
-        // `Motion.fast` boyunca akıcı geçer — optimistik seçimin
-        // (`_pendingAccountId`) görsel karşılığı budur.
-        child: AnimatedContainer(
-          duration: context.motion(Motion.fast),
-          curve: Motion.standard,
-          padding: const EdgeInsets.all(2),
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: isActive ? ringColor : Colors.transparent,
-              width: isActive ? 2.5 : 1.5,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            // Halka rengi/kalınlığı `isActive` değiştiğinde anlık atlamaz,
+            // `Motion.fast` boyunca akıcı geçer — optimistik seçimin
+            // (`_pendingAccountId`) görsel karşılığı budur.
+            AnimatedContainer(
+              duration: context.motion(Motion.fast),
+              curve: Motion.standard,
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isActive ? ringColor : Colors.transparent,
+                  width: isActive ? 2.5 : 1.5,
+                ),
+              ),
+              // Hafif büyüme — Outlook'un "seçildi" hissi.
+              child: AnimatedScale(
+                scale: isActive ? 1.0 : 0.95,
+                duration: context.motion(Motion.fast),
+                curve: Motion.standard,
+                child: BrandAvatar(
+                  name: account.displayName,
+                  email: account.email,
+                  size: Dimens.navRailAvatarSize,
+                ),
+              ),
             ),
-          ),
-          // Hafif büyüme — Outlook'un "seçildi" hissi.
-          child: AnimatedScale(
-            scale: isActive ? 1.0 : 0.95,
-            duration: context.motion(Motion.fast),
-            curve: Motion.standard,
-            child: BrandAvatar(
-              name: account.displayName,
-              email: account.email,
-              size: Dimens.navRailAvatarSize,
+            // Aktif hesabı işaretleyen zarif onay rozeti — avatarın kendi
+            // görselini (logo/baş harf) KAPATMAZ, sağ-alt köşede küçük bir
+            // overlay olarak durur. Yalnızca `isActive` iken görünür ve
+            // hesap değişiminde `Motion.fast` boyunca yumuşakça belirir/kaybolur.
+            Positioned(
+              right: -1,
+              bottom: -1,
+              child: AnimatedScale(
+                scale: isActive ? 1.0 : 0.0,
+                duration: context.motion(Motion.fast),
+                curve: Motion.standard,
+                child: AnimatedOpacity(
+                  opacity: isActive ? 1.0 : 0.0,
+                  duration: context.motion(Motion.fast),
+                  curve: Motion.standard,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: t.accentFill,
+                      border: Border.all(color: railBg, width: 2),
+                    ),
+                    child: Icon(
+                      LucideIcons.check,
+                      size: 10,
+                      color: t.onAccentFill,
+                    ),
+                  ),
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -704,9 +745,7 @@ class _AccountFolderPanelContentState
                           : account.displayName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                      style: Theme.of(context).textTheme.titleLarge,
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -715,7 +754,7 @@ class _AccountFolderPanelContentState
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(
                         context,
-                      ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                      ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
                     ),
                   ],
                 ),

@@ -9,11 +9,17 @@ const schema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY 64 haneli hex olmalı'),
   DATABASE_PATH: z.string().default('./data/kaydet.sqlite'),
-  APNS_KEY_PATH: z.string().min(1),
+  APNS_KEY_PATH: z.string().optional(),
+  APNS_KEY_PEM: z.string().optional(),
   APNS_KEY_ID: z.string().min(1),
   APNS_TEAM_ID: z.string().min(1),
   APNS_BUNDLE_ID: z.string().default('tr.com.pazarlik.kaydet'),
-});
+}).refine(
+  (data) =>
+    (data.APNS_KEY_PATH != null && data.APNS_KEY_PATH.trim().length > 0) ||
+    (data.APNS_KEY_PEM != null && data.APNS_KEY_PEM.trim().length > 0),
+  { message: 'APNS_KEY_PATH veya APNS_KEY_PEM en az biri tanımlanmalı' },
+);
 
 export type Config = z.infer<typeof schema>;
 

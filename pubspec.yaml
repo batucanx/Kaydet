@@ -51,6 +51,7 @@ dependencies:
   synchronized: ^3.4.0
   html: ^0.15.7
   image_picker: ^1.2.3
+  image: ^4.10.1
   cached_network_image: ^4.0.0
   flutter_quill: ^11.5.1
   flutter_quill_delta_from_html: ^1.5.3

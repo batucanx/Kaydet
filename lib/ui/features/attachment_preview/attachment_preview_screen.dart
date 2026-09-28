@@ -22,7 +22,8 @@ import 'docx_viewer.dart';
 import 'pdf_preview_widget.dart';
 import 'spreadsheet_viewer.dart';
 
-/// Bir ekin tam ekran önizlemesi.
+/// Bir mailin tüm önizlenebilir eklerinin tam ekran, birbiri arasında
+/// sağa/sola KAYDIRILABİLİR önizlemesi (Outlook/Gmail'in "galerisi" gibi).
 ///
 /// `_AttachmentChip`e (bkz. `mail_detail_screen.dart`) dokunmanın YENİ
 /// varsayılan davranışı: dosyayı doğrudan işletim sistemine (Files/başka bir
@@ -30,14 +31,24 @@ import 'spreadsheet_viewer.dart';
 /// üst çubuktaki "⋮" menüsüyle (bkz. `attachmentMenuItems`) başka bir
 /// uygulamada açabilir, kaydedebilir, paylaşabilir ya da kopyasını gönderir.
 ///
-/// İndirme/önbellek denetimi ekranın kendisinde yapılır — `MailRepository.
-/// downloadAttachment` zaten "yerelde varsa indirme" davranışına sahiptir
-/// (bkz. o metodun belgesi); burada yalnızca sonucu bekleyip duruma göre
-/// yükleniyor/hata/önizleme gösterilir.
+/// [attachments] her zaman `_AttachmentStrip`teki (mail detay ekranı) sırayla
+/// AYNIDIR — sıralama burada asla değiştirilmez. [initialIndex], kullanıcının
+/// dokunduğu ekin bu listedeki konumudur; galeri ORADAN açılır.
+///
+/// İndirme önbelleği ekranın kendisinde tutulur (bkz. [_futureFor]): her ek
+/// yalnızca sayfası ilk kez oluşturulduğunda indirilir (`PageView` zaten
+/// görünürdeki sayfaların dışını kurmaz — bkz. `PageView` belgesi), bir kez
+/// indirilen ek ileri/geri kaydırmada yeniden indirilmez. `MailRepository.
+/// downloadAttachment` ayrıca "yerelde varsa indirme" davranışına sahiptir.
 class AttachmentPreviewScreen extends ConsumerStatefulWidget {
-  const AttachmentPreviewScreen({super.key, required this.attachment});
+  const AttachmentPreviewScreen({
+    super.key,
+    required this.attachments,
+    required this.initialIndex,
+  });
 
-  final AttachmentRow attachment;
+  final List<AttachmentRow> attachments;
+  final int initialIndex;
 
   @override
   ConsumerState<AttachmentPreviewScreen> createState() =>
@@ -46,41 +57,82 @@ class AttachmentPreviewScreen extends ConsumerStatefulWidget {
 
 class _AttachmentPreviewScreenState
     extends ConsumerState<AttachmentPreviewScreen> {
-  late Future<Result<String>> _localPath;
+  late final PageController _pageController = PageController(
+    initialPage: widget.initialIndex,
+  );
+  late int _currentIndex = widget.initialIndex;
+
+  /// Sayfa başına indirme sonucu — bkz. sınıf belgesi: ilk erişimde
+  /// oluşturulur, sonrasında hep aynı `Future` döner (yeniden indirmez).
+  final Map<int, Future<Result<String>>> _futures = {};
+
+  /// Geçerli sayfada pinch/pan aktifken (bkz. `PdfPreviewWidget`/
+  /// `DocxPreviewWidget`in `onZoomChanged`ı ve `_ImagePreview`in
+  /// `PhotoView` durumu) `true` olur; bu sırada galerinin kendi yatay
+  /// kaydırması kilitlenir — aksi halde zoom/pan gesture'ı sayfa geçişiyle
+  /// çakışır.
+  bool _swipeLocked = false;
+
+  Future<Result<String>> _futureFor(int index) {
+    return _futures.putIfAbsent(
+      index,
+      () => ref
+          .read(mailRepositoryProvider)
+          .downloadAttachment(widget.attachments[index].id),
+    );
+  }
+
+  void _retry(int index) {
+    setState(() {
+      _futures[index] = ref
+          .read(mailRepositoryProvider)
+          .downloadAttachment(widget.attachments[index].id);
+    });
+  }
+
+  void _setSwipeLocked(bool locked) {
+    if (_swipeLocked == locked) return;
+    setState(() => _swipeLocked = locked);
+  }
 
   @override
-  void initState() {
-    super.initState();
-    _localPath = _resolve();
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
-
-  Future<Result<String>> _resolve() {
-    return ref
-        .read(mailRepositoryProvider)
-        .downloadAttachment(widget.attachment.id);
-  }
-
-  void _retry() => setState(() => _localPath = _resolve());
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final attachment = widget.attachments[_currentIndex];
     final kind = AttachmentType.resolve(
-      mimeType: widget.attachment.mimeType,
-      fileName: widget.attachment.fileName,
+      mimeType: attachment.mimeType,
+      fileName: attachment.fileName,
     );
+    final showPager = widget.attachments.length > 1;
 
     return Scaffold(
       backgroundColor: t.bg,
       appBar: AppBar(
-        title: Text(
-          widget.attachment.fileName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              attachment.fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (showPager)
+              Text(
+                '${_currentIndex + 1} / ${widget.attachments.length}',
+                style: Theme.of(context).textTheme.labelSmall,
+              ),
+          ],
         ),
         actions: [
           FutureBuilder<Result<String>>(
-            future: _localPath,
+            future: _futureFor(_currentIndex),
             builder: (context, snapshot) {
               final path = snapshot.data?.valueOrNull;
               if (path == null) return const SizedBox.shrink();
@@ -89,7 +141,7 @@ class _AttachmentPreviewScreenState
                 menuChildren: attachmentMenuItems(
                   context,
                   ref,
-                  attachment: widget.attachment,
+                  attachment: attachment,
                   localPath: path,
                   kind: kind,
                 ),
@@ -106,33 +158,85 @@ class _AttachmentPreviewScreenState
         ],
       ),
       body: SafeArea(
-        child: FutureBuilder<Result<String>>(
-          future: _localPath,
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return _DownloadingView(fileName: widget.attachment.fileName);
-            }
-            return snapshot.data!.fold(
-              (path) => _PreviewBody(
-                kind: kind,
-                path: path,
-                attachment: widget.attachment,
-              ),
-              (failure) => Center(
-                child: EmptyState(
-                  icon: LucideIcons.cloudOff,
-                  title: 'Ek indirilemedi',
-                  description: failure.userMessage,
-                  action: OutlinedButton(
-                    onPressed: _retry,
-                    child: const Text('Yeniden dene'),
+        child: showPager
+            ? PhotoViewGestureDetectorScope(
+                axis: Axis.horizontal,
+                child: PageView.builder(
+                  controller: _pageController,
+                  physics: _swipeLocked
+                      ? const NeverScrollableScrollPhysics()
+                      : const PageScrollPhysics(),
+                  itemCount: widget.attachments.length,
+                  onPageChanged: (index) => setState(() {
+                    _currentIndex = index;
+                    _swipeLocked = false;
+                  }),
+                  itemBuilder: (context, index) => _AttachmentPreviewPage(
+                    attachment: widget.attachments[index],
+                    future: _futureFor(index),
+                    onRetry: () => _retry(index),
+                    onZoomChanged: _setSwipeLocked,
                   ),
                 ),
+              )
+            : _AttachmentPreviewPage(
+                attachment: attachment,
+                future: _futureFor(_currentIndex),
+                onRetry: () => _retry(_currentIndex),
+                onZoomChanged: _setSwipeLocked,
               ),
-            );
-          },
-        ),
       ),
+    );
+  }
+}
+
+/// Tek bir ekin indirme → önizleme akışı — galerinin her sayfası bu widget'ı
+/// kullanır (bkz. `AttachmentPreviewScreen`), tek ekli mailde de aynen.
+class _AttachmentPreviewPage extends StatelessWidget {
+  const _AttachmentPreviewPage({
+    required this.attachment,
+    required this.future,
+    required this.onRetry,
+    required this.onZoomChanged,
+  });
+
+  final AttachmentRow attachment;
+  final Future<Result<String>> future;
+  final VoidCallback onRetry;
+  final ValueChanged<bool> onZoomChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final kind = AttachmentType.resolve(
+      mimeType: attachment.mimeType,
+      fileName: attachment.fileName,
+    );
+    return FutureBuilder<Result<String>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return _DownloadingView(fileName: attachment.fileName);
+        }
+        return snapshot.data!.fold(
+          (path) => _PreviewBody(
+            kind: kind,
+            path: path,
+            attachment: attachment,
+            onZoomChanged: onZoomChanged,
+          ),
+          (failure) => Center(
+            child: EmptyState(
+              icon: LucideIcons.cloudOff,
+              title: 'Ek indirilemedi',
+              description: failure.userMessage,
+              action: OutlinedButton(
+                onPressed: onRetry,
+                child: const Text('Yeniden dene'),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -168,21 +272,36 @@ class _PreviewBody extends StatelessWidget {
     required this.kind,
     required this.path,
     required this.attachment,
+    this.onZoomChanged,
   });
 
   final AttachmentKind kind;
   final String path;
   final AttachmentRow attachment;
 
+  /// Bkz. `PdfPreviewWidget.onZoomChanged` — yalnızca pinch/pan destekleyen
+  /// türlere (görsel, PDF, DOCX) iletilir; diğerlerinde zoom kavramı yoktur.
+  final ValueChanged<bool>? onZoomChanged;
+
   @override
   Widget build(BuildContext context) {
     return switch (kind) {
-      AttachmentKind.pdf => PdfPreviewWidget(path: path),
-      AttachmentKind.image => _ImagePreview(path: path),
+      AttachmentKind.pdf => PdfPreviewWidget(
+        path: path,
+        onZoomChanged: onZoomChanged,
+      ),
+      AttachmentKind.image => _ImagePreview(
+        path: path,
+        onZoomChanged: onZoomChanged,
+      ),
       AttachmentKind.text => _TextPreview(path: path),
       AttachmentKind.audio => _AudioPreview(path: path),
       AttachmentKind.video => _VideoPreview(path: path),
-      AttachmentKind.document => _buildDocumentPreview(path, attachment),
+      AttachmentKind.document => _buildDocumentPreview(
+        path,
+        attachment,
+        onZoomChanged,
+      ),
       AttachmentKind.spreadsheet => _buildSpreadsheetPreview(path, attachment),
       AttachmentKind.presentation ||
       AttachmentKind.archive ||
@@ -195,7 +314,11 @@ class _PreviewBody extends StatelessWidget {
     };
   }
 
-  Widget _buildDocumentPreview(String path, AttachmentRow attachment) {
+  Widget _buildDocumentPreview(
+    String path,
+    AttachmentRow attachment,
+    ValueChanged<bool>? onZoomChanged,
+  ) {
     final ext =
         (attachment.fileName.contains('.')
                 ? attachment.fileName.split('.').last
@@ -203,7 +326,11 @@ class _PreviewBody extends StatelessWidget {
             .toLowerCase()
             .trim();
     if (_isWordDocument(path, ext, attachment.mimeType)) {
-      return DocxPreviewWidget(path: path, attachment: attachment);
+      return DocxPreviewWidget(
+        path: path,
+        attachment: attachment,
+        onZoomChanged: onZoomChanged,
+      );
     }
     return _UnsupportedPreview(
       kind: AttachmentKind.document,
@@ -236,11 +363,13 @@ class _PreviewBody extends StatelessWidget {
         ext == 'doc' ||
         ext == 'rtf' ||
         ext == 'dot' ||
-        ext == 'dotx') {
+        ext == 'dotx' ||
+        ext == 'odt') {
       return true;
     }
     final mime = mimeType.toLowerCase();
-    if (mime.contains('word') ||
+    if (mime.contains('opendocument.text') ||
+        mime.contains('word') ||
         mime.contains('officedocument.wordprocessingml') ||
         mime.contains('msword') ||
         mime.contains('rtf')) {
@@ -328,9 +457,14 @@ class _PreviewBody extends StatelessWidget {
 // ---------------------------------------------------------------- GÖRSEL
 
 class _ImagePreview extends StatelessWidget {
-  const _ImagePreview({required this.path});
+  const _ImagePreview({required this.path, this.onZoomChanged});
 
   final String path;
+
+  /// Bkz. `PdfPreviewWidget.onZoomChanged` — `PhotoView`in kendi ölçek
+  /// durumundan (`PhotoViewScaleState`) türetilir: `initial` dışındaki her
+  /// durum "yakınlaştırılmış" sayılır.
+  final ValueChanged<bool>? onZoomChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -340,6 +474,9 @@ class _ImagePreview extends StatelessWidget {
       backgroundDecoration: BoxDecoration(color: t.surfaceDeep),
       minScale: PhotoViewComputedScale.contained,
       maxScale: PhotoViewComputedScale.covered * 4,
+      scaleStateChangedCallback: onZoomChanged == null
+          ? null
+          : (state) => onZoomChanged!(state != PhotoViewScaleState.initial),
       loadingBuilder: (context, _) =>
           Center(child: CircularProgressIndicator(color: t.accent)),
       errorBuilder: (context, error, stackTrace) => Center(
@@ -456,23 +593,30 @@ class _AudioPreviewState extends State<_AudioPreview> {
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
 
+  StreamSubscription<PlayerState>? _stateSub;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration>? _durationSub;
+
   @override
   void initState() {
     super.initState();
-    _player.onPlayerStateChanged.listen((state) {
+    _stateSub = _player.onPlayerStateChanged.listen((state) {
       if (mounted) setState(() => _state = state);
     });
-    _player.onPositionChanged.listen((position) {
+    _positionSub = _player.onPositionChanged.listen((position) {
       if (mounted) setState(() => _position = position);
     });
-    _player.onDurationChanged.listen((duration) {
+    _durationSub = _player.onDurationChanged.listen((duration) {
       if (mounted) setState(() => _duration = duration);
     });
-    _player.setSourceDeviceFile(widget.path);
+    unawaited(_player.setSourceDeviceFile(widget.path).catchError((_) {}));
   }
 
   @override
   void dispose() {
+    _stateSub?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
     _player.dispose();
     super.dispose();
   }

@@ -9,6 +9,8 @@ import 'package:xml/xml.dart';
 import '../../../data/database/app_database.dart';
 import '../../core/actions/attachment_actions.dart';
 import '../../core/theme/tokens.dart';
+import 'ods_parser.dart';
+import 'xls_parser.dart';
 
 // ----------------------------------------------------------- Veri Modelleri
 
@@ -56,12 +58,60 @@ class SpreadsheetParser {
       return parseCsvBytes(bytes, isTsv: lower.endsWith('.tsv'));
     }
 
+    // Biçim UZANTIYA değil BAYTLARA göre seçilir (bkz. docx_viewer.dart'taki
+    // aynı yaklaşım): sunucudan yanlış/eksik uzantıyla gelen ekler bile doğru
+    // ayrıştırıcıya düşer, ".xls" uzantılı ama aslında .xlsx olan (ya da
+    // tam tersi) nadir dosyalar bile doğru okunur.
+    if (bytes.length >= 8 &&
+        bytes[0] == 0xD0 &&
+        bytes[1] == 0xCF &&
+        bytes[2] == 0x11 &&
+        bytes[3] == 0xE0) {
+      // Eski (ikili) Excel 97-2003 (.xls) — OLE2 Compound File imzası.
+      return XlsParser.parse(bytes);
+    }
+
+    if (bytes.length >= 4 &&
+        bytes[0] == 0x50 &&
+        bytes[1] == 0x4B &&
+        bytes[2] == 0x03 &&
+        bytes[3] == 0x04) {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      if (_looksLikeOdf(archive)) {
+        // OpenDocument e-tablo (.ods).
+        return OdsParser.parse(archive);
+      }
+      return _parseXlsxArchive(archive);
+    }
+
+    // Bilinen bir imza yok — yine de xlsx olarak denenir; başarısız olursa
+    // hata, çağıran tarafta (bkz. `SpreadsheetPreviewWidget`) zaten "e-tablo
+    // önizlemesi yüklenemedi" olarak zarifçe gösterilir.
     return parseXlsxBytes(bytes);
+  }
+
+  /// [archive] bir ODF (.ods) belgesi gibi mi görünüyor? Önce kanonik
+  /// `mimetype` girdisine bakılır; yoksa `content.xml` VARLIĞI + OOXML'e
+  /// özgü `xl/workbook.xml` YOKLUĞU ile ayırt edilir.
+  static bool _looksLikeOdf(Archive archive) {
+    final mimetypeFile = archive.findFile('mimetype');
+    if (mimetypeFile != null) {
+      final mime = utf8
+          .decode(mimetypeFile.content as List<int>, allowMalformed: true)
+          .trim();
+      if (mime.startsWith('application/vnd.oasis.opendocument.')) return true;
+      if (mime.isNotEmpty) return false;
+    }
+    return archive.findFile('content.xml') != null &&
+        archive.findFile('xl/workbook.xml') == null;
   }
 
   /// Bayt dizisinden `.xlsx` (OpenXML ZIP) çalışma kitabını ayrıştırır.
   static SpreadsheetBook parseXlsxBytes(List<int> bytes) {
-    final archive = ZipDecoder().decodeBytes(bytes);
+    return _parseXlsxArchive(ZipDecoder().decodeBytes(bytes));
+  }
+
+  static SpreadsheetBook _parseXlsxArchive(Archive archive) {
     final filesMap = <String, ArchiveFile>{};
     for (final f in archive.files) {
       filesMap[f.name.replaceAll('\\', '/')] = f;
