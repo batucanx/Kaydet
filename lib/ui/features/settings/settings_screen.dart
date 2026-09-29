@@ -16,6 +16,7 @@ import 'maintenance_settings_screen.dart';
 import 'notifications_settings_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'signatures_settings_screen.dart';
+import 'swipe_settings_screen.dart';
 
 /// Ayarlar ekranı: kategorilere göre gruplanmış (Grouped List), her satır
 /// kendi alt sayfasına açılan hiyerarşik bir yapı (Drill-down navigation).
@@ -97,6 +98,15 @@ class SettingsScreen extends ConsumerWidget {
                     : 'Silmeden önce sor kapalı',
                 trailing: const Icon(LucideIcons.chevronRight, size: 18),
                 onTap: () => context.pushScreen(const PrivacySettingsScreen()),
+              ),
+              SettingsTile(
+                icon: LucideIcons.arrowLeftRight,
+                title: 'Çekme seçenekleri',
+                subtitle:
+                    'Sağa: ${settings.swipeRight.label} · '
+                    'Sola: ${settings.swipeLeft.label}',
+                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                onTap: () => context.pushScreen(const SwipeSettingsScreen()),
               ),
               SettingsTile(
                 icon: LucideIcons.tag,

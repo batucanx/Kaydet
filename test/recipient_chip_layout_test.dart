@@ -59,4 +59,36 @@ void main() {
     final natural = [90.0, 300.0, 40.0, 250.0, 120.0];
     expect(plan(natural), hasLength(natural.length));
   });
+
+  group('en fazla iki satır (RecipientChipPlanner)', () {
+    RecipientPlan twoLines(List<double> natural) => RecipientChipPlanner.plan(
+      naturalWidths: natural,
+      available: available,
+      spacing: spacing,
+      minShrunkWidth: min,
+      plusWidth: (_) => 30,
+      inputMinWidth: 96,
+    );
+
+    test('az çip: hepsi görünür, gizlenen yok', () {
+      final p = twoLines([100, 100]);
+      expect(p.hidden, 0);
+      expect(p.maxWidths, [100, 100]);
+    });
+
+    test('çok çip: satır sayısı ikiyi aşmaz, N gizlenenleri sayar', () {
+      final natural = List.filled(10, 120.0);
+      final p = twoLines(natural);
+      expect(p.hidden, greaterThan(0));
+      expect(p.maxWidths.length + p.hidden, natural.length);
+    });
+
+    test('yazma alanı için yer kalmıyorsa çip gizlenir', () {
+      // 3 çip x 120: ilk satırda 2, ikinci satırda 1 + yazma alanı sığar.
+      expect(twoLines([120, 120, 120]).hidden, 0);
+      // 4 çip x 120: ikinci satır iki çiple dolar, yazma alanı 3. satıra
+      // düşerdi — bu yüzden en az bir çip gizlenir.
+      expect(twoLines([120, 120, 120, 120]).hidden, greaterThan(0));
+    });
+  });
 }

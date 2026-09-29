@@ -234,7 +234,15 @@ class MailConnection {
 
   /// Hesabın kimlik bilgisini güvenli depodan üretir.
   Future<Result<MailCredential>> _credentialFor(AccountRow account) async {
-    final password = await _secureStore.readPassword(account.id);
+    final String? password;
+    try {
+      password = await _secureStore.readPassword(account.id);
+    } on Object catch (error) {
+      // Keystore geçici olarak okunamadı (ör. yeniden başlatma sonrası).
+      // Bu bir kimlik hatası DEĞİL: kullanıcıyı yeniden girişe yönlendirmez,
+      // depoya da dokunmaz; bir sonraki denemede yeniden okunur.
+      return Err(StorageFailure(detail: '$error'));
+    }
     if (password == null || password.isEmpty) {
       return const Err(AuthFailure(detail: 'kayıtlı şifre yok'));
     }

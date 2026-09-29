@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -14,6 +15,10 @@ import '../../core/actions/password_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/swipe_action_style.dart';
+import '../settings/swipe_settings_screen.dart';
+import '../../../domain/use_cases/swipe_action_resolver.dart';
+import '../../../data/services/app_settings.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../compose/compose_launcher.dart';
 import '../mail_detail/mail_detail_screen.dart';
@@ -460,29 +465,26 @@ class _ComposeFab extends StatelessWidget {
   }
 }
 
-/// Kaydırma hareketleriyle arşivle / sil — tek harekette, ikinci bir
-/// dokunuş gerektirmeden. Çöp Kutusu'nda VE Arşiv'de birincil yön (sağa
-/// kaydırma) bunun yerine Gelen Kutusuna geri yükler: o klasörlerde
-/// "arşivle" anlamsız (Arşiv'de zaten arşivli, Çöp Kutusu'nda "geri yükle"
-/// asıl istenen eylem) — ikisi de aynı `restoreMessagesToInbox`'ı kullanır
-/// (bkz. `mailRepository.restoreToInbox` — hedefi Gelen Kutusu olan genel bir
-/// taşıma, kaynak klasöre bakmaz) — daha önce bunun için uzun basıp seçim
-/// moduna girip "Taşı" menüsünden Gelen Kutusu'nu seçmek gerekiyordu.
+/// Kaydırma hareketleri: sağa ve sola kaydırma eylemleri Ayarlar → Çekme
+/// seçenekleri'nden seçilir (varsayılan: sağa arşivle, sola sil). Seçim genel
+/// varsayılandır; bulunulan klasöre ve iletinin durumuna göre nihai eylem
+/// `SwipeActionResolver` ile belirlenir (ör. Arşiv/Çöp/İstenmeyen'de
+/// "Arşivle" → "Gelen Kutusuna taşı", sabitliyse "Sabitle" → "Sabitlemeyi
+/// kaldır"). Eylem panelinin rengi/simgesi/etiketi bu nihai eylemi gösterir.
 ///
-/// FİZİKSEL yönler: sağa kaydır → arşivle/geri yükle, sola kaydır → sil.
-/// `Dismissible`ın yönleri metin yönüne göredir (RTL'de `startToEnd` sola
-/// kaydırmadır); bu yüzden eşleme `Directionality`'ye bakılarak yapılır. Eşik
-/// aşılıp bırakılınca eylem çalışır ve satır yumuşakça daralarak kaybolur;
-/// eşik aşılmadan bırakılırsa satır yerine döner (açık kalan bir eylem
-/// paneli yoktur).
+/// Silme, kalıcıysa onay ister (bkz. `confirmDelete`). Okundu ve sabitleme
+/// gibi satırı kaldırmayan eylemler satırı yerinde bırakır. Eşik aşılıp
+/// bırakılınca eylem çalışır; aşılmadan bırakılırsa satır yerine döner (açık
+/// kalan bir eylem paneli yoktur).
+///
+/// FİZİKSEL yönler kullanılır: `Dismissible`ın yönleri metin yönüne göredir
+/// (RTL'de `startToEnd` sola kaydırmadır), bu yüzden eşleme
+/// `Directionality`'ye bakılarak yapılır.
 ///
 /// Seçim durumunu kendi diliminden (`selectionProvider.select`) okur —
 /// ebeveynden parametre olarak almaz. Böylece bir satır seçildiğinde/
 /// seçimi kaldırıldığında SADECE o satırın widget'ı yeniden çizilir,
 /// listedeki diğer görünür satırlar etkilenmez.
-///
-/// Kaydırma eylemleri arşivle/sil ile sınırlıdır; sabitleme mail detayındaki
-/// kontrol ve seçim araç çubuğundan kullanılmaya devam eder.
 class _SwipeRow extends ConsumerStatefulWidget {
   const _SwipeRow({
     super.key,
@@ -492,11 +494,18 @@ class _SwipeRow extends ConsumerStatefulWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
+    this.useOwnFolder = false,
   });
 
   final MessageRow message;
   final List<LabelRow> labels;
   final bool isSentFolder;
+
+  /// Eylem, görüntülenen klasör yerine iletinin KENDİ klasörüne göre
+  /// çözülür. Sabitlenenler bölümü hesabın tüm klasörlerinden ileti içerir
+  /// (bkz. [_PinnedSection]); ör. Çöp'teki sabitli ileti "Sil" değil
+  /// "Gelen Kutusuna taşı" olmalı.
+  final bool useOwnFolder;
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
@@ -523,14 +532,67 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     if (details.reached) HapticFeedback.selectionClick();
   }
 
-  /// Kalıcı silme onay ister (bkz. `confirmDelete`); reddedilirse satır
-  /// yerine döner. Birincil yönde (arşivle/geri yükle) onay yoktur.
-  Future<bool> _confirm(bool isPrimaryAction) {
-    if (isPrimaryAction) return Future.value(true);
-    return confirmDelete(context, ref, [widget.message.id]);
+  /// Seçimi klasöre ve iletinin durumuna göre nihai eyleme çevirir
+  /// (bkz. `SwipeActionResolver`); arayüz yalnızca bunu çizer ve çalıştırır.
+  EffectiveSwipe _effectiveFor(SwipeAction selected, SpecialUse? folder) {
+    final message = widget.message;
+    return SwipeActionResolver.resolve(
+      selected: selected,
+      folder: folder,
+      isDraftOrLocal: message.isDraft || message.isLocalOnly,
+      isSeen: message.isSeen,
+      isFlagged: message.isFlagged,
+    );
   }
 
-  Future<void> _onDismissed(bool isPrimaryAction) async {
+  /// Satırı listeden çıkarmayan eylemler: satır yerinde kalır, eylem
+  /// `confirmDismiss` içinde çalışır ve satır geri yerine oturur.
+  static bool _staysInPlace(EffectiveSwipe e) =>
+      e == EffectiveSwipe.markRead ||
+      e == EffectiveSwipe.markUnread ||
+      e == EffectiveSwipe.pin ||
+      e == EffectiveSwipe.unpin;
+
+  Future<void> _runInPlace(EffectiveSwipe effective) async {
+    final repository = ref.read(mailRepositoryProvider);
+    final id = widget.message.id;
+    switch (effective) {
+      case EffectiveSwipe.markRead:
+        await repository.setSeen([id], true);
+      case EffectiveSwipe.markUnread:
+        await repository.setSeen([id], false);
+      case EffectiveSwipe.pin:
+        await repository.setFlagged([id], true);
+      case EffectiveSwipe.unpin:
+        await repository.setFlagged([id], false);
+      default:
+        break;
+    }
+  }
+
+  /// `confirmDismiss`: silmede (kalıcıysa) onay ister; yerinde kalan
+  /// eylemleri burada çalıştırıp `false` döner (satır geri gelir); geri
+  /// kalanı için `true` (satır daralıp kaldırılır).
+  Future<bool> _confirm(EffectiveSwipe effective) async {
+    // İlk kurulum yer tutucusu: eylem yerine Çekme seçeneklerini açar.
+    if (effective == EffectiveSwipe.configure) {
+      unawaited(context.pushScreen<void>(const SwipeSettingsScreen()));
+      return false;
+    }
+    if (_staysInPlace(effective)) {
+      await _runInPlace(effective);
+      return false;
+    }
+    if (effective == EffectiveSwipe.delete) {
+      return confirmDelete(context, ref, [widget.message.id]);
+    }
+    return true;
+  }
+
+  Future<void> _onDismissed(
+    SwipeAction selected,
+    EffectiveSwipe effective,
+  ) async {
     setState(() {
       _removed = true;
       _armed = false;
@@ -538,32 +600,37 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     final id = widget.message.id;
     final database = ref.read(databaseProvider);
 
-    if (isPrimaryAction) {
-      final specialUse = ref.read(currentMailboxProvider)?.specialUse;
-      final movesToInbox =
-          specialUse == SpecialUse.trash || specialUse == SpecialUse.archive;
-      if (movesToInbox) {
-        await restoreMessagesToInbox(
-          context,
-          ref,
-          [id],
-          bottomInset: _ComposeFab.footprint,
-        );
-      } else {
+    // "Oku ve arşivle": önce okundu işaretlenir, sonra normal arşivle/geri
+    // yükle akışı (kendi "Geri al"ıyla) çalışır.
+    if (selected == SwipeAction.readAndArchive && !widget.message.isSeen) {
+      await ref.read(mailRepositoryProvider).setSeen([id], true);
+    }
+    if (!mounted) return;
+
+    switch (effective) {
+      case EffectiveSwipe.archive:
         await archiveMessages(
           context,
           ref,
           [id],
           bottomInset: _ComposeFab.footprint,
         );
-      }
-    } else {
-      await deleteMessagesWithUndo(
-        context,
-        ref,
-        [id],
-        bottomInset: _ComposeFab.footprint,
-      );
+      case EffectiveSwipe.moveToInbox:
+        await restoreMessagesToInbox(
+          context,
+          ref,
+          [id],
+          bottomInset: _ComposeFab.footprint,
+        );
+      case EffectiveSwipe.delete:
+        await deleteMessagesWithUndo(
+          context,
+          ref,
+          [id],
+          bottomInset: _ComposeFab.footprint,
+        );
+      default:
+        break;
     }
 
     // Eylem satırı gerçekten kaldırmadıysa (ör. sunucu karşılığı olmayan
@@ -585,73 +652,75 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
       ),
     );
     final mailbox = ref.watch(currentMailboxProvider);
-
+    // Ayar değişince satırlar canlı güncellenir.
+    final rightSelected = ref.watch(
+      settingsProvider.select((s) => s.swipeRight),
+    );
+    final leftSelected = ref.watch(settingsProvider.select((s) => s.swipeLeft));
 
     final ltr = Directionality.of(context) == TextDirection.ltr;
-    final primaryDirection = ltr
+    // `Dismissible`ın yönleri metin yönüne göredir; FİZİKSEL sağ/sol
+    // eşlemesi `Directionality`ye bakılarak yapılır.
+    final rightDirection = ltr
         ? DismissDirection.startToEnd
         : DismissDirection.endToStart;
-    final deleteDirection = ltr
+    final leftDirection = ltr
         ? DismissDirection.endToStart
         : DismissDirection.startToEnd;
 
-    final isTrash = mailbox?.specialUse == SpecialUse.trash;
-    final isArchive = mailbox?.specialUse == SpecialUse.archive;
+    final SpecialUse? folder;
+    if (widget.useOwnFolder) {
+      final boxes = ref.watch(mailboxesProvider).value ?? const <MailboxRow>[];
+      folder = boxes
+          .where((b) => b.id == widget.message.mailboxId)
+          .firstOrNull
+          ?.specialUse;
+    } else {
+      folder = mailbox?.specialUse;
+    }
+    final rightEffective = _effectiveFor(rightSelected, folder);
+    final leftEffective = _effectiveFor(leftSelected, folder);
+    final rightStyle = SwipeStyle.of(rightEffective, t);
+    final leftStyle = SwipeStyle.of(leftEffective, t);
 
-    // Taslaklarda arşivleme/geri yükleme anlamsız (sunucuya hiç gitmemiş
-    // yerel kayıt) — yalnızca sil yönü açık kalır. Çöp Kutusu'nda VE
-    // Arşiv'de birincil yön geri yüklemeye döndüğü için bu klasörler için
-    // hâlâ geçerli.
-    final message = widget.message;
-    final canPrimaryAction =
-        mailbox?.specialUse != SpecialUse.drafts &&
-        !message.isDraft &&
-        !message.isLocalOnly;
+    final direction = switch ((rightStyle != null, leftStyle != null)) {
+      (true, true) => DismissDirection.horizontal,
+      (true, false) => rightDirection,
+      (false, true) => leftDirection,
+      (false, false) => DismissDirection.none,
+    };
 
-    final primaryPane = (isTrash || isArchive)
-        ? _SwipeBackground(
-            // `accent` koyu temada zemin üzerinde METİN/ikon için ayarlıdır
-            // (açık bir ton) — dolgu olarak kullanılırsa üstündeki beyaz
-            // simge/yazı okunmaz olurdu. `accentFill` beyazla eşleşecek
-            // şekilde ayrıca ayarlanmış "dolgu" tonudur (bkz. `tokens.dart`).
-            color: t.accentFill,
-            icon: LucideIcons.inbox,
-            label: 'Gelen Kutusuna Taşı',
-            alignment: Alignment.centerLeft,
-            armed: _armed,
-          )
+    Widget pane(SwipeStyle? style, Alignment alignment) => style == null
+        ? const SizedBox.shrink()
         : _SwipeBackground(
-            color: t.success,
-            icon: LucideIcons.archive,
-            label: 'Arşivle',
-            alignment: Alignment.centerLeft,
+            style: style,
+            alignment: alignment,
             armed: _armed,
           );
-    final deletePane = _SwipeBackground(
-      color: t.dangerFill,
-      icon: LucideIcons.trash2,
-      label: 'Sil',
-      alignment: Alignment.centerRight,
-      armed: _armed,
-    );
+    // Sağa çekince eylem alanı SOLDAN açılır (ve tersi).
+    final rightPane = pane(rightStyle, Alignment.centerLeft);
+    final leftPane = pane(leftStyle, Alignment.centerRight);
 
+    final message = widget.message;
     return BoundedDismissible(
       key: ValueKey('swipe-${message.id}'),
-      direction: canPrimaryAction
-          ? DismissDirection.horizontal
-          : deleteDirection,
+      direction: direction,
       dismissThresholds: {
-        primaryDirection: _threshold,
-        deleteDirection: _threshold,
+        rightDirection: _threshold,
+        leftDirection: _threshold,
       },
       resizeDuration: context.motion(Motion.slow),
       movementDuration: context.motion(Motion.base),
       // `background` startToEnd, `secondaryBackground` endToStart içindir.
-      background: ltr ? primaryPane : deletePane,
-      secondaryBackground: ltr ? deletePane : primaryPane,
+      background: ltr ? rightPane : leftPane,
+      secondaryBackground: ltr ? leftPane : rightPane,
       onUpdate: _onUpdate,
-      confirmDismiss: (direction) => _confirm(direction == primaryDirection),
-      onDismissed: (direction) => _onDismissed(direction == primaryDirection),
+      confirmDismiss: (dir) => _confirm(
+        dir == rightDirection ? rightEffective : leftEffective,
+      ),
+      onDismissed: (dir) => dir == rightDirection
+          ? _onDismissed(rightSelected, rightEffective)
+          : _onDismissed(leftSelected, leftEffective),
       child: MailRow(
         message: message,
         labels: widget.labels,
@@ -666,27 +735,23 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 }
 
 /// Kaydırırken satırın arkasında açılan renkli alan: simge + etiket. Eşik
-/// aşılınca simge hafifçe büyüyerek "bırakırsan çalışır" der.
+/// aşılınca simge hafifçe büyüyerek "bırakırsan çalışır" der. Renk, simge ve
+/// etiket [SwipeStyle]dan gelir (Çekme seçenekleri önizlemesiyle ortak).
 class _SwipeBackground extends StatelessWidget {
   const _SwipeBackground({
-    required this.color,
-    required this.icon,
-    required this.label,
+    required this.style,
     required this.alignment,
     required this.armed,
   });
 
-  final Color color;
-  final IconData icon;
-  final String label;
+  final SwipeStyle style;
   final Alignment alignment;
   final bool armed;
 
   @override
   Widget build(BuildContext context) {
-    final t = context.tokens;
     return Container(
-      color: color,
+      color: style.color,
       alignment: alignment,
       padding: const EdgeInsets.symmetric(horizontal: Space.xxl),
       child: AnimatedScale(
@@ -696,12 +761,13 @@ class _SwipeBackground extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: IconSize.lg, color: t.onAccentFill),
+            Icon(style.icon, size: IconSize.lg, color: style.foreground),
             const SizedBox(height: Space.xs),
             Text(
-              label,
+              style.label,
+              textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: t.onAccentFill,
+                color: style.foreground,
                 fontWeight: FontWeight.w600,
               ),
             ),
@@ -720,8 +786,8 @@ class _SwipeBackground extends StatelessWidget {
 ///
 /// Buradaki iletiler geçerli klasörden değil, hesabın tamamından gelir
 /// (bkz. [pinnedMessagesProvider]) — bir ileti hangi klasörde olursa olsun
-/// sabitlenebilir. Kaydırma eylemleri (arşivle/sil) burada yok — bunun
-/// dışında listenin en başındaki NORMAL bir eleman (bkz. [PinnedSectionItem]):
+/// sabitlenebilir. Satırlar normal liste gibi kaydırma eylemlerini destekler
+/// (bkz. [_SwipeRow]). Bölüm listenin en başındaki NORMAL bir eleman (bkz. [PinnedSectionItem]):
 /// ekrana yapışmaz, diğer iletiler arasında kaydırırken o da onlarla
 /// birlikte kayıp gözden kaybolur.
 ///
@@ -801,7 +867,8 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
   }
 }
 
-/// Sabitlenenler bölümündeki ileti satırı; sabitleme mail detayından yönetilir.
+/// Sabitlenenler bölümündeki ileti satırı; kaydırma, seçim ve detay eylemleri
+/// normal liste satırıyla aynıdır.
 class _PinnedMailRow extends ConsumerWidget {
   const _PinnedMailRow({
     super.key,
@@ -817,14 +884,11 @@ class _PinnedMailRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isSelected = ref.watch(
-      selectionProvider.select((selection) => selection.contains(message.id)),
-    );
-    return MailRow(
+    return _SwipeRow(
       message: message,
       labels: labels,
-      isSelected: isSelected,
       isSentFolder: false,
+      useOwnFolder: true,
       onTap: () {
         if (ref.read(selectionProvider).isNotEmpty) {
           ref.read(selectionProvider.notifier).toggle(message.id);
@@ -850,8 +914,16 @@ class _SelectionActionBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final repository = ref.read(mailRepositoryProvider);
-    final messages = ref.watch(messageListProvider).value ?? const [];
-    final selected = messages.where((m) => ids.contains(m.id)).toList();
+    // Sabitlenenler bölümündeki iletiler başka klasörlerden olabilir; seçim
+    // durumları (okundu/sabitli) için onlar da hesaba katılır.
+    final messages = [
+      ...(ref.watch(messageListProvider).value ?? const <MessageRow>[]),
+      ...(ref.watch(pinnedMessagesProvider).value ?? const <MessageRow>[]),
+    ];
+    final selected = {
+      for (final m in messages)
+        if (ids.contains(m.id)) m.id: m,
+    }.values.toList();
     final allSeen = selected.isNotEmpty && selected.every((m) => m.isSeen);
     final allFlagged =
         selected.isNotEmpty && selected.every((m) => m.isFlagged);

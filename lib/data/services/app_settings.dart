@@ -24,6 +24,29 @@ enum SyncFrequency {
   bool get isBackgroundEnabled => this != SyncFrequency.manual;
 }
 
+/// Mail satırında sağa/sola kaydırmayla atanabilen eylemler.
+///
+/// Yalnızca uygulamanın gerçekten desteklediği tek dokunuşluk eylemler
+/// buradadır. Klasörde/duruma göre nihai eylem `SwipeActionResolver` ile
+/// belirlenir (ör. Arşiv'de "Arşivle" → "Gelen Kutusuna taşı").
+///
+/// SIRALAMA ÖNEMLİ: tercih `index` olarak saklanır; yeni değerler SONA eklenir.
+enum SwipeAction {
+  archive('Arşivle'),
+  delete('Sil'),
+  toggleRead('Okundu / okunmadı'),
+  readAndArchive('Oku ve arşivle'),
+  pin('Sabitle'),
+  none('Yok'),
+
+  /// Yalnızca varsayılan "ilk kurulum" yer tutucusu: kaydırınca Çekme
+  /// seçenekleri açılır. Seçim listesinde yoktur.
+  configure('Ayarla');
+
+  const SwipeAction(this.label);
+  final String label;
+}
+
 /// Uygulamanın tema tercihi. Flutter'ın kendi `ThemeMode`ıyla birebir
 /// eşlenir (system/light/dark); ayrı bir enum olmasının nedeni yalnızca
 /// Türkçe etiket (`label`) taşıması.
@@ -56,6 +79,8 @@ class AppSettings {
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
     this.markSeenDelayMs = 1500,
+    this.swipeRight = SwipeAction.configure,
+    this.swipeLeft = SwipeAction.delete,
   });
 
   final AppThemeMode themeMode;
@@ -78,6 +103,11 @@ class AppSettings {
   /// o iletiyi okunmuş bulur.
   final int markSeenDelayMs;
 
+  /// Sağa ve sola kaydırma eylemleri — birbirinden bağımsız, genel varsayılan;
+  /// klasöre göre uyarlanması `SwipeActionResolver`ın işidir.
+  final SwipeAction swipeRight;
+  final SwipeAction swipeLeft;
+
   AppSettings copyWith({
     AppThemeMode? themeMode,
     bool? notificationsEnabled,
@@ -86,6 +116,8 @@ class AppSettings {
     SyncFrequency? syncFrequency,
     bool? confirmBeforeDelete,
     int? markSeenDelayMs,
+    SwipeAction? swipeRight,
+    SwipeAction? swipeLeft,
   }) =>
       AppSettings(
         themeMode: themeMode ?? this.themeMode,
@@ -96,6 +128,8 @@ class AppSettings {
         syncFrequency: syncFrequency ?? this.syncFrequency,
         confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
         markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
+        swipeRight: swipeRight ?? this.swipeRight,
+        swipeLeft: swipeLeft ?? this.swipeLeft,
       );
 }
 
@@ -111,6 +145,8 @@ class AppSettingsStore {
   static const _kBrandLogos = 'kaydet.showBrandLogos';
   static const _kSync = 'kaydet.syncFrequency';
   static const _kConfirmDelete = 'kaydet.confirmDelete';
+  static const _kSwipeRight = 'kaydet.swipeRight';
+  static const _kSwipeLeft = 'kaydet.swipeLeft';
 
   static Future<AppSettingsStore> create() async =>
       AppSettingsStore(await SharedPreferences.getInstance());
@@ -137,7 +173,17 @@ class AppSettingsStore {
           : SyncFrequency
               .values[syncIndex.clamp(0, SyncFrequency.values.length - 1)],
       confirmBeforeDelete: _prefs.getBool(_kConfirmDelete) ?? true,
+      swipeRight: _readSwipe(_kSwipeRight, SwipeAction.configure),
+      swipeLeft: _readSwipe(_kSwipeLeft, SwipeAction.delete),
     );
+  }
+
+  SwipeAction _readSwipe(String key, SwipeAction fallback) {
+    final index = _prefs.getInt(key);
+    if (index == null || index < 0 || index >= SwipeAction.values.length) {
+      return fallback;
+    }
+    return SwipeAction.values[index];
   }
 
   static const _kCollapsedFolders = 'kaydet.collapsedFolders.';
@@ -164,5 +210,7 @@ class AppSettingsStore {
     await _prefs.setBool(_kBrandLogos, settings.showBrandLogos);
     await _prefs.setInt(_kSync, settings.syncFrequency.index);
     await _prefs.setBool(_kConfirmDelete, settings.confirmBeforeDelete);
+    await _prefs.setInt(_kSwipeRight, settings.swipeRight.index);
+    await _prefs.setInt(_kSwipeLeft, settings.swipeLeft.index);
   }
 }

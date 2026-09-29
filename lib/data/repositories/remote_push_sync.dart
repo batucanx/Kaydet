@@ -206,7 +206,16 @@ class RemotePushSync {
       if (fingerprints[account.id] == fp && !force.contains(account.id)) {
         continue;
       }
-      final password = await _readPassword(account.id);
+      final String? password;
+      try {
+        password = await _readPassword(account.id);
+      } on Object catch (e) {
+        // Keystore geçici olarak okunamadı: bu hesap atlanır, sonraki
+        // mutabakatta yeniden denenir; hiçbir şey silinmez.
+        _logFailure('hesap ${account.id}: şifre okunamadı', e);
+        allSynced = false;
+        continue;
+      }
       if (password == null || password.isEmpty) {
         log?.call('hesap ${account.id}: kayıtlı şifre yok, atlandı');
         continue;

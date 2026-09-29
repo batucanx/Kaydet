@@ -10,16 +10,27 @@ abstract class SecureStore {
   Future<String?> readPassword(int accountId);
   Future<void> writePassword(int accountId, String password);
   Future<void> deletePassword(int accountId);
-
-  Future<void> deleteAll();
 }
 
 class FlutterSecureStore implements SecureStore {
   FlutterSecureStore([FlutterSecureStorage? storage])
       : _storage = storage ??
             const FlutterSecureStorage(
-              // Varsayılan: Android Keystore destekli AES-GCM şifreleme.
-              aOptions: AndroidOptions(resetOnError: true),
+              // Android Keystore destekli AES-GCM şifreleme.
+              //
+              // `resetOnError` KAPALI olmalı: açıkken geçici bir Keystore/
+              // şifre çözme hatası (yeniden başlatma sonrası anahtar hazır
+              // değil, eklenti güncellemesiyle algoritma değişimi) TÜM
+              // hesapların şifrelerini kalıcı siler ve kullanıcı güncelleme
+              // ya da yeniden başlatmadan sonra çıkış yapmış gibi kalır.
+              // Kapalıyken okuma hata FIRLATIR; veri korunur ve bir sonraki
+              // denemede yeniden okunur (bkz. `MailConnection._credentialFor`).
+              // Algoritma değişirse veri silinmez, yedekli olarak taşınır.
+              aOptions: AndroidOptions(
+                resetOnError: false,
+                migrateOnAlgorithmChange: true,
+                migrateWithBackup: true,
+              ),
               // iOS: Cihaz kilitliyken gelen APNs push ve arka plan senkronu
               // (bkz. pushBackgroundSync / runBackgroundSync) şifreleri okuyabilsin.
               iOptions: IOSOptions(
@@ -51,9 +62,6 @@ class FlutterSecureStore implements SecureStore {
     await _storage.delete(key: _passwordKey(accountId));
     await _storage.delete(key: _legacyOauthKey(accountId));
   }
-
-  @override
-  Future<void> deleteAll() => _storage.deleteAll();
 }
 
 /// Testler ve önizleme için bellek içi uygulama.
@@ -71,10 +79,5 @@ class InMemorySecureStore implements SecureStore {
   @override
   Future<void> deletePassword(int accountId) async {
     _passwords.remove(accountId);
-  }
-
-  @override
-  Future<void> deleteAll() async {
-    _passwords.clear();
   }
 }

@@ -216,6 +216,12 @@ class SettingsNotifier extends Notifier<AppSettings> {
   Future<void> setConfirmBeforeDelete(bool value) =>
       _save(state.copyWith(confirmBeforeDelete: value));
 
+  Future<void> setSwipeRight(SwipeAction action) =>
+      _save(state.copyWith(swipeRight: action));
+
+  Future<void> setSwipeLeft(SwipeAction action) =>
+      _save(state.copyWith(swipeLeft: action));
+
   Future<void> setShowBrandLogos(bool value) =>
       _save(state.copyWith(showBrandLogos: value));
 }

@@ -6,6 +6,7 @@ import '../../../app/providers.dart';
 import '../../../data/database/app_database.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import 'new_signature_sheet.dart';
 
 /// İmzalar alt sayfası: imza listesi, oluşturma, düzenleme ve varsayılan
 /// seçimi.
@@ -38,7 +39,7 @@ class SignaturesSettingsScreen extends ConsumerWidget {
               tooltip: 'İmza ekle',
               onPressed: account == null
                   ? null
-                  : () => _createSignature(context, ref, account.id),
+                  : () => showNewSignatureSheet(context, ref, accountId: account.id),
             ),
           ),
           SettingsGroup(
@@ -68,66 +69,6 @@ class SignaturesSettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-  }
-
-  /// Yeni imza ekler — kullanıcı isterse 1'den fazla imza tanımlayabilir
-  /// (bkz. `AccountRepository.createSignature`: hesabın ilk imzasıysa
-  /// otomatik varsayılan olur).
-  Future<void> _createSignature(
-    BuildContext context,
-    WidgetRef ref,
-    int accountId,
-  ) async {
-    final nameController = TextEditingController();
-    final bodyController = TextEditingController();
-
-    final created = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Yeni imza'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: nameController,
-                autofocus: true,
-                decoration: const InputDecoration(hintText: 'Ör: İş imzası'),
-              ),
-              const SizedBox(height: Space.lg),
-              TextField(
-                controller: bodyController,
-                maxLines: 6,
-                minLines: 3,
-                decoration: const InputDecoration(
-                  hintText: 'İletilerin sonuna eklenecek metin',
-                ),
-              ),
-            ],
-          ),
-        ),
-        actionsAlignment: MainAxisAlignment.center,
-        actions: [
-          DialogActions(
-            cancelLabel: 'Vazgeç',
-            onCancel: () => Navigator.of(context).pop(false),
-            confirmLabel: 'Ekle',
-            onConfirm: () => Navigator.of(context).pop(true),
-          ),
-        ],
-      ),
-    );
-    if (created != true) return;
-    final name = nameController.text.trim();
-    if (name.isEmpty) return;
-    await ref
-        .read(accountRepositoryProvider)
-        .createSignature(
-          accountId: accountId,
-          name: name,
-          body: bodyController.text,
-        );
   }
 
   Future<void> _editSignature(

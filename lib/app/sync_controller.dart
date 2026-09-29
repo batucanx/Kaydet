@@ -120,6 +120,12 @@ class SyncController extends Notifier<SyncState> {
       }
       if (previous != next) {
         _bootstrapped = false;
+        // Eski hesabın hatası yeni hesabın ekranında görünmez. Provider
+        // değişikliği dinleyici içinde yapılamaz (bkz. yukarıdaki not).
+        scheduleMicrotask(() {
+          if (!ref.mounted || ref.read(accountIdProvider) != next) return;
+          state = state.copyWith(clearError: true);
+        });
         scheduleMicrotask(bootstrap);
       }
     });
@@ -154,6 +160,9 @@ class SyncController extends Notifier<SyncState> {
     if (accountId == null) return;
     _bootstrapped = true;
     _paused = false;
+    // Son hesaptan çıkıp yeniden giriş yapılınca (bkz. `_stopWatching`)
+    // zamanlayıcılar ve IDLE yeniden kurulabilsin.
+    _disposed = false;
 
     _watchConnectivity();
     await syncAll();
@@ -200,6 +209,33 @@ class SyncController extends Notifier<SyncState> {
     });
   }
 
+  /// [accountId] hâlâ etkin hesap mı? Hesap değişince eski hesabın geç biten
+  /// eşitlemesi yeni hesabın durumunu (hata, son eşitleme) bozmamalı.
+  bool _isCurrent(int accountId) => ref.read(accountIdProvider) == accountId;
+
+  /// Eşitleme hatasını arayüze yansıtır.
+  ///
+  /// Yalnızca kullanıcının yapabileceği bir şey olan hatalar (şifre, TLS,
+  /// kota) afişe çıkar. Ağ/zaman aşımı/sunucu geçici hataları gösterilmez:
+  /// yerel veri olduğu gibi durur; mevcut periyodik yoklama ve bağlantı
+  /// geri gelince yeniden eşitleme (bkz. `_watchConnectivity`) zaten yeniden
+  /// dener. Etkin olmayan hesabın hatası hiçbir zaman gösterilmez.
+  void _reportFailure(int accountId, AppFailure failure) {
+    if (!_isCurrent(accountId) || !failure.isActionable) return;
+    state = state.copyWith(lastError: failure);
+  }
+
+  /// Tur sürerken hesap değiştiyse yeni hesabın eşitlemesi buradan başlar
+  /// (`syncAll` tur sürerken gelen çağrıyı atlar). `true` dönerse çağıran
+  /// eski hesabın IDLE'ını yeniden kurmaz.
+  bool _handOffIfSwitched(int accountId) {
+    if (_isCurrent(accountId) || ref.read(accountIdProvider) == null) {
+      return false;
+    }
+    _fireAndForget(syncAll());
+    return true;
+  }
+
   void _markQuiet() {
     _quietUntil = DateTime.now().add(_eventQuietPeriod);
   }
@@ -221,8 +257,9 @@ class SyncController extends Notifier<SyncState> {
     try {
       final engine = ref.read(syncEngineProvider);
       final mailboxes = await engine.syncMailboxes(accountId);
+      if (!_isCurrent(accountId)) return;
       if (mailboxes is Err<List<MailboxRow>>) {
-        state = state.copyWith(lastError: mailboxes.failure);
+        _reportFailure(accountId, mailboxes.failure);
         return;
       }
 
@@ -234,8 +271,9 @@ class SyncController extends Notifier<SyncState> {
         accountId: accountId,
         mailbox: inbox.first,
       );
+      if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
-        state = state.copyWith(lastError: outcome.failure);
+        _reportFailure(accountId, outcome.failure);
         return;
       }
 
@@ -264,8 +302,10 @@ class SyncController extends Notifier<SyncState> {
       _running = false;
       _markQuiet();
       state = state.copyWith(isSyncing: false);
-      await _restartIdle();
-      _drainPendingFolderSync();
+      if (!_handOffIfSwitched(accountId)) {
+        await _restartIdle();
+        _drainPendingFolderSync();
+      }
     }
   }
 
@@ -276,6 +316,8 @@ class SyncController extends Notifier<SyncState> {
     if (accountId == null || _running || _foldersSyncing) {
       return;
     }
+    // Klasör, hesap geçişi sırasında henüz eski hesabınki olabilir.
+    if (mailbox != null && mailbox.accountId != accountId) return;
 
     // Sanal "Sabitlenenler" görünümünün gerçek bir klasörü yoktur; orada
     // yenileme tüm klasörleri eşitler, aksi hâlde aşağı çekmek hiçbir şey
@@ -293,8 +335,9 @@ class SyncController extends Notifier<SyncState> {
         accountId: accountId,
         mailbox: mailbox,
       );
+      if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
-        state = state.copyWith(lastError: outcome.failure);
+        _reportFailure(accountId, outcome.failure);
         return;
       }
       state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
@@ -311,8 +354,10 @@ class SyncController extends Notifier<SyncState> {
       _markQuiet();
       if (!_disposed) {
         state = state.copyWith(isSyncing: false);
-        await _restartIdle();
-        _drainPendingFolderSync();
+        if (!_handOffIfSwitched(accountId)) {
+          await _restartIdle();
+          _drainPendingFolderSync();
+        }
       }
     }
   }
@@ -369,9 +414,10 @@ class SyncController extends Notifier<SyncState> {
           _fireAndForget(syncCurrentFolder());
           return;
         }
-        state = state.copyWith(lastError: result.failure);
+        _reportFailure(accountId, result.failure);
         return;
       }
+      if (!_isCurrent(accountId)) return;
       ref.read(pageLimitProvider.notifier).grow();
       state = state.copyWith(hasMore: (result as Ok<int>).value > 0);
     } finally {
@@ -464,12 +510,11 @@ class SyncController extends Notifier<SyncState> {
       if (result is Ok<List<MailboxRow>>) {
         _lastFolderSync = DateTime.now();
       } else if (result is Err<List<MailboxRow>>) {
-        state = state.copyWith(lastError: result.failure);
+        _reportFailure(accountId, result.failure);
       }
-    } on Object catch (error) {
-      state = state.copyWith(
-        lastError: StorageFailure(detail: error.toString()),
-      );
+    } on Object catch (_) {
+      // Beklenmeyen/geçici hata (ör. kilitli veritabanı): yerel veri
+      // korunur, bir sonraki yoklamada yeniden denenir.
     } finally {
       _foldersSyncing = false;
       _markQuiet();

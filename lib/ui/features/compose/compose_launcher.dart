@@ -22,7 +22,6 @@ import 'send_feedback.dart';
 ///   yanındaki "Sil" eylemiyle taslağı silebilir.
 /// - İleti gönderildiyse önce "Geri Al" seçeneğiyle "gönderiliyor", sonra
 ///   gerçek sonuca göre "gönderildi" ya da "gönderilemedi" (bkz. [SendFeedback]).
-/// - İleti zamanlandıysa "İleti zamanlandı: [Zaman]" ve "Geri Al" düğmesi çıkar.
 /// - Boş bırakılan iletide bildirim çıkmaz.
 ///
 /// [noticeBottomInset], çağıran ekranın altında bildirimin kapatmaması

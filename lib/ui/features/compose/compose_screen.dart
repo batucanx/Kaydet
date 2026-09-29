@@ -30,7 +30,7 @@ import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
 import '../../core/navigation/kaydet_route.dart';
-import '../settings/signatures_settings_screen.dart';
+import '../settings/new_signature_sheet.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
@@ -1380,6 +1380,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                   setState(() => _showFormatBar = !_showFormatBar),
               onSignatureSelected: (signature) =>
                   _insertSignature(signature.body),
+              // Yeni imza, bu iletinin "Gönderen" hesabına eklenir; liste o
+              // hesabın canlı akışından geldiği için hemen menüde görünür.
+              onNewSignature: () {
+                final accountId = _fromAccountId;
+                if (accountId == null) return;
+                showNewSignatureSheet(context, ref, accountId: accountId);
+              },
               onOpenTemplates: _showQuickTemplates,
             ),
           ],
@@ -1469,9 +1476,10 @@ class _RecipientField extends StatelessWidget {
             width: 52,
             child: Text(
               label,
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: t.textTertiary,
+                fontSize: 12 * AppText.scale,
+              ),
             ),
           ),
           Expanded(
@@ -1481,6 +1489,7 @@ class _RecipientField extends StatelessWidget {
               keyboardType: TextInputType.text,
               textCapitalization: TextCapitalization.sentences,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                fontSize: 14.5 * AppText.scale,
                 fontWeight: FontWeight.w600,
                 fontVariations: AppText.semibold,
               ),
@@ -1688,23 +1697,150 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
   }
 
   void _onFocusChange() {
-    if (widget.focusNode.hasFocus) return;
-    _commitFragment();
-    if (_expandedAll && mounted) setState(() => _expandedAll = false);
+    if (!widget.focusNode.hasFocus) _commitFragment();
   }
 
-  /// Odak dışındayken en fazla bu kadar çip görünür; kalanı "+N" olur.
-  static const _collapsedVisible = 2;
+  /// Yazma alanının en az istediği genişlik; yerleşim planı da bunu kullanır.
+  static const double _inputMinWidth = 96;
 
-  /// "+N"e dokunulunca alan, odağını kaybedene kadar tüm çipleri gösterir.
-  bool _expandedAll = false;
-
-  /// Alanı etkinleştirir; daraltılmışsa önce açılır, sonra odak verilir.
-  void _activate(FocusNode node) {
-    if (!_expandedAll) setState(() => _expandedAll = true);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) node.requestFocus();
-    });
+  /// "+N"e dokunulunca tüm alıcıları listeler; buradan tek tek silinebilir.
+  /// Kapatılınca alan yine en fazla iki satırlık kompakt görünüme döner.
+  Future<void> _showAllRecipients() {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      sheetAnimationStyle: AnimationStyle(
+        duration: context.motion(Motion.base),
+        reverseDuration: context.motion(Motion.fast),
+        curve: Motion.standard,
+      ),
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final t = context.tokens;
+          final textTheme = Theme.of(context).textTheme;
+          if (_chips.isEmpty) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (context.mounted) Navigator.of(context).maybePop();
+            });
+          }
+          return SafeArea(
+            top: false,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.75,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      Space.lg,
+                      Space.sm,
+                      Space.xs,
+                      Space.xs,
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.label == 'Kime'
+                                ? 'Alıcılar'
+                                : '${widget.label} alıcıları',
+                            style: AppText.titleLarge.copyWith(
+                              color: t.textPrimary,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(LucideIcons.x),
+                          tooltip: 'Kapat',
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      padding: const EdgeInsets.only(bottom: Space.lg),
+                      children: [
+                        for (final chip in List.of(_chips))
+                          InkWell(
+                            onTap: () => _showDetails(chip),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Space.lg,
+                                vertical: Space.xs,
+                              ),
+                              child: Row(
+                                children: [
+                                  BrandAvatar(
+                                    name: chip.name,
+                                    email: chip.email,
+                                    size: 28,
+                                  ),
+                                  const SizedBox(width: Space.md),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        if (chip.display != chip.email)
+                                          Text(
+                                            chip.display,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: textTheme.bodyMedium
+                                                ?.copyWith(
+                                                  color: t.textPrimary,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                          ),
+                                        Text(
+                                          chip.email,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style:
+                                              (chip.display != chip.email
+                                                      ? textTheme.bodySmall
+                                                      : textTheme.bodyMedium)
+                                                  ?.copyWith(
+                                                    color: chip.isValid
+                                                        ? t.textSecondary
+                                                        : t.danger,
+                                                  ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  IconButton(
+                                    icon: Icon(
+                                      LucideIcons.x,
+                                      size: IconSize.sm,
+                                      color: t.textTertiary,
+                                    ),
+                                    tooltip: 'Alıcıyı kaldır',
+                                    onPressed: () {
+                                      _removeChip(chip);
+                                      setSheetState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   /// Boş alanda geri tuşu son çipi siler. `TextField` bu tuşu boş metinde
@@ -1811,7 +1947,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
             _fieldWidth = constraints.maxWidth;
             return GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () => _activate(focusNode),
+              onTap: focusNode.requestFocus,
               child: Container(
                 constraints: const BoxConstraints(minHeight: 48),
                 decoration: BoxDecoration(
@@ -1828,40 +1964,53 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                         alignment: Alignment.centerLeft,
                         child: Text(
                           widget.label,
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(color: t.textTertiary),
+                          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: t.textTertiary,
+                            fontSize: 12 * AppText.scale,
+                          ),
                         ),
                       ),
                     ),
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: Space.sm),
-                        // Çipler sığmayan satırda alt satıra atlamak yerine,
-                        // yeterli yer kalıyorsa kısaltılıp yan yana konur
-                        // (bkz. `RecipientChipLayout`).
+                        // Alan en fazla iki satırdır: sığmayan çipler "+N" olur
+                        // (bkz. `RecipientChipPlanner`). Sığmayan çip, satırda
+                        // yeterli yer kalıyorsa alt satıra atlamak yerine
+                        // kısaltılıp yan yana konur.
                         child: LayoutBuilder(
                           builder: (context, box) {
-                            final collapsed =
-                                !focusNode.hasFocus &&
-                                !_expandedAll &&
-                                _chips.length > _collapsedVisible;
-                            final shown = collapsed
-                                ? _chips.take(_collapsedVisible).toList()
-                                : _chips;
-                            final maxWidths = RecipientChipLayout.maxWidths(
+                            final plan = RecipientChipPlanner.plan(
                               naturalWidths: [
-                                for (final chip in shown)
+                                for (final chip in _chips)
                                   _RecipientChip.naturalWidth(context, chip),
                               ],
                               available: box.maxWidth,
                               spacing: Space.xs,
                               minShrunkWidth: _RecipientChip.minShrunkWidth,
+                              plusWidth: (hidden) =>
+                                  _RecipientOverflowChip.width(context, hidden),
+                              inputMinWidth: _inputMinWidth,
                             );
+                            // Gizlenenler EN ESKİ alıcılardır; son eklenen hep
+                            // görünür kalır.
+                            final hiddenChips = _chips
+                                .take(plan.hidden)
+                                .toList();
+                            final shown = _chips.skip(plan.hidden).toList();
                             return Wrap(
                               spacing: Space.xs,
                               runSpacing: Space.xs,
                               crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
+                                if (hiddenChips.isNotEmpty)
+                                  _RecipientOverflowChip(
+                                    hidden: hiddenChips.length,
+                                    hasInvalid: hiddenChips.any(
+                                      (a) => !a.isValid,
+                                    ),
+                                    onTap: _showAllRecipients,
+                                  ),
                                 // Çip döngüde yakalanır: geri çağrılar dokunma
                                 // anında `_chips[i]`ye değil, çizildiği andaki
                                 // çipe bağlı kalır (aynı karede silinse bile
@@ -1869,38 +2018,14 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                                 for (final (i, chip) in shown.indexed)
                                   _RecipientChip(
                                     address: chip,
-                                    maxWidth: maxWidths[i],
+                                    maxWidth: plan.maxWidths[i],
                                     onTap: () => _showDetails(chip),
                                     onRemove: () => _removeChip(chip),
                                   ),
-                                if (collapsed)
-                                  InkWell(
-                                    onTap: () => _activate(focusNode),
-                                    borderRadius: BorderRadius.circular(
-                                      Radii.sm,
-                                    ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: Space.sm,
-                                        vertical: Space.xs,
-                                      ),
-                                      child: Text(
-                                        '+${_chips.length - _collapsedVisible}',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelMedium
-                                            ?.copyWith(
-                                              color: t.accent,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                    ),
-                                  )
-                                else
                                 IntrinsicWidth(
                                   child: ConstrainedBox(
                                     constraints: const BoxConstraints(
-                                      minWidth: 120,
+                                      minWidth: _inputMinWidth,
                                     ),
                                     child: TextField(
                                       controller: controller,
@@ -1910,9 +2035,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                                       textInputAction: TextInputAction.next,
                                       onChanged: _onInputChanged,
                                       onEditingComplete: _onEditingComplete,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium,
+                                      style: _RecipientChip._textStyle(context),
                                       decoration: _RecipientField
                                           ._fieldDecoration
                                           .copyWith(
@@ -1974,6 +2097,73 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
   }
 }
 
+/// Sığmayan alıcıların yerine geçen "+N" çipi: alıcı çipiyle aynı kabuk
+/// (zemin, yarıçap), ama avatarsız ve vurgulu metinle — bir alıcı değil,
+/// "hepsini göster" kontrolü olduğu anlaşılır. Gizlenenler arasında geçersiz
+/// adres varsa alıcı çipiyle aynı kırmızı çerçeve çıkar.
+class _RecipientOverflowChip extends StatelessWidget {
+  const _RecipientOverflowChip({
+    required this.hidden,
+    required this.hasInvalid,
+    required this.onTap,
+  });
+
+  final int hidden;
+  final bool hasInvalid;
+  final VoidCallback onTap;
+
+  static const double _padding = Space.sm;
+
+  static TextStyle? _style(BuildContext context) => Theme.of(
+    context,
+  ).textTheme.labelMedium?.copyWith(fontWeight: FontWeight.w600);
+
+  /// "+N"in gerçek genişliği (yerleşim planı için).
+  static double width(BuildContext context, int hidden) {
+    final painter = TextPainter(
+      text: TextSpan(text: '+$hidden', style: _style(context)),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: 1,
+    )..layout();
+    final w = painter.width;
+    painter.dispose();
+    return (w + _padding * 2).ceilToDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Semantics(
+      button: true,
+      label: '$hidden alıcı daha, tümünü göster',
+      excludeSemantics: true,
+      onTap: onTap,
+      child: Material(
+        color: t.isDark ? t.surfaceElevated : t.surfaceDeep,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(Radii.sm),
+          side: hasInvalid ? BorderSide(color: t.danger) : BorderSide.none,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: _padding,
+              vertical: Space.xs + 2,
+            ),
+            child: Text(
+              '+$hidden',
+              style: _style(context)?.copyWith(color: t.accent),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Tamamlanmış alıcı: küçük avatar + görünen ad. Geçersiz adres kırmızı
 /// çerçeveyle işaretlenir (gönderimde zaten reddedilir).
 ///
@@ -2016,8 +2206,9 @@ class _RecipientChip extends StatelessWidget {
       (_removeIconSize + Space.xs * 2) +
       Space.xs;
 
-  static TextStyle? _textStyle(BuildContext context) =>
-      Theme.of(context).textTheme.bodyMedium;
+  static TextStyle? _textStyle(BuildContext context) => Theme.of(
+    context,
+  ).textTheme.bodyMedium?.copyWith(fontSize: 14.5 * AppText.scale);
 
   /// Çipin kısaltılmadan istediği genişlik: adın gerçek ölçüsü + [_chrome].
   static double naturalWidth(BuildContext context, EmailAddress address) {
@@ -2565,11 +2756,15 @@ class _SignatureMenuButton extends StatelessWidget {
   const _SignatureMenuButton({
     required this.signatures,
     required this.onSelected,
+    required this.onNew,
     this.color,
   });
 
   final List<SignatureRow> signatures;
   final ValueChanged<SignatureRow> onSelected;
+
+  /// "+ Yeni imza": doğrudan imza oluşturma penceresini açar.
+  final VoidCallback onNew;
   final Color? color;
 
   static const double _menuWidth = 264;
@@ -2654,8 +2849,7 @@ class _SignatureMenuButton extends StatelessWidget {
         // güncellenir.
         MenuItemButton(
           leadingIcon: const Icon(LucideIcons.plus),
-          onPressed: () =>
-              context.pushScreen<void>(const SignaturesSettingsScreen()),
+          onPressed: onNew,
           child: const Text('Yeni imza'),
         ),
       ],
@@ -3135,6 +3329,7 @@ class _ComposeToolbar extends StatelessWidget {
     required this.onToggleLabel,
     required this.onToggleFormat,
     required this.onSignatureSelected,
+    required this.onNewSignature,
     required this.onOpenTemplates,
   });
 
@@ -3148,6 +3343,7 @@ class _ComposeToolbar extends StatelessWidget {
   final ValueChanged<String> onToggleLabel;
   final VoidCallback onToggleFormat;
   final ValueChanged<SignatureRow> onSignatureSelected;
+  final VoidCallback onNewSignature;
   final VoidCallback onOpenTemplates;
 
   @override
@@ -3199,6 +3395,7 @@ class _ComposeToolbar extends StatelessWidget {
                         onToggleLabel: onToggleLabel,
                         onToggleFormat: onToggleFormat,
                         onSignatureSelected: onSignatureSelected,
+                        onNewSignature: onNewSignature,
                         onOpenTemplates: onOpenTemplates,
                       ),
               ),
@@ -3221,6 +3418,7 @@ class _MainToolbarRow extends StatelessWidget {
     required this.onToggleLabel,
     required this.onToggleFormat,
     required this.onSignatureSelected,
+    required this.onNewSignature,
     required this.onOpenTemplates,
   });
 
@@ -3232,6 +3430,7 @@ class _MainToolbarRow extends StatelessWidget {
   final ValueChanged<String> onToggleLabel;
   final VoidCallback onToggleFormat;
   final ValueChanged<SignatureRow> onSignatureSelected;
+  final VoidCallback onNewSignature;
   final VoidCallback onOpenTemplates;
 
   @override
@@ -3268,6 +3467,7 @@ class _MainToolbarRow extends StatelessWidget {
         _SignatureMenuButton(
           signatures: signatures,
           onSelected: onSignatureSelected,
+          onNew: onNewSignature,
           color: t.textSecondary,
         ),
         IconButton(

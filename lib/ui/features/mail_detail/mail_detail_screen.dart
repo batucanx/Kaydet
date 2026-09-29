@@ -506,19 +506,129 @@ class _Header extends StatelessWidget {
           ],
         ),
         if (to.isNotEmpty || cc.isNotEmpty) ...[
-          const SizedBox(height: Space.md),
-          _RecipientLine(
-            label: 'Kime',
-            addresses: to,
-            accountId: message.accountId,
-          ),
-          if (cc.isNotEmpty)
-            _RecipientLine(
-              label: 'Bilgi',
-              addresses: cc,
-              accountId: message.accountId,
-            ),
+          const SizedBox(height: Space.sm),
+          _RecipientsBlock(to: to, cc: cc, accountId: message.accountId),
         ],
+      ],
+    );
+  }
+}
+
+/// Alıcı ayrıntıları varsayılan olarak KAPALIDIR: tek satırlık özet ("Alıcı:
+/// Ali, Veli ve 3 kişi daha ⌄"). Dokununca Kime/Bilgi bölümleri yumuşakça
+/// açılır, tekrar dokununca kapanır — başlık, çok alıcılı iletilerde bile
+/// içeriği aşağı itmez. Durum yalnızca bu ekranın ömrünce tutulur.
+class _RecipientsBlock extends StatefulWidget {
+  const _RecipientsBlock({
+    required this.to,
+    required this.cc,
+    required this.accountId,
+  });
+
+  final List<EmailAddress> to;
+  final List<EmailAddress> cc;
+  final int? accountId;
+
+  @override
+  State<_RecipientsBlock> createState() => _RecipientsBlockState();
+}
+
+class _RecipientsBlockState extends State<_RecipientsBlock> {
+  static const int _summaryNames = 2;
+
+  bool _expanded = false;
+
+  /// "Ali, Veli ve 3 kişi daha" — Kime + Bilgi, tekrarsız.
+  String get _summary {
+    final seen = <String>{};
+    final all = [
+      for (final a in [...widget.to, ...widget.cc])
+        if (seen.add(a.email.trim().toLowerCase())) a,
+    ];
+    final names = all.take(_summaryNames).map((a) => a.display).join(', ');
+    final rest = all.length - _summaryNames;
+    return rest > 0 ? '$names ve $rest kişi daha' : names;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final textTheme = Theme.of(context).textTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          button: true,
+          expanded: _expanded,
+          label: _expanded ? 'Alıcı ayrıntılarını gizle' : 'Alıcı ayrıntılarını göster',
+          excludeSemantics: true,
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 36),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(
+                            text: 'Alıcı: ',
+                            style: TextStyle(color: t.textTertiary),
+                          ),
+                          TextSpan(text: _summary),
+                        ],
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: t.textSecondary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: Space.sm),
+                  AnimatedRotation(
+                    turns: _expanded ? 0.5 : 0,
+                    duration: context.motion(Motion.fast),
+                    curve: Motion.standard,
+                    child: Icon(
+                      LucideIcons.chevronDown,
+                      size: IconSize.sm,
+                      color: t.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        AnimatedSize(
+          duration: context.motion(Motion.base),
+          curve: Motion.standard,
+          alignment: Alignment.topCenter,
+          child: _expanded
+              ? Padding(
+                  padding: const EdgeInsets.only(top: Space.xs),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _RecipientLine(
+                        label: 'Kime',
+                        addresses: widget.to,
+                        accountId: widget.accountId,
+                      ),
+                      if (widget.cc.isNotEmpty)
+                        _RecipientLine(
+                          label: 'Bilgi',
+                          addresses: widget.cc,
+                          accountId: widget.accountId,
+                        ),
+                    ],
+                  ),
+                )
+              : const SizedBox(width: double.infinity),
+        ),
       ],
     );
   }
@@ -689,6 +799,7 @@ class _RecipientLine extends StatelessWidget {
                         _RecipientInfoChip(
                           address: address,
                           accountId: accountId,
+                          minHeight: 60,
                         ),
                     ],
                   ),
@@ -708,7 +819,15 @@ class _RecipientLine extends StatelessWidget {
 /// kaldırma düğmesi taşımaz — burada alıcı listesi düzenlenmez. Arka plan,
 /// kenarlık ya da gölge yok; yalnızca basılı durumda çok hafif bir iz.
 class _RecipientInfoChip extends StatelessWidget {
-  const _RecipientInfoChip({required this.address, required this.accountId});
+  const _RecipientInfoChip({
+    required this.address,
+    required this.accountId,
+    this.minHeight,
+  });
+
+  /// Satır en az bu kadar yüksek olur; alt sayfadaki uzun listelerde satırların
+  /// birbirine yapışmaması için [rowHeight]tan büyük verilir.
+  final double? minHeight;
 
   final EmailAddress address;
   final int? accountId;
@@ -716,7 +835,7 @@ class _RecipientInfoChip extends StatelessWidget {
   static const double avatarSize = 28;
 
   /// Tek alıcı satırının yüksekliği (etiketin hizalanması için de kullanılır).
-  static const double rowHeight = 36;
+  static const double rowHeight = 40;
 
   @override
   Widget build(BuildContext context) {
@@ -734,7 +853,7 @@ class _RecipientInfoChip extends StatelessWidget {
       splashColor: t.textTertiary.withValues(alpha: 0.10),
       highlightColor: t.textTertiary.withValues(alpha: 0.06),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: rowHeight),
+        constraints: BoxConstraints(minHeight: minHeight ?? rowHeight),
         child: Row(
           children: [
             BrandAvatar(
