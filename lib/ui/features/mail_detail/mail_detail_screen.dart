@@ -480,8 +480,8 @@ class _Header extends StatelessWidget {
                           padding: const EdgeInsets.only(left: Space.sm),
                           child: Icon(
                             LucideIcons.pin,
-                            size: IconSize.sm,
-                            color: t.accent,
+                            size: 14,
+                            color: t.pinIcon,
                           ),
                         ),
                     ],
@@ -535,10 +535,17 @@ class _RecipientLine extends StatelessWidget {
   final List<EmailAddress> addresses;
   final int? accountId;
 
+  /// Başlıkta en fazla bu kadar alıcı satırı görünür; kalanı "+N kişi" ile
+  /// alt sayfaya taşınır (başlık onlarca satır uzamasın).
+  static const int maxVisible = 2;
+
   @override
   Widget build(BuildContext context) {
-    if (addresses.isEmpty) return const SizedBox.shrink();
+    final unique = _dedupe(addresses);
+    if (unique.isEmpty) return const SizedBox.shrink();
     final t = context.tokens;
+    final visible = unique.take(maxVisible).toList();
+    final hidden = unique.length - visible.length;
     return Padding(
       padding: const EdgeInsets.only(top: Space.xs),
       child: Row(
@@ -546,8 +553,10 @@ class _RecipientLine extends StatelessWidget {
         children: [
           SizedBox(
             width: 44,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 6),
+            // Etiket ilk alıcı satırıyla (avatar boyunda) dikey ortalanır.
+            height: _RecipientInfoChip.rowHeight,
+            child: Align(
+              alignment: Alignment.centerLeft,
               child: Text(
                 label,
                 style: Theme.of(
@@ -557,12 +566,43 @@ class _RecipientLine extends StatelessWidget {
             ),
           ),
           Expanded(
-            child: Wrap(
-              spacing: Space.xs,
-              runSpacing: Space.xs,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                for (final address in addresses)
+                for (final address in visible)
                   _RecipientInfoChip(address: address, accountId: accountId),
+                if (hidden > 0)
+                  InkWell(
+                    onTap: () => _showAllRecipients(context, unique),
+                    splashColor: t.textTertiary.withValues(alpha: 0.10),
+                    highlightColor: t.textTertiary.withValues(alpha: 0.06),
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        left: _RecipientInfoChip.avatarSize + Space.sm,
+                        top: Space.xs,
+                        bottom: Space.xs,
+                      ),
+                      child: Row(
+                        children: [
+                          Text(
+                            '+$hidden kişi',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: t.accent,
+                                  fontWeight: FontWeight.w600,
+                                  fontVariations: AppText.semibold,
+                                ),
+                          ),
+                          const Spacer(),
+                          Icon(
+                            LucideIcons.chevronRight,
+                            size: IconSize.sm,
+                            color: t.textTertiary,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -570,43 +610,172 @@ class _RecipientLine extends StatelessWidget {
       ),
     );
   }
+
+  /// Aynı adresi (büyük/küçük harf farkı yok sayılarak) yalnızca bir kez tutar;
+  /// ad taşıyan kayıt, adsız olanın yerine geçer.
+  static List<EmailAddress> _dedupe(List<EmailAddress> list) {
+    final byEmail = <String, EmailAddress>{};
+    for (final a in list) {
+      final key = a.email.trim().toLowerCase();
+      if (key.isEmpty) continue;
+      final existing = byEmail[key];
+      if (existing == null ||
+          ((existing.name?.trim().isEmpty ?? true) &&
+              (a.name?.trim().isNotEmpty ?? false))) {
+        byEmail[key] = a;
+      }
+    }
+    return byEmail.values.toList();
+  }
+
+  void _showAllRecipients(BuildContext context, List<EmailAddress> all) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      sheetAnimationStyle: AnimationStyle(
+        duration: context.motion(Motion.base),
+        reverseDuration: context.motion(Motion.fast),
+        curve: Motion.standard,
+      ),
+      builder: (sheetContext) {
+        final t = sheetContext.tokens;
+        return SafeArea(
+          top: false,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.75,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    Space.lg,
+                    Space.sm,
+                    Space.xs,
+                    Space.xs,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          label == 'Bilgi' ? 'Bilgi alıcıları' : 'Alıcılar',
+                          style: AppText.titleLarge.copyWith(
+                            color: t.textPrimary,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(LucideIcons.x),
+                        tooltip: 'Kapat',
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.fromLTRB(
+                      Space.lg,
+                      0,
+                      Space.lg,
+                      Space.lg,
+                    ),
+                    children: [
+                      for (final address in all)
+                        _RecipientInfoChip(
+                          address: address,
+                          accountId: accountId,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
-/// Salt-okunur alıcı çipi: dokunulunca [showRecipientDetails] ile aynı
-/// ayrıntı sayfasını açar (yazma ekranındaki alıcı çipiyle tutarlı davranış),
-/// ama kaldırma düğmesi taşımaz — burada alıcı listesi düzenlenmez.
+/// Salt-okunur, kutusuz kompakt alıcı satırı: küçük avatar + ad (varsa) /
+/// e-posta + minimal ok. Dokunulunca [showRecipientDetails] ile aynı ayrıntı
+/// sayfasını açar (yazma ekranındaki alıcı çipiyle tutarlı davranış), ama
+/// kaldırma düğmesi taşımaz — burada alıcı listesi düzenlenmez. Arka plan,
+/// kenarlık ya da gölge yok; yalnızca basılı durumda çok hafif bir iz.
 class _RecipientInfoChip extends StatelessWidget {
   const _RecipientInfoChip({required this.address, required this.accountId});
 
   final EmailAddress address;
   final int? accountId;
 
+  static const double avatarSize = 28;
+
+  /// Tek alıcı satırının yüksekliği (etiketin hizalanması için de kullanılır).
+  static const double rowHeight = 36;
+
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return Material(
-      color: t.isDark ? t.surfaceElevated : t.surfaceDeep,
-      borderRadius: BorderRadius.circular(Radii.sm),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => showRecipientDetails(
-          context,
-          address: address,
-          accountId: accountId,
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Space.sm,
-            vertical: 5,
-          ),
-          child: Text(
-            address.display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(
-              context,
-            ).textTheme.labelMedium?.copyWith(color: t.textSecondary),
-          ),
+    final textTheme = Theme.of(context).textTheme;
+    final name = address.name?.trim() ?? '';
+    final hasName = name.isNotEmpty;
+
+    return InkWell(
+      onTap: () => showRecipientDetails(
+        context,
+        address: address,
+        accountId: accountId,
+      ),
+      splashColor: t.textTertiary.withValues(alpha: 0.10),
+      highlightColor: t.textTertiary.withValues(alpha: 0.06),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: rowHeight),
+        child: Row(
+          children: [
+            BrandAvatar(
+              name: hasName ? name : address.email,
+              email: address.email,
+              size: avatarSize,
+            ),
+            const SizedBox(width: Space.sm),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (hasName)
+                    Text(
+                      name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: t.textPrimary,
+                        fontWeight: FontWeight.w600,
+                        fontVariations: AppText.semibold,
+                      ),
+                    ),
+                  Text(
+                    address.email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: (hasName ? textTheme.bodySmall : textTheme.bodyMedium)
+                        ?.copyWith(color: t.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: Space.xs),
+            Icon(
+              LucideIcons.chevronRight,
+              size: IconSize.sm,
+              color: t.textTertiary,
+            ),
+          ],
         ),
       ),
     );
@@ -1799,6 +1968,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 
     switch (uri.scheme.toLowerCase()) {
       case 'about':
+      case 'applewebdata':
         return NavigationDecision.navigate;
       case 'http':
       case 'https':

@@ -440,6 +440,26 @@ void main() {
       expect(api.detectSamples, isEmpty);
     });
 
+    test('iletilen ileti: Türkçe başlık satırları örneğe girmez', () async {
+      final id = await insertMessage(1);
+      await repo.detectLanguage(
+        messageId: id,
+        subject: 'FWD: Complete your Adobe account',
+        html:
+            '<div><b>Gönderen:</b> "Adobe" &lt;noreply@adobe.com&gt;<br>'
+            '<b>Gönderilmiş:</b> 29.09.2026 10:01<br><b>Alıcı:</b> a@b.com<br>'
+            '<b>Konu:</b> Complete your Adobe account</div>'
+            '<p>You recently created an Adobe account using a@b.com.</p>'
+            '<p>To get the most out of your Adobe products and services, '
+            'please take a moment to complete your account details.</p>',
+        plainText: null,
+      );
+      final sample = api.detectSamples.single;
+      expect(sample, startsWith('You recently created'));
+      expect(sample, isNot(contains('Gönderen')));
+      expect(sample, isNot(contains('Alıcı')));
+    });
+
     test('algılama örneği en çok 400 karakterdir', () async {
       final id = await insertMessage(1);
       await repo.detectLanguage(

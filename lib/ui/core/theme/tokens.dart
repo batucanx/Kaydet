@@ -216,6 +216,9 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
 
   bool get isDark => brightness == Brightness.dark;
 
+  /// "Sabitlenmiş" ikonu: açık temada belirgin siyah, koyu temada altın sarısı.
+  Color get pinIcon => isDark ? warning : const Color(0xFF000000);
+
   /// Açık tema.
   /// Outlook/Microsoft Mail'e yaklaşan kurumsal mavi-beyaz palet — kararlar
   /// için bkz. kullanıcı referans ekran görüntüleri (2026-09-27).

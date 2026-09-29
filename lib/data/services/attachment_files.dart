@@ -111,10 +111,6 @@ abstract final class AttachmentFiles {
     }
   }
 
-  static final RegExp _uuidRegex = RegExp(
-    r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
-  );
-  static final RegExp _hex32Regex = RegExp(r'^[0-9a-fA-F]{32}$');
   static final RegExp _digitsOnlyRegex = RegExp(r'^\d{8,18}$');
   static final RegExp _nestedPrefixRegex = RegExp(
     r'^(kaydet_pick_\d+_|kaydet_resized_\d+_)+',
@@ -172,15 +168,17 @@ abstract final class AttachmentFiles {
     }
 
     // 6. Generated / temporary isim kontrolü:
-    // - image_picker_...
-    // - Standart UUID (36 karakterli xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)
-    // - 32 karakterli hex UUID
-    // - Yalnızca rakamlardan oluşan MediaStore ID / timestamp (ör. 1000000033)
+    // - Yalnızca eklentilerin ürettiği geçici isimler (image_picker_...)
+    // - Dosya adı boş olanlar (.jpg gibi)
+    // - Uzantısız ham MediaStore ID'leri (1000000033 gibi)
+    // Kullanıcının dosya yöneticisinden veya galeriden seçtiği gerçek dosya
+    // adları (rakamlar, UUID veya özel isimler) ASLA değiştirilmez; sistemden
+    // nasıl geliyorsa öyle korunur.
     final isImagePicker = base.toLowerCase().startsWith('image_picker');
-    final isUuid = _uuidRegex.hasMatch(base) || _hex32Regex.hasMatch(base);
     final isDigitsOnly = _digitsOnlyRegex.hasMatch(base);
+    final isNamelessMediaId = ext.isEmpty && isDigitsOnly;
 
-    if (isImagePicker || isUuid || isDigitsOnly || base.isEmpty) {
+    if (isImagePicker || isNamelessMediaId || base.isEmpty) {
       final dt = _timestampForSource(sourcePath);
       final ts = _formatTimestamp(dt);
       final prefix = _prefixForExtension(ext);

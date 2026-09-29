@@ -18,6 +18,7 @@ import '../../core/widgets/kaydet_widgets.dart';
 import '../compose/compose_launcher.dart';
 import '../mail_detail/mail_detail_screen.dart';
 import '../search/search_screen.dart';
+import 'bounded_dismissible.dart';
 import 'mail_row.dart';
 
 /// Mail listesi — uygulamanın merkezi.
@@ -584,8 +585,7 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
       ),
     );
     final mailbox = ref.watch(currentMailboxProvider);
-    final scheduledSendTimes =
-        ref.watch(scheduledSendTimesProvider).value ?? const <int, DateTime>{};
+
 
     final ltr = Directionality.of(context) == TextDirection.ltr;
     final primaryDirection = ltr
@@ -635,7 +635,7 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
       armed: _armed,
     );
 
-    return Dismissible(
+    return BoundedDismissible(
       key: ValueKey('swipe-${message.id}'),
       direction: canPrimaryAction
           ? DismissDirection.horizontal
@@ -657,7 +657,6 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         labels: widget.labels,
         isSelected: isSelected,
         isSentFolder: widget.isSentFolder,
-        scheduledSendAt: scheduledSendTimes[message.id],
         onTap: widget.onTap,
         onAvatarTap: widget.onAvatarTap,
         onLongPress: widget.onLongPress,
@@ -757,23 +756,28 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (isCollapsible)
-            InkWell(
-              onTap: () =>
-                  ref.read(pinnedSectionExpandedProvider.notifier).toggle(),
-              child: SectionHeader(
-                'SABİTLENENLER (${pinned.length})',
-                trailing: AnimatedRotation(
-                  duration: context.motion(Motion.fast),
-                  turns: expanded ? 0.5 : 0,
-                  child: Icon(
-                    LucideIcons.chevronDown,
-                    size: IconSize.sm,
-                    color: t.textTertiary,
+          // Başlık, sabitli ileti sayısı ne olursa olsun (1 dahil) gösterilir
+          // — kullanıcı "Sabitlenenler" bölümünü her zaman net görebilmeli.
+          // Yalnızca eşiği aşan sayıda ileti varken daraltılabilir olur.
+          isCollapsible
+              ? InkWell(
+                  onTap: () => ref
+                      .read(pinnedSectionExpandedProvider.notifier)
+                      .toggle(),
+                  child: SectionHeader(
+                    'SABİTLENENLER (${pinned.length})',
+                    trailing: AnimatedRotation(
+                      duration: context.motion(Motion.fast),
+                      turns: expanded ? 0.5 : 0,
+                      child: Icon(
+                        LucideIcons.chevronDown,
+                        size: IconSize.sm,
+                        color: t.textTertiary,
+                      ),
+                    ),
                   ),
-                ),
-              ),
-            ),
+                )
+              : const SectionHeader('SABİTLENENLER'),
           AnimatedSize(
             duration: context.motion(Motion.base),
             curve: Motion.standard,

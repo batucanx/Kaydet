@@ -175,6 +175,18 @@ class _NoticeViewState extends State<_NoticeView>
     );
     final actionLabel = widget.actionLabel;
 
+    // Koyu temada normal yüzey rengiyle (surfaceElevated) bildirim, koyu
+    // zeminde neredeyse hiç ayrışmıyordu. Bunun yerine üst çubuktaki
+    // "Filtrele" rozetiyle aynı kurumsal vurgu paleti kullanılır: açık temada
+    // onun rengiyle BİREBİR aynı (accentStrong/onAccentFill), koyu temada ise
+    // kontrast bilinçli olarak TERSİNE çevrilir (açık zemin + koyu metin) ki
+    // bildirim koyu arka plandan net şekilde ayrışsın. `KaydetTokens.light`
+    // burada mevcut temadan BAĞIMSIZ, sabit bir "koyu mürekkep" rengi olarak
+    // kullanılır — yeni/ham bir renk eklenmiyor.
+    final isDark = t.brightness == Brightness.dark;
+    final noticeBg = isDark ? t.onAccentFill : t.accentStrong;
+    final noticeFg = isDark ? KaydetTokens.light.textPrimary : t.onAccentFill;
+
     return Positioned(
       left: Space.lg + viewPadding.left,
       right: Space.lg + viewPadding.right,
@@ -198,8 +210,8 @@ class _NoticeViewState extends State<_NoticeView>
                     if ((details.primaryVelocity ?? 0) > 200) dismiss();
                   },
                   child: Material(
-                    color: t.surfaceElevated,
-                    elevation: t.brightness == Brightness.dark ? 0 : 4,
+                    color: noticeBg,
+                    elevation: isDark ? 0 : 4,
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(Radii.md),
                     ),
@@ -220,7 +232,7 @@ class _NoticeViewState extends State<_NoticeView>
                               child: Text(
                                 widget.message,
                                 style: AppText.bodyMedium.copyWith(
-                                  color: t.textPrimary,
+                                  color: noticeFg,
                                 ),
                               ),
                             ),
@@ -231,9 +243,23 @@ class _NoticeViewState extends State<_NoticeView>
                                   dismiss();
                                 },
                                 style: TextButton.styleFrom(
-                                  foregroundColor: widget.destructiveAction
-                                      ? t.danger
-                                      : t.accent,
+                                  // `dangerFill`/`accent` yerine: bu ikisi
+                                  // koyu temada normal zemin için ayarlanmış
+                                  // AÇIK tonlardır, yeni (tersine çevrilmiş)
+                                  // bildirim zemininde okunmaz hâle gelirdi.
+                                  //
+                                  // Açık temada zemin koyu mavidir; kırmızı
+                                  // `dangerFill` onda ~1,3:1 kontrastla
+                                  // okunmuyordu — orada metin rengi kalır,
+                                  // vurgu kalınlıktan gelir. Koyu temada zemin
+                                  // açıktır ve `dangerFill` orada okunur.
+                                  foregroundColor:
+                                      widget.destructiveAction && isDark
+                                      ? t.dangerFill
+                                      : noticeFg,
+                                  textStyle: AppText.bodyMedium.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                                 child: Text(actionLabel),
                               ),

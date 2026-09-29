@@ -270,7 +270,7 @@ class _DownloadingView extends StatelessWidget {
           CircularProgressIndicator(color: t.accent),
           const SizedBox(height: Space.lg),
           Text(
-            'İndiriliyor…',
+            'Yükleniyor…',
             style: Theme.of(
               context,
             ).textTheme.bodyMedium?.copyWith(color: t.textSecondary),
@@ -623,6 +623,20 @@ class _AudioPreviewState extends State<_AudioPreview> {
     _durationSub = _player.onDurationChanged.listen((duration) {
       if (mounted) setState(() => _duration = duration);
     });
+    unawaited(
+      _player.setAudioContext(
+        AudioContext(
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: const {AVAudioSessionOptions.defaultToSpeaker},
+          ),
+          android: const AudioContextAndroid(
+            contentType: AndroidContentType.music,
+            usageType: AndroidUsageType.media,
+          ),
+        ),
+      ),
+    );
     unawaited(_player.setSourceDeviceFile(widget.path).catchError((_) {}));
   }
 

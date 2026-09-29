@@ -20,6 +20,11 @@ class FlutterSecureStore implements SecureStore {
             const FlutterSecureStorage(
               // Varsayılan: Android Keystore destekli AES-GCM şifreleme.
               aOptions: AndroidOptions(resetOnError: true),
+              // iOS: Cihaz kilitliyken gelen APNs push ve arka plan senkronu
+              // (bkz. pushBackgroundSync / runBackgroundSync) şifreleri okuyabilsin.
+              iOptions: IOSOptions(
+                accessibility: KeychainAccessibility.first_unlock,
+              ),
             );
 
   final FlutterSecureStorage _storage;

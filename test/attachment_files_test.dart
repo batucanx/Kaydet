@@ -255,14 +255,15 @@ void main() {
       expect(cleaned, isNot(contains('image_picker')));
     });
 
-    test('yalın UUID dosya adlarını uzantısına göre temiz ada çevirir', () {
+    test('kullanıcının UUID veya rakamlardan oluşan dosya adlarını aynen korur', () {
       final img = AttachmentFiles.cleanPickedName('8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.png');
-      expect(img, startsWith('IMG_'));
-      expect(img, endsWith('.png'));
+      expect(img, '8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.png');
 
       final doc = AttachmentFiles.cleanPickedName('8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.pdf');
-      expect(doc, startsWith('Belge_'));
-      expect(doc, endsWith('.pdf'));
+      expect(doc, '8ACDFDA1-8E9D-4FAD-9E9C-1234567890AB.pdf');
+
+      final dateDoc = AttachmentFiles.cleanPickedName('20260929.pdf');
+      expect(dateDoc, '20260929.pdf');
     });
 
     test('uzantısı olmayan adın uzantısını kaynak yoldan tamamlar', () {

@@ -15,7 +15,6 @@ import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
 import 'package:kaydet/ui/features/compose/compose_screen.dart';
 import 'package:kaydet/ui/features/compose/quick_templates_sheet.dart';
-import 'package:kaydet/ui/features/compose/schedule_send_sheet.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers/fake_services.dart';
@@ -142,43 +141,6 @@ void main() {
       expect(find.byType(QuickTemplatesSheet), findsNothing);
     });
 
-    appTest('İleri Tarihte Gönder butonu Kime boşken deaktif, doluyken aktiftir ve Bir zaman seçin diyaloğu çalışır', (tester) async {
-      await pumpCompose(tester);
-
-      // Kime boşken ikon deaktif
-      expect(find.byTooltip('İleri tarihte göndermek için önce alıcı girin'), findsOneWidget);
-
-      // Kime alanına sadece metin yazıldığında (henüz çip oluşmadığında) deaktif kalır
-      await tester.enterText(find.byType(TextField).first, 'test');
-      await tester.pumpAndSettle();
-      expect(find.byTooltip('İleri tarihte göndermek için önce alıcı girin'), findsOneWidget);
-
-      // Çip oluştuğunda (virgül, boşluk veya onay ile) aktifleşir
-      await tester.enterText(find.byType(TextField).first, 'test@example.com,');
-      await tester.pumpAndSettle();
-
-      expect(find.byTooltip('İleri tarihte gönder'), findsOneWidget);
-      await tester.tap(find.byTooltip('İleri tarihte gönder'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(ScheduleSendSheet), findsOneWidget);
-      expect(find.text('İleri Tarihli Gönderim'), findsOneWidget);
-      expect(find.text('Tarih ve Saat Seç…'), findsOneWidget);
-
-      // "Tarih ve Saat Seç…" tıklandığında "Bir zaman seçin" diyaloğu açılır
-      await tester.tap(find.text('Tarih ve Saat Seç…'));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(ScheduleCustomTimeDialog), findsOneWidget);
-      expect(find.text('Bir zaman seçin'), findsOneWidget);
-      expect(find.text('Zamanla'), findsOneWidget);
-
-      // "Zamanla" butonuna basınca gönderim kuyruğa alınır
-      await tester.tap(find.text('Zamanla'));
-      await tester.pumpAndSettle();
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.pumpAndSettle();
-    });
 
     appTest('Metinde "ekledim" geçip ek dosya yoksa Gönder butonuna basılınca uyarı diyalogu çıkar', (tester) async {
       await pumpCompose(tester);

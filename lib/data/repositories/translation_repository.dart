@@ -116,8 +116,12 @@ class TranslationRepository {
     } else {
       segments = const [];
     }
+    // Kısa satırlar (iletilen iletilerin "Gönderen:/Konu:" başlıkları, imza,
+    // menü, buton metinleri) genelde iletinin asıl dilinde değildir; algılama
+    // örneği gerçek cümlelerden alınır. Hiç uzun metin yoksa hepsi kullanılır.
+    final sentences = segments.where((s) => s.length >= 30).toList();
     final buffer = StringBuffer();
-    for (final s in segments) {
+    for (final s in sentences.isNotEmpty ? sentences : segments) {
       if (buffer.length >= detectSampleChars) break;
       buffer
         ..write(s)

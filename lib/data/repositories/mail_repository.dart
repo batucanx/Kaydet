@@ -795,7 +795,6 @@ class MailRepository {
   ///
   /// [undoDelay] verilirse (varsayılan 5 sn), ileti bu süre boyunca geri alma
   /// penceresinde bekletilir; süresi dolmadan sunucuya gönderilmez.
-  /// [scheduledAt] verilirse, ileti belirtilen ileri tarihe kadar bekletilir.
   Future<int> queueSend({
     required int accountId,
     int? draftId,
@@ -812,7 +811,6 @@ class MailRepository {
     bool markSourceAnswered = false,
     bool markSourceForwarded = false,
     Duration? undoDelay = const Duration(seconds: 5),
-    DateTime? scheduledAt,
   }) async {
     final id = await saveDraft(
       accountId: accountId,
@@ -831,9 +829,7 @@ class MailRepository {
     if (id < 0) return id;
 
     final DateTime? effectiveNextAttempt;
-    if (scheduledAt != null) {
-      effectiveNextAttempt = scheduledAt.toUtc();
-    } else if (undoDelay != null && undoDelay > Duration.zero) {
+    if (undoDelay != null && undoDelay > Duration.zero) {
       effectiveNextAttempt = DateTime.now().toUtc().add(undoDelay);
     } else {
       effectiveNextAttempt = null;
@@ -865,11 +861,7 @@ class MailRepository {
           accountId: accountId,
           type: PendingOpType.send,
           payloadJson: Value(
-            jsonEncode({
-              'messageId': id,
-              if (scheduledAt != null)
-                'scheduledAt': scheduledAt.toUtc().toIso8601String(),
-            }),
+            jsonEncode({'messageId': id}),
           ),
           nextAttemptAt: Value(effectiveNextAttempt),
         ),
@@ -896,22 +888,20 @@ class MailRepository {
       // gönderim ileti çiftlenmesine yol açardı).
     }
 
-    if (scheduledAt == null) {
-      if (undoDelay != null && undoDelay > Duration.zero) {
-        _scheduleKick(accountId, undoDelay);
-      } else {
-        kickQueue(accountId);
-      }
+    if (undoDelay != null && undoDelay > Duration.zero) {
+      _scheduleKick(accountId, undoDelay);
+    } else {
+      kickQueue(accountId);
     }
 
     return id;
   }
 
-  /// Kuyruktaki henüz gönderilmemiş (veya zamanlanmış) bir iletinin gönderimini
+  /// Kuyruktaki henüz gönderilmemiş bir iletinin gönderimini
   /// iptal eder; iletiyi yeniden Taslaklar klasörüne çeker.
   ///
   /// Kullanıcı "Gönder" dedikten sonraki geri alma (Undo Send) süresinde
-  /// veya ileri tarihli zamanlanmış iletisini iptal etmek istediğinde çağrılır.
+  /// çağrılır.
   /// İleti zaten gönderilmişse veya sunucuya aktarılmaya başlanmışsa `false` döner.
   Future<bool> cancelQueuedSend(int messageId) async {
     final row = await _db.messageById(messageId);

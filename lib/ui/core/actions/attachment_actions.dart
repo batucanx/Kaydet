@@ -81,10 +81,12 @@ Future<void> saveAttachmentToDevice(
 }) async {
   final overlay = Overlay.of(context, rootOverlay: true);
   try {
+    final ext = p.extension(fileName);
+    final cleanExt = ext.startsWith('.') ? ext.substring(1) : ext;
     final saved = await FileSaver.instance.saveAs(
       name: p.basenameWithoutExtension(fileName),
       filePath: localPath,
-      fileExtension: p.extension(fileName),
+      fileExtension: cleanExt,
       mimeType: MimeType.other,
     );
     if (!overlay.mounted || saved == null) return;

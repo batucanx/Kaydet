@@ -36,7 +36,7 @@ async function main() {
     }
 
     console.log('IDLE dinleyicisi destekleniyor mu kontrol ediliyor...');
-    if (client.usableCapabilities.has('IDLE')) {
+    if (client.capabilities.has('IDLE')) {
       console.log('✅ Sunucu IDLE (anlık bildirim dinleme) protokolünü destekliyor!');
     } else {
       console.log('⚠️ Sunucu IDLE desteklemiyor, yoklama (polling) gerekecek.');

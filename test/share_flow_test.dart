@@ -184,11 +184,21 @@ void main() {
   }
 
   Finder composeTitle() => find.text('Yeni ileti');
-  Finder chip(String name) => find.widgetWithText(Chip, name);
+  Finder chip(String name) => find.text(name);
 
-  Iterable<String> chipNames(WidgetTester tester) => tester
-      .widgetList<Chip>(find.byType(Chip))
-      .map((c) => (c.label as Text).data!);
+  Iterable<String> chipNames(WidgetTester tester) {
+    final wrap = find.byType(Wrap);
+    if (wrap.evaluate().isEmpty) return const [];
+    return tester
+        .widgetList<Text>(
+          find.descendant(of: wrap, matching: find.byType(Text)),
+        )
+        .map((t) => t.data ?? '')
+        .where((text) =>
+            text.isNotEmpty &&
+            !text.contains('•') &&
+            !text.endsWith('B'));
+  }
 
   int callCount(String method) => calls.where((c) => c.method == method).length;
 
@@ -484,8 +494,8 @@ void main() {
       await tester.tap(find.byTooltip('Yeni ileti'));
       await settle(tester);
       await tester.enterText(
-        find.widgetWithText(TextField, '').first,
-        'ilk@ornek.com',
+        find.byType(TextField).first,
+        'ilk@ornek.com,',
       );
       await settle(tester);
       expect(composeTitle(), findsOneWidget);
@@ -503,14 +513,11 @@ void main() {
       expect(chip('foto.jpg'), findsOneWidget);
 
       // Geri: alttaki ilk yazma ekranı, yazılanla birlikte hâlâ orada.
-      final navigator = tester.state<NavigatorState>(
-        find.byType(Navigator).first,
-      );
-      await navigator.maybePop();
+      await tester.tap(find.byTooltip('Kapat').last);
       await settle(tester);
       expect(composeTitle(), findsOneWidget);
-      expect(find.text('ilk@ornek.com'), findsOneWidget);
-      expect(find.byType(Chip), findsNothing);
+      expect(find.text('İlk'), findsOneWidget);
+      expect(chip('foto.jpg'), findsNothing);
     });
 
     appTest('iki ayrı paylaşım iki ayrı yazma ekranı açar', (tester) async {

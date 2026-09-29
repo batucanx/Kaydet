@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/navigation.dart';
 import '../../../app/providers.dart';
 import '../../../data/repositories/mail_repository.dart';
-import '../../../core/date_format.dart';
+
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
@@ -169,16 +169,6 @@ void _announceOutcome(
         onUndoExpired: accountId != null
             ? () => unawaited(repository.processQueue(accountId))
             : null,
-      );
-    case ComposeSendScheduled(:final messageId, :final scheduledAt):
-      final timeStr = formatScheduleDate(scheduledAt);
-      KaydetNotice.show(
-        overlay,
-        message: 'İleti zamanlandı: $timeStr',
-        actionLabel: onUndo != null ? 'Geri Al' : null,
-        duration: const Duration(seconds: 8),
-        bottomInset: bottomInset,
-        onAction: onUndo != null ? () => onUndo(messageId) : null,
       );
     case null:
       break;

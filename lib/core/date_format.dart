@@ -1,4 +1,4 @@
-/// Tarih biçimlendirme yardımcıları.
+﻿/// Tarih biçimlendirme yardımcıları.
 ///
 /// `intl` paketinin locale verisi çalışma anında yüklenmek zorunda olduğu için
 /// (ve test ortamında bu ek kurulum gerektirdiği için) Türkçe ay/gün adları
@@ -141,47 +141,3 @@ String formatRelative(DateTime dateUtc, {DateTime? now}) {
   if (diff.inDays < 30) return '${diff.inDays} gün önce';
   return formatListDate(dateUtc, now: reference);
 }
-
-/// İleri tarihli gönderim (Schedule Send) için kullanıcı dostu tarih/saat metni:
-/// - Bugün: "Bugün 18:00"
-/// - Yarın: "Yarın 08:30"
-/// - Bu hafta içi: "Pazartesi 08:30"
-/// - Daha ileri tarih: "15 Ekim 08:30"
-String formatScheduleDate(DateTime date, {DateTime? now}) {
-  final local = date.isUtc ? date.toLocal() : date;
-  final current = now ?? DateTime.now();
-  final currentLocal = current.isUtc ? current.toLocal() : current;
-
-  final diffDays = _calendarDayDifference(local, currentLocal);
-  final timeStr = '${_two(local.hour)}:${_two(local.minute)}';
-
-  if (diffDays == 0) {
-    return 'Bugün $timeStr';
-  } else if (diffDays == 1) {
-    return 'Yarın $timeStr';
-  } else if (diffDays > 1 && diffDays < 7) {
-    final weekdayName = _weekdaysLong[(local.weekday - 1).clamp(0, 6)];
-    return '$weekdayName $timeStr';
-  } else {
-    final monthName = _monthsLong[(local.month - 1).clamp(0, 11)];
-    if (local.year == currentLocal.year) {
-      return '${local.day} $monthName $timeStr';
-    }
-    return '${local.day} $monthName ${local.year} $timeStr';
-  }
-}
-
-/// Zamanlayıcı seçim diyaloğu için kısa tarih (ör. "27 Eyl Paz").
-String formatPickerDate(DateTime date) {
-  final d = date.isUtc ? date.toLocal() : date;
-  final month = _monthsShort[(d.month - 1).clamp(0, 11)];
-  final weekday = _weekdaysShort[(d.weekday - 1).clamp(0, 6)];
-  return '${d.day} $month $weekday';
-}
-
-/// Zamanlayıcı seçim diyaloğu için saat (ör. "22:00").
-String formatPickerTime(DateTime date) {
-  final d = date.isUtc ? date.toLocal() : date;
-  return '${_two(d.hour)}:${_two(d.minute)}';
-}
-

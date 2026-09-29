@@ -94,6 +94,7 @@ void main() {
           imapServiceProvider.overrideWithValue(imap),
           smtpServiceProvider.overrideWithValue(smtp),
           settingsStoreProvider.overrideWithValue(settingsStore),
+          sendUndoWindowProvider.overrideWithValue(Duration.zero),
         ],
         child: const KaydetApp(),
       ),
@@ -458,6 +459,7 @@ void main() {
                 secureStoreProvider.overrideWithValue(secureStore),
                 imapServiceProvider.overrideWithValue(imap),
                 smtpServiceProvider.overrideWithValue(smtp),
+                settingsStoreProvider.overrideWithValue(settingsStore),
               ],
               child: MaterialApp(
                 theme: dark ? AppTheme.dark() : AppTheme.light(),

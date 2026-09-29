@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
@@ -25,7 +26,6 @@ class MailRow extends StatelessWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
-    this.scheduledSendAt,
   });
 
   final MessageRow message;
@@ -35,12 +35,6 @@ class MailRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
-
-  /// Kullanıcının bu ileti için seçtiği gönderim zamanı (yerel saat) —
-  /// yalnızca "queued" durumundaki gerçekten zamanlanmış gönderimlerde
-  /// dolu olur (bkz. `scheduledSendTimesProvider`). Diğer tüm iletilerde
-  /// (ve "Geri al" penceresindeki sıradan gönderimlerde) `null`'dur.
-  final DateTime? scheduledSendAt;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -118,13 +112,16 @@ class MailRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final unread = !message.isSeen;
+    final pinned = message.isFlagged;
     final labelNames = _labelNames;
     final outbox = message.outboxState;
     final previewText = message.preview.trim();
 
     return Semantics(
       selected: isSelected,
-      label: '${unread ? 'Okunmamış. ' : ''}$_displayName. ${message.subject}',
+      label:
+          '${unread ? 'Okunmamış. ' : ''}${pinned ? 'Sabitlenmiş. ' : ''}'
+          '$_displayName. ${message.subject}',
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -132,6 +129,9 @@ class MailRow extends StatelessWidget {
           duration: context.motion(Motion.fast),
           constraints: const BoxConstraints(minHeight: Dimens.listRowMinHeight),
           decoration: BoxDecoration(
+            // Sabitlenmiş ileti normal listeyle AYNI arka planı kullanır —
+            // ayrım "Sabitlenenler" bölümü + sağdaki pin ikonuyla yapılır,
+            // satır renginden değil (bkz. `_PinnedSection`).
             color: isSelected ? t.accentSubtle : Colors.transparent,
             border: Border(
               left: BorderSide(
@@ -239,27 +239,45 @@ class MailRow extends StatelessWidget {
 
   Widget _trailingDate(BuildContext context, bool unread) {
     final t = context.tokens;
+    final pinned = message.isFlagged;
+    final attachment = Icon(
+      LucideIcons.paperclip,
+      size: 13,
+      color: t.textTertiary,
+    );
+    final date = Text(
+      formatListDate(
+        message.dateUtc,
+        locale: Localizations.localeOf(context).languageCode,
+      ),
+      style: AppText.labelMedium.copyWith(
+        color: unread ? t.accent : t.textTertiary,
+        fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
+      ),
+    );
+
+    // Saat sağ üstte kalır; ataç ve/veya pin saatin altındaki ikinci satırda,
+    // sağa hizalı yan yana durur — sabitlenmiş olsun olmasın aynı yerleşim.
     return Padding(
       padding: const EdgeInsets.only(top: 2),
-      child: Row(
+      child: Column(
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (message.hasAttachments)
-            Padding(
-              padding: const EdgeInsets.only(right: Space.xs),
-              child: Icon(LucideIcons.paperclip, size: 13, color: t.textTertiary),
+          date,
+          if (pinned || message.hasAttachments) ...[
+            const SizedBox(height: Space.xs),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.hasAttachments) attachment,
+                if (message.hasAttachments && pinned)
+                  const SizedBox(width: Space.sm),
+                if (pinned)
+                  Icon(LucideIcons.pin, size: 14, color: t.pinIcon),
+              ],
             ),
-          Text(
-            formatListDate(
-              message.dateUtc,
-              locale: Localizations.localeOf(context).languageCode,
-            ),
-            style: AppText.labelMedium.copyWith(
-              color: unread ? t.accent : t.textTertiary,
-              fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
-            ),
-          ),
+          ],
         ],
       ),
     );
@@ -317,13 +335,7 @@ class MailRow extends StatelessWidget {
 
   Widget _outboxBadge(BuildContext context, OutboxState outbox) {
     final t = context.tokens;
-    final scheduledAt = scheduledSendAt;
     final (icon, text, color) = switch (outbox) {
-      OutboxState.queued when scheduledAt != null => (
-        LucideIcons.clock,
-        'Zamanlandı: ${formatScheduleDate(scheduledAt)}',
-        t.textTertiary,
-      ),
       OutboxState.queued => (
         LucideIcons.clock,
         'Gönderilmeyi bekliyor',

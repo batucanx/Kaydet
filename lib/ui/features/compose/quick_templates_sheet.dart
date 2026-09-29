@@ -8,6 +8,7 @@ import '../../../domain/models/quick_template.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../../core/widgets/kaydet_widgets.dart';
 
 final RegExp _htmlTagPattern = RegExp(r'<[a-zA-Z/][^>]*>');
 final RegExp _whitespaceRun = RegExp(r'\s+');
@@ -250,9 +251,20 @@ class _QuickTemplatesSheetState extends ConsumerState<QuickTemplatesSheet> {
                           // `isBuiltIn` korunumu, düzenlerken rozet kalır).
                           onEdit: () =>
                               _openEditorDialog(context, template: template),
-                          onDelete: () => ref
-                              .read(quickTemplatesProvider.notifier)
-                              .remove(template.id),
+                          onDelete: () async {
+                            final confirmed = await confirmDialog(
+                              context,
+                              title: 'Şablonu sil',
+                              message:
+                                  '"${template.title}" şablonunu silmek istiyor musunuz?',
+                              confirmLabel: 'Sil',
+                              destructive: true,
+                            );
+                            if (confirmed != true || !context.mounted) return;
+                            ref
+                                .read(quickTemplatesProvider.notifier)
+                                .remove(template.id);
+                          },
                         );
                       },
                     ),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleListener;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/repositories/remote_push_sync.dart';
@@ -104,6 +105,12 @@ class RemotePushController extends Notifier<void> {
       settingsProvider.select((s) => s.notificationsEnabled),
       (_, _) => _trigger(),
     );
+    // Uygulama her ön plana döndüğünde sunucu kaydı doğrulanır: sunucu
+    // yeniden dağıtılıp veritabanı sıfırlandıysa kullanıcı bildirim ayarını
+    // kapatıp açmadan hesaplar kendiliğinden yeniden kaydedilir. Kayıtlar
+    // eşitse `sync` yalnızca tek bir hafif GET yapar (bkz. `RemotePushSync`).
+    final lifecycle = AppLifecycleListener(onResume: _trigger);
+    ref.onDispose(lifecycle.dispose);
     _trigger();
   }
 

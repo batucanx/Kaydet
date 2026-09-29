@@ -1,7 +1,5 @@
-import 'dart:convert';
 import 'package:drift/drift.dart' hide isNotNull;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:kaydet/core/date_format.dart';
 import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/data/repositories/mail_connection.dart';
 import 'package:kaydet/data/repositories/mail_repository.dart';
@@ -13,31 +11,7 @@ import 'helpers/fake_services.dart';
 import 'helpers/test_db.dart';
 
 void main() {
-  group('formatScheduleDate', () {
-    final now = DateTime(2026, 9, 27, 10, 0); // Pazar
-
-    test('aynı gün için "Bugün HH:mm" biçiminde gösterir', () {
-      final todayEvening = DateTime(2026, 9, 27, 18, 30);
-      expect(formatScheduleDate(todayEvening, now: now), 'Bugün 18:30');
-    });
-
-    test('ertesi gün için "Yarın HH:mm" biçiminde gösterir', () {
-      final tomorrow = DateTime(2026, 9, 28, 8, 30);
-      expect(formatScheduleDate(tomorrow, now: now), 'Yarın 08:30');
-    });
-
-    test('aynı hafta içindeki günler için gün adıyla gösterir', () {
-      final tuesday = DateTime(2026, 9, 29, 9, 15);
-      expect(formatScheduleDate(tuesday, now: now), 'Salı 09:15');
-    });
-
-    test('daha ileri tarihler için gün, ay adı ve saat gösterir', () {
-      final nextMonth = DateTime(2026, 10, 15, 14, 0);
-      expect(formatScheduleDate(nextMonth, now: now), '15 Ekim 14:00');
-    });
-  });
-
-  group('MailRepository - Undo Send & Schedule Send', () {
+  group('MailRepository - Undo Send', () {
     late AppDatabase db;
     late InMemorySecureStore secureStore;
     late FakeImapService imap;
@@ -124,34 +98,6 @@ void main() {
       expect(message?.isDraft, isTrue);
     });
 
-    test('ileri tarihli gönderim (scheduledAt) doğru zamanla kuyruğa alınır ve iptal edilebilir', () async {
-      final scheduledTime = DateTime.now().toUtc().add(const Duration(hours: 12));
-
-      final messageId = await repository.queueSend(
-        accountId: accountId,
-        to: 'alici@example.com',
-        cc: '',
-        bcc: '',
-        subject: 'Zamanlanmış İleti',
-        body: 'İleri tarihli test',
-        scheduledAt: scheduledTime,
-      );
-
-      expect(messageId, greaterThan(0));
-
-      final pendingOps = await db.pendingSendOperationsFor(messageId);
-      expect(pendingOps.length, 1);
-      final payload = jsonDecode(pendingOps.first.payloadJson) as Map<String, dynamic>;
-      expect(payload['scheduledAt'], isNotNull);
-
-      // İptal et
-      final cancelled = await repository.cancelQueuedSend(messageId);
-      expect(cancelled, isTrue);
-
-      final message = await db.messageById(messageId);
-      expect(message?.isDraft, isTrue);
-      expect(message?.outboxState, OutboxState.none);
-    });
 
     test('zaten gönderilmiş (OutboxState.sent) bir ileti geri alınamaz', () async {
       final messageId = await repository.queueSend(

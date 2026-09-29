@@ -42,7 +42,6 @@ import 'quick_contacts_strip.dart';
 import 'quick_templates_sheet.dart';
 import 'recipient_chip_layout.dart';
 import 'recipient_details_sheet.dart';
-import 'schedule_send_sheet.dart';
 
 /// Yazma ekranının açılış biçimi.
 enum ComposeMode { newMessage, reply, replyAll, forward }
@@ -73,19 +72,6 @@ final class ComposeSendQueued extends ComposeOutcome {
 
   final int messageId;
   final Duration undoDuration;
-  final int? accountId;
-}
-
-/// İleti ileri bir tarihte gönderilmek üzere zamanlandı.
-final class ComposeSendScheduled extends ComposeOutcome {
-  const ComposeSendScheduled(
-    this.messageId,
-    this.scheduledAt, {
-    this.accountId,
-  });
-
-  final int messageId;
-  final DateTime scheduledAt;
   final int? accountId;
 }
 
@@ -259,6 +245,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // Gövde belgesi atanınca Quill (`_didChangeTextEditingValue`) klavye
+      // isteyip odağı gövdeye çeker; "Kime" autofocus'u bunu geri alamaz.
+      _toFocus.requestFocus();
       final animation = ModalRoute.of(context)?.animation;
       if (animation == null || animation.isCompleted) {
         _showKeyboard();
@@ -609,7 +598,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     ),
   );
 
-  Future<void> _send({DateTime? scheduledAt}) async {
+  Future<void> _send() async {
     final accountId = _fromAccountId;
     if (accountId == null) return;
 
@@ -646,7 +635,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _autosave?.cancel();
 
     final undoWindow = ref.read(sendUndoWindowProvider);
-    final effectiveUndoDelay = scheduledAt != null ? null : undoWindow;
     final repository = ref.read(mailRepositoryProvider);
     final messageId = await repository.queueSend(
       accountId: accountId,
@@ -663,8 +651,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       references: _references,
       markSourceAnswered: _sourceIsReply,
       markSourceForwarded: _sourceIsForward,
-      undoDelay: effectiveUndoDelay,
-      scheduledAt: scheduledAt,
+      undoDelay: undoWindow,
     );
     if (!mounted) return;
 
@@ -679,26 +666,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       return;
     }
 
-    if (scheduledAt != null) {
-      Navigator.of(context).pop<ComposeOutcome>(
-        ComposeSendScheduled(messageId, scheduledAt, accountId: accountId),
-      );
-    } else {
-      Navigator.of(context).pop<ComposeOutcome>(
-        ComposeSendQueued(
-          messageId,
-          undoDuration: undoWindow,
-          accountId: accountId,
-        ),
-      );
-    }
-  }
-
-  Future<void> _scheduleSend() async {
-    final picked = await ScheduleSendSheet.show(context);
-    if (picked != null && mounted) {
-      await _send(scheduledAt: picked);
-    }
+    Navigator.of(context).pop<ComposeOutcome>(
+      ComposeSendQueued(
+        messageId,
+        undoDuration: undoWindow,
+        accountId: accountId,
+      ),
+    );
   }
 
   void _showQuickTemplates() {
@@ -1285,46 +1259,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             ),
           ),
           actions: [
-            ValueListenableBuilder<bool>(
-              valueListenable: _hasRecipientChips,
-              builder: (context, hasRecipient, _) {
-                final canSchedule = hasRecipient && !_sending;
-                return IconButton(
-                  icon: Icon(
-                    LucideIcons.calendarClock,
-                    color: canSchedule
-                        ? onAppBar
-                        : onAppBar.withValues(alpha: 0.35),
-                  ),
-                  tooltip: canSchedule
-                      ? 'İleri tarihte gönder'
-                      : 'İleri tarihte göndermek için önce alıcı girin',
-                  onPressed: canSchedule ? _scheduleSend : null,
-                );
-              },
-            ),
-            ValueListenableBuilder<bool>(
-              valueListenable: _hasRecipientChips,
-              builder: (context, hasRecipient, _) {
-                return GestureDetector(
-                  onLongPress:
-                      (hasRecipient && !_sending) ? _scheduleSend : null,
-                  child: IconButton(
-                    icon: _sending
-                        ? SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: onAppBar,
-                            ),
-                          )
-                        : Icon(LucideIcons.sendHorizontal, color: onAppBar),
-                    tooltip: 'Gönder',
-                    onPressed: _sending ? null : () => _send(),
-                  ),
-                );
-              },
+            IconButton(
+              icon: _sending
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: onAppBar,
+                      ),
+                    )
+                  : Icon(LucideIcons.sendHorizontal, color: onAppBar),
+              tooltip: 'Gönder',
+              onPressed: _sending ? null : () => _send(),
             ),
             const SizedBox(width: Space.xs),
           ],
