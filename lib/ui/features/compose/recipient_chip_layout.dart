@@ -91,9 +91,12 @@ abstract final class RecipientChipPlanner {
     required double Function(int hidden) plusWidth,
     required double inputMinWidth,
     int maxLines = 2,
+    int maxVisible = 2,
   }) {
     final total = naturalWidths.length;
-    for (var visible = total; visible >= 0; visible--) {
+    // Görünen çip sayısı [maxVisible]'ı aşmaz: 2'den sonra her yeni alıcı
+    // en eski görünen çipi tek tek gizler (+N bir artar).
+    for (var visible = math.min(total, maxVisible); visible >= 0; visible--) {
       final hidden = total - visible;
       final widths = <double>[];
       var lines = 1;

@@ -14,6 +14,7 @@ import 'app/sync_controller.dart';
 import 'data/services/app_settings.dart';
 import 'data/services/notification_service.dart';
 import 'data/services/quick_templates_store.dart';
+import 'ui/features/mail_detail/webview_prewarm.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,6 +64,9 @@ Future<void> main() async {
   } on Object catch (error) {
     debugPrint('Anlık bildirim servisi kurulamadı: $error');
   }
+
+  // Sistem WebView'ını arka planda ısıtır (ilk mail açılışı hızlansın).
+  WebViewPrewarm.schedule();
 
   runApp(
     ProviderScope(

@@ -2,15 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
-import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
-import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -42,34 +38,23 @@ import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
 import 'translate_bar.dart';
 
+/// Okuma ekranında app bar yüksekliği (varsayılan 56): gövdeye daha çok yer.
+const double _compactAppBarHeight = 44;
+
 /// İleti okuma ekranı.
 ///
-/// Tek kaydırma alanı: sabitlenmiş (pinned), SABİT boyutlu `SliverAppBar`,
-/// büyük konu, gönderen başlığı, ekler ve gövde aynı `CustomScrollView`da
-/// kayar. Gövdenin WebView'ı kendi içinde kaydırmaz, içeriğinin boyuna
-/// uzatılır (bkz. `_HtmlWebView`): iç içe iki kaydırma alanı oluşmaz, parmak
-/// ekranın neresinde olursa olsun başlık gövdeyle birlikte hareket eder.
+/// Yapı: alçak bir app bar, alt eylem çubuğu ve arasında gövde. Gövdenin
+/// WebView'ı (bkz. `_HtmlWebView`) bu alanı doldurur ve KENDİ içinde (yerel
+/// olarak) kaydırır — içeriğin boyuna uzatılmaz, kaydırırken yeniden
+/// boyutlanmaz, Flutter'ın kaydırma alanına katılmaz. Başlık (konu, gönderen,
+/// alıcı özeti, ekler, çeviri çubuğu) gövdenin ÜSTÜNDE bir katmandır; gövdenin
+/// üstünde başlık boyu kadar boşluk vardır (`--kd-top`) ve başlık, WebView'ın
+/// yerel kaydırma konumuyla birebir yukarı kayar (bkz. `_FollowScroll`): sabit
+/// kalıp takip etmez. Alıcı ayrıntıları açılınca başlık içeriği itmeden
+/// üstüne biner.
 ///
-/// App bar kaydırma konumuna göre büyüyüp küçülmez, içeriği değişmez —
-/// KASITLI olarak animasyonsuz: konunun app bar'a "kayıp küçülmesi" daha
-/// önce denendi (önce elle bir `AnimationController`/scroll dinleyicisiyle,
-/// sonra `FlexibleSpaceBar` ile) ve ikisi de kaydırma sırasında her karede
-/// yeniden hesaplanan bir geçiş olduğundan performansı düşürdü. Konu bunun
-/// yerine `_Header`'ın üstünde sabit, büyük bir başlık olarak durur; app
-/// bar'da hiç görünmez.
-///
-/// Android'de, ekrandan geri çıkılırken (`Navigator.pop`) tüm ekran canlı
-/// haliyle DEĞİL, o anki görünümünün az önce çekilmiş sabit bir
-/// görüntüsüyle animasyonlanır (bkz. `_watchForExit`). Sebep, gövdedeki
-/// WebView'ın (`_HtmlWebView`) çökmeyi önlemek için kullandığı Hybrid
-/// Composition (bkz. o widget'ın belgesi): bu kip WebView'ı Flutter'ın kendi
-/// Skia sahnesi yerine Android'in View ağacına yerleştirir; geçiş
-/// animasyonunun uyguladığı solma/kaydırma ikisini aynı karede senkron
-/// tutamayıp ekranda "yırtılma" (tearing) yapar (flutter/flutter#104889).
-/// Donmuş görüntü düz bir Flutter widget'ı olduğundan bu sorunu yaşamaz.
-/// Görüntü, ekranın TAMAMI (sadece WebView değil) için ve İÇERİĞİN BOYU
-/// DEĞİL yalnızca o anki görünen alan (viewport) için çekilir — aksi hâlde
-/// uzun bir e-postada bellekte devasa bir görüntü tutulurdu.
+/// Kaydırma sırasında yalnızca başlığın dönüşümü yenilenir: `setState`,
+/// yeniden yükleme, boy ölçümü ya da JavaScript çalışmaz.
 class MailDetailScreen extends ConsumerStatefulWidget {
   const MailDetailScreen({super.key, required this.messageId});
 
@@ -88,15 +73,58 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   MessageRow? _shownMessage;
   Timer? _seenTimer;
 
-  final ScrollController _scrollController = ScrollController();
+  // Başlık gövdenin ÜSTÜNDE durur ve kaydırmayla birlikte yukarı kayar.
+  // Gövde başlığın altında kalmasın diye WebView'a başlık boyu kadar üst boşluk
+  // (`topInset`) verilir.
+  final GlobalKey _headerKey = GlobalKey();
+  final _BodyScrollBridge _bodyScroll = _BodyScrollBridge();
+  double _headerHeight = 0;
 
-  /// Ekranın TAMAMINI (viewport boyunda) sarar — geri çıkışta donmuş görüntü
-  /// çekmek için (bkz. `_watchForExit`).
-  final GlobalKey _screenBoundaryKey = GlobalKey();
-  ui.Image? _frozenScreenshot;
-  bool _frozen = false;
-  Animation<double>? _exitAnimation;
-  void Function(AnimationStatus)? _exitListener;
+  /// Gövdenin dikey kaydırma konumu (mantıksal piksel). Başlık bu değerle
+  /// BİREBİR yukarı kayar (bkz. `_FollowScroll`): gövdenin ilk içeriği gibi
+  /// kaydırmayla birlikte gider, sabit kalıp takip etmez. Değer bir
+  /// `ValueNotifier`da tutulur — her kaydırma olayında ekranın tamamı değil
+  /// yalnızca başlığın dönüşümü yeniden çizilir.
+  final ValueNotifier<double> _scrollY = ValueNotifier<double>(0);
+
+  Timer? _headerMeasureTimer;
+
+  /// Alıcı ayrıntıları açıkken başlık gövdenin ÜSTÜNE biner (içeriği itmez,
+  /// sıçrama olmaz): bu sürede üst boşluk güncellenmez. Kapanınca boy zaten
+  /// eski değerine döner.
+  bool _recipientsExpanded = false;
+
+  /// Başlığın o anki gerçek boyu (kaydırırken tamamen çıkması için).
+  double _currentHeaderHeight() {
+    final box = _headerKey.currentContext?.findRenderObject();
+    return box is RenderBox && box.hasSize ? box.size.height : _headerHeight;
+  }
+
+  /// Başlık boyu değişince (alıcılar açılırken/kapanırken, çeviri çubuğu
+  /// belirirken) gövdenin üst boşluğu güncellenir. Açılma animasyonu sırasında
+  /// boy HER KARE değişir; her karede ekranı yeniden kurup WebView'a JS
+  /// göndermek kasma yapardı. Bu yüzden ilk ölçüm hemen (içerik başlığın
+  /// altında kalmasın), sonrakiler animasyon durulunca TEK kez uygulanır.
+  void _measureHeader() {
+    _headerMeasureTimer?.cancel();
+    if (_headerHeight == 0) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _applyHeaderHeight());
+      return;
+    }
+    _headerMeasureTimer = Timer(
+      const Duration(milliseconds: 180),
+      _applyHeaderHeight,
+    );
+  }
+
+  void _applyHeaderHeight() {
+    if (!mounted || _recipientsExpanded) return;
+    final box = _headerKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final height = box.size.height;
+    if ((height - _headerHeight).abs() < 0.5) return;
+    setState(() => _headerHeight = height);
+  }
 
   @override
   void initState() {
@@ -109,80 +137,11 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   }
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // Yalnızca bir kez kurulur (`_exitAnimation` ilk seferden sonra dolu
-    // olur) — yalnızca Android'de (bkz. sınıf belgesi, iOS'ta bu sorun yok).
-    if (_exitAnimation == null &&
-        defaultTargetPlatform == TargetPlatform.android) {
-      _watchForExit();
-    }
-  }
-
-  @override
   void dispose() {
     _seenTimer?.cancel();
-    _scrollController.dispose();
-    _cancelExitListener();
-    _frozenScreenshot?.dispose();
+    _headerMeasureTimer?.cancel();
+    _scrollY.dispose();
     super.dispose();
-  }
-
-  /// Route'un kendi geçiş animasyonu TERSİNE dönmeye (`reverse`, kullanıcı
-  /// geri gitti) başladığı anda ekranın o anki görüntüsünü yakalayıp donmuş
-  /// gösterime geçer (bkz. sınıf belgesi). Görüntü henüz hazır değilse (yakalama
-  /// bir çerçeve sürer) canlı görünüm kısa süre kalır — boş bir alan
-  /// göstermektense yırtılma riski göze alınır. Geri kaydırma yarıda
-  /// bırakılıp ekran tekrar tam açılırsa (`completed`) canlı görünüme döner.
-  void _watchForExit() {
-    final animation = ModalRoute.of(context)?.animation;
-    if (animation == null) return;
-    void listener(AnimationStatus status) {
-      if (status == AnimationStatus.reverse) {
-        unawaited(_freezeForExit());
-      } else if (status.isCompleted && _frozen) {
-        setState(() => _frozen = false);
-      }
-    }
-
-    _exitAnimation = animation;
-    _exitListener = listener;
-    animation.addStatusListener(listener);
-  }
-
-  void _cancelExitListener() {
-    final animation = _exitAnimation;
-    final listener = _exitListener;
-    if (animation != null && listener != null) {
-      animation.removeStatusListener(listener);
-    }
-    _exitAnimation = null;
-    _exitListener = null;
-  }
-
-  Future<void> _freezeForExit() async {
-    final boundary = _screenBoundaryKey.currentContext?.findRenderObject();
-    // `reverse` yalnızca ekran tam görünür olduktan (route `completed`e
-    // ulaştıktan) sonra tetiklenebilir, bu yüzden burada zaten en az bir kez
-    // boyanmıştır; olmayan bir durumda `toImage()`in kendi hatası aşağıdaki
-    // `catch` ile yakalanır.
-    if (boundary is! RenderRepaintBoundary) return;
-    ui.Image image;
-    try {
-      image = await boundary.toImage(
-        pixelRatio: MediaQuery.devicePixelRatioOf(context),
-      );
-    } catch (_) {
-      // Yakalanamadı: canlı görünüm kalır (bkz. `_watchForExit` belgesi).
-      return;
-    }
-    if (!mounted) {
-      image.dispose();
-      return;
-    }
-    _frozenScreenshot?.dispose();
-    _frozenScreenshot = image;
-    setState(() => _frozen = true);
   }
 
   void _scheduleMarkSeen() {
@@ -207,9 +166,10 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     if (index < 0) return;
     final next = index + delta;
     if (next < 0 || next >= rows.length) return;
-    setState(() => _messageId = rows[next].id);
-    // Yeni ileti en üstten, konusu büyük hâliyle açılır.
-    if (_scrollController.hasClients) _scrollController.jumpTo(0);
+    setState(() {
+      _messageId = rows[next].id;
+      _scrollY.value = 0;
+    });
     _scheduleMarkSeen();
   }
 
@@ -224,8 +184,15 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final bodyFetch = ref.watch(bodyFetchProvider(_messageId));
     final attachments =
         ref.watch(attachmentsProvider(_messageId)).value ?? const [];
-    final rows = ref.watch(messageListProvider).value ?? const <MessageRow>[];
-    final index = rows.indexWhere((m) => m.id == _messageId);
+    // Tüm liste yerine yalnızca (konum, adet) izlenir: eşitleme/yeni ileti
+    // listeyi her değiştirdiğinde okuma ekranı (ve WebView'ı içeren ağaç)
+    // yeniden kurulmaz; ayrıca her karede O(n) arama yapılmaz.
+    final (index, rowCount) = ref.watch(
+      messageListProvider.select((async) {
+        final list = async.value ?? const <MessageRow>[];
+        return (list.indexWhere((m) => m.id == _messageId), list.length);
+      }),
+    );
 
     if (message == null) {
       // İlk açılışta satır veritabanından bir kare sonra gelir: o kare boş
@@ -260,125 +227,158 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
         : originalSubject;
     final shownBody = _withTranslation(body, translation);
 
-    return RepaintBoundary(
-      key: _screenBoundaryKey,
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Donmuş gösterim sırasında canlı ekran çizilmez ve dokunuşları
-          // almaz (`Offstage`) ama ağaçta KALIR — WebView'ın platform
-          // görünümü asla sökülüp yeniden kurulmaz (bkz. sınıf belgesi).
-          Offstage(
-            offstage: _frozen,
-            child: PrimaryScrollController(
-              // iOS'ta durum çubuğuna dokunmak (Scaffold) bu kaydırma alanını
-              // başa sarar. Boş platform kümesi: kontrolcü vermeyen başka
-              // kaydırılabilirler (ör. "Diğer" menüsünün paneli) buna
-              // kendiliğinden bağlanmaz.
-              controller: _scrollController,
-              automaticallyInheritForPlatforms: const <TargetPlatform>{},
-              child: Scaffold(
-                backgroundColor: t.readingBg,
-                body: ScrollConfiguration(
-                  // Android'in esneme (stretch) efekti tüm görünüm alanını ölçekler:
-                  // sabitlenmiş app bar da esner, WebView (platform görünümü) ise bu
-                  // dönüşümü almadığı için çevresinden kayar. Bu ekranda kapalı.
-                  behavior: ScrollConfiguration.of(
-                    context,
-                  ).copyWith(overscroll: false),
-                  child: CustomScrollView(
-                    controller: _scrollController,
-                    slivers: [
-                      SliverAppBar(
-                        // `expandedHeight`/`flexibleSpace` YOK: app bar kaydırma
-                        // konumundan bağımsız, sabit boyutlu (bkz. `MailDetailScreen`
-                        // belgesi) — her scroll karesinde yeniden hesaplanan bir
-                        // boyut/opaklık geçişi yok.
-                        pinned: true,
-                        leading: const _BackButton(),
-                        actions: [
-                          IconButton(
-                            icon: const Icon(
-                              LucideIcons.chevronUp,
-                              size: IconSize.md,
-                            ),
-                            tooltip: 'Önceki ileti',
-                            onPressed: index > 0 ? () => _navigate(-1) : null,
-                          ),
-                          IconButton(
-                            icon: const Icon(
-                              LucideIcons.chevronDown,
-                              size: IconSize.md,
-                            ),
-                            tooltip: 'Sonraki ileti',
-                            onPressed: index >= 0 && index < rows.length - 1
-                                ? () => _navigate(1)
-                                : null,
-                          ),
-                          const SizedBox(width: Space.xs),
-                        ],
-                      ),
-                      SliverToBoxAdapter(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                            Space.lg,
-                            Space.md,
-                            Space.lg,
-                            0,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SelectableText(
-                                subject,
-                                style: Theme.of(context).textTheme.titleLarge,
-                              ),
-                              const SizedBox(height: Space.md),
-                              _Header(message: message),
-                              const SizedBox(height: Space.lg),
-                              if (attachments.isNotEmpty) ...[
-                                _AttachmentStrip(attachments: attachments),
-                                const SizedBox(height: Space.lg),
-                              ],
-                              TranslateBar(
-                                messageId: _messageId,
-                                subject: message.subject,
-                                body: body,
-                                noticeBottomInset: _ActionBar.height,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      SliverToBoxAdapter(
-                        child: Divider(color: t.divider, height: 1),
-                      ),
-                      SliverToBoxAdapter(
-                        child: _BodyView(
-                          body: shownBody,
-                          fetchStatus: bodyFetch,
-                          onRetry: () =>
-                              ref.invalidate(bodyFetchProvider(_messageId)),
-                          // İletideki `mailto:` bağlantısı uygulamanın kendi
-                          // yazma ekranını açar.
-                          onMailto: (address) => unawaited(
-                            openCompose(context, ref, initialTo: address),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                bottomNavigationBar: _ActionBar(message: message),
-              ),
-            ),
+    return _nativeScaffold(
+      t: t,
+      message: message,
+      subject: subject,
+      attachments: attachments,
+      body: body,
+      shownBody: shownBody,
+      bodyFetch: bodyFetch,
+      rowCount: rowCount,
+      index: index,
+    );
+  }
+
+  /// Yerel kaydırmalı düzen: sabit app bar + (en fazla ekranın %40'ı kadar)
+  /// başlık + kalan alanı dolduran gövde. Gövde WebView'ı kendi içinde
+  /// kaydırır; Flutter yalnızca başlığı (uzunsa kendi içinde kayan) yerleştirir.
+  Widget _nativeScaffold({
+    required KaydetTokens t,
+    required MessageRow message,
+    required String subject,
+    required List<AttachmentRow> attachments,
+    required MessageBodyRow? body,
+    required MessageBodyRow? shownBody,
+    required AsyncValue<MessageBodyRow?> bodyFetch,
+    required int rowCount,
+    required int index,
+  }) {
+    _measureHeader();
+    return Scaffold(
+      backgroundColor: t.readingBg,
+      appBar: AppBar(
+        leading: const _BackButton(),
+        // Bu ekranda app bar daha alçaktır: gövdeye daha çok yer kalır.
+        toolbarHeight: _compactAppBarHeight,
+        actions: [
+          IconButton(
+            icon: const Icon(LucideIcons.chevronUp, size: IconSize.md),
+            tooltip: 'Önceki ileti',
+            onPressed: index > 0 ? () => _navigate(-1) : null,
           ),
-          if (_frozen && _frozenScreenshot != null)
-            Positioned.fill(
-              child: RawImage(image: _frozenScreenshot, fit: BoxFit.fill),
-            ),
+          IconButton(
+            icon: const Icon(LucideIcons.chevronDown, size: IconSize.md),
+            tooltip: 'Sonraki ileti',
+            onPressed: index >= 0 && index < rowCount - 1
+                ? () => _navigate(1)
+                : null,
+          ),
+          const SizedBox(width: Space.xs),
         ],
       ),
+      body: Stack(
+        children: [
+          // Gövde tüm alanı kaplar; başlığın altında kalmasın diye içerik
+          // `topInset` kadar aşağıdan başlar.
+          Positioned.fill(
+            child: _BodyView(
+              body: shownBody,
+              fetchStatus: bodyFetch,
+              topInset: _headerHeight,
+              onScrollY: (y) => _scrollY.value = y,
+              scrollBridge: _bodyScroll,
+              onRetry: () => ref.invalidate(bodyFetchProvider(_messageId)),
+              onMailto: (address) =>
+                  unawaited(openCompose(context, ref, initialTo: address)),
+            ),
+          ),
+          // Başlık gövdenin üstünde durur ve kaydırmayla birebir yukarı kayar
+          // (yalnızca bir dönüşüm; WebView yeniden boyutlanmaz).
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: _FollowScroll(
+              scrollY: _scrollY,
+              maxOffset: _currentHeaderHeight,
+              child: NotificationListener<SizeChangedLayoutNotification>(
+                  onNotification: (_) {
+                    _measureHeader();
+                    return false;
+                  },
+                  child: SizeChangedLayoutNotifier(
+                    child: GestureDetector(
+                      // Başlığın üstünde başlayan dikey sürükleme gövdeyi
+                      // kaydırır (WebView başlığın ARKASINDA kalır).
+                      onVerticalDragUpdate: (details) =>
+                          _bodyScroll.drag(-details.delta.dy),
+                      child: ColoredBox(
+                        key: _headerKey,
+                        color: t.readingBg,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxHeight:
+                                    MediaQuery.sizeOf(context).height * 0.4,
+                              ),
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.fromLTRB(
+                                  Space.lg,
+                                  Space.sm,
+                                  Space.lg,
+                                  0,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SelectableText(
+                                      subject,
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleLarge?.copyWith(
+                                        fontSize: 16 * AppText.scale,
+                                        height: 22 / 16,
+                                      ),
+                                    ),
+                                    const SizedBox(height: Space.sm),
+                                    _Header(
+                                      message: message,
+                                      onRecipientsExpanded: (v) =>
+                                          _recipientsExpanded = v,
+                                    ),
+                                    const SizedBox(height: Space.md),
+                                    if (attachments.isNotEmpty) ...[
+                                      _AttachmentStrip(
+                                        attachments: attachments,
+                                      ),
+                                      const SizedBox(height: Space.md),
+                                    ],
+                                    TranslateBar(
+                                      messageId: _messageId,
+                                      subject: message.subject,
+                                      body: body,
+                                      noticeBottomInset: _ActionBar.height,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            Divider(color: t.divider, height: 1),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _ActionBar(message: message),
     );
   }
 }
@@ -410,9 +410,12 @@ class _BackButton extends StatelessWidget {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.message});
+  const _Header({required this.message, this.onRecipientsExpanded});
 
   final MessageRow message;
+
+  /// Alıcı ayrıntıları açılıp kapanınca bildirilir (bkz. `_RecipientsBlock`).
+  final ValueChanged<bool>? onRecipientsExpanded;
 
   List<String> get _labelNames {
     try {
@@ -451,15 +454,17 @@ class _Header extends StatelessWidget {
             BrandAvatar(
               name: message.fromName,
               email: message.fromEmail,
-              size: 40,
+              size: 32,
             ),
-            const SizedBox(width: Space.md),
+            const SizedBox(width: Space.sm),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Ad + (sağda) kısa tarih tek satırda; e-posta altında.
+                  // Eskiden ad, e-posta ve uzun tarih üç ayrı satırdı.
                   Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: Text(
@@ -468,7 +473,7 @@ class _Header extends StatelessWidget {
                               : message.fromName,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodyLarge
+                          style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(
                                 fontWeight: FontWeight.w600,
                                 fontVariations: AppText.semibold,
@@ -484,21 +489,25 @@ class _Header extends StatelessWidget {
                             color: t.pinIcon,
                           ),
                         ),
+                      const SizedBox(width: Space.sm),
+                      Text(
+                        formatListDate(
+                          message.dateUtc,
+                          locale: Localizations.localeOf(context).languageCode,
+                        ),
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: t.textTertiary,
+                        ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 2),
                   Text(
                     message.fromEmail,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: Theme.of(
                       context,
-                    ).textTheme.bodyMedium?.copyWith(color: t.textSecondary),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    formatDetailDate(message.dateUtc),
-                    style: Theme.of(
-                      context,
-                    ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
+                    ).textTheme.bodySmall?.copyWith(color: t.textSecondary),
                   ),
                 ],
               ),
@@ -506,8 +515,13 @@ class _Header extends StatelessWidget {
           ],
         ),
         if (to.isNotEmpty || cc.isNotEmpty) ...[
-          const SizedBox(height: Space.sm),
-          _RecipientsBlock(to: to, cc: cc, accountId: message.accountId),
+          const SizedBox(height: Space.xs),
+          _RecipientsBlock(
+            to: to,
+            cc: cc,
+            accountId: message.accountId,
+            onExpandedChanged: onRecipientsExpanded,
+          ),
         ],
       ],
     );
@@ -523,7 +537,10 @@ class _RecipientsBlock extends StatefulWidget {
     required this.to,
     required this.cc,
     required this.accountId,
+    this.onExpandedChanged,
   });
+
+  final ValueChanged<bool>? onExpandedChanged;
 
   final List<EmailAddress> to;
   final List<EmailAddress> cc;
@@ -537,6 +554,18 @@ class _RecipientsBlockState extends State<_RecipientsBlock> {
   static const int _summaryNames = 2;
 
   bool _expanded = false;
+
+  void _toggle() {
+    setState(() => _expanded = !_expanded);
+    widget.onExpandedChanged?.call(_expanded);
+  }
+
+  @override
+  void dispose() {
+    // Blok kalkarsa (ör. alıcısız iletiye geçiş) açık durumu sıfırlanır.
+    widget.onExpandedChanged?.call(false);
+    super.dispose();
+  }
 
   /// "Ali, Veli ve 3 kişi daha" — Kime + Bilgi, tekrarsız.
   String get _summary {
@@ -562,11 +591,11 @@ class _RecipientsBlockState extends State<_RecipientsBlock> {
           expanded: _expanded,
           label: _expanded ? 'Alıcı ayrıntılarını gizle' : 'Alıcı ayrıntılarını göster',
           excludeSemantics: true,
-          onTap: () => setState(() => _expanded = !_expanded),
+          onTap: _toggle,
           child: InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
+            onTap: _toggle,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 36),
+              constraints: const BoxConstraints(minHeight: 28),
               child: Row(
                 children: [
                   Expanded(
@@ -582,7 +611,7 @@ class _RecipientsBlockState extends State<_RecipientsBlock> {
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: textTheme.bodyMedium?.copyWith(
+                      style: textTheme.bodySmall?.copyWith(
                         color: t.textSecondary,
                       ),
                     ),
@@ -1126,13 +1155,75 @@ class _AttachmentOverflowButtonState
   }
 }
 
+/// [child]'ı kaydırma konumu kadar yukarı öteler (en fazla [maxOffset]); tam
+/// kaybolunca dokunuşları da geçirir. Yalnızca `Transform` yeniden çizilir.
+class _FollowScroll extends StatelessWidget {
+  const _FollowScroll({
+    required this.scrollY,
+    required this.maxOffset,
+    required this.child,
+  });
+
+  final ValueListenable<double> scrollY;
+  final double Function() maxOffset;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    // Dış sınır: dönüşüm değişince yalnızca bu katman güncellenir (ekranın
+    // geri kalanı yeniden çizilmez). İç sınır: başlığın içeriği bir kez
+    // çizilip önbelleğe alınır, kaydırırken yalnızca konumu değişir.
+    return RepaintBoundary(
+      child: ValueListenableBuilder<double>(
+        valueListenable: scrollY,
+        child: RepaintBoundary(child: child),
+        builder: (context, y, child) {
+          final max = maxOffset();
+          final dy = y.clamp(0.0, max).toDouble();
+          return IgnorePointer(
+            ignoring: max > 0 && dy >= max - 1,
+            child: Transform.translate(offset: Offset(0, -dy), child: child),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Başlık (Flutter) ile gövde WebView'ı arasındaki küçük köprü: başlığın
+/// üstünde başlayan sürükleme gövdeyi kaydırsın diye. WebView durumu kayıt
+/// olur; `drag` kesirli birikimi tam piksele çevirip iletir.
+class _BodyScrollBridge {
+  Future<void> Function(int dy)? scrollBy;
+  double _remainder = 0;
+
+  void drag(double dy) {
+    final handler = scrollBy;
+    if (handler == null) return;
+    _remainder += dy;
+    final whole = _remainder.truncate();
+    if (whole == 0) return;
+    _remainder -= whole;
+    unawaited(handler(whole));
+  }
+}
+
 class _BodyView extends StatelessWidget {
   const _BodyView({
     required this.body,
     required this.fetchStatus,
     required this.onRetry,
     required this.onMailto,
+    this.topInset = 0,
+    this.onScrollY,
+    this.scrollBridge,
   });
+
+  /// Gövdenin üstünde (başlığın altında kalmasın diye) boş bırakılacak
+  /// yükseklik, kaydırma konumu bildirimi ve başlıktan sürükleme köprüsü.
+  final double topInset;
+  final ValueChanged<double>? onScrollY;
+  final _BodyScrollBridge? scrollBridge;
 
   /// Yerelde (offline-first) elde bulunan en güncel gövde — `null` ise
   /// henüz hiç inmemiş demektir.
@@ -1156,16 +1247,18 @@ class _BodyView extends StatelessWidget {
 
     if (body == null && fetchStatus.hasError) {
       final error = fetchStatus.error;
-      return _padded(
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: Space.xxl),
-          child: EmptyState(
-            icon: LucideIcons.cloudOff,
-            title: 'İçerik indirilemedi',
-            description: error is AppFailure ? error.userMessage : '$error',
-            action: OutlinedButton(
-              onPressed: onRetry,
-              child: const Text('Yeniden dene'),
+      return _scrolls(
+        _padded(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Space.xxl),
+            child: EmptyState(
+              icon: LucideIcons.cloudOff,
+              title: 'İçerik indirilemedi',
+              description: error is AppFailure ? error.userMessage : '$error',
+              action: OutlinedButton(
+                onPressed: onRetry,
+                child: const Text('Yeniden dene'),
+              ),
             ),
           ),
         ),
@@ -1182,43 +1275,62 @@ class _BodyView extends StatelessWidget {
       // `hasValue` ikisi de tamamlanana kadar `false` kalır — indirme
       // bitişi ile veri ekranda görünür oluşu arasında "içerik yok"
       // mesajının bir kare yanıp sönmesi yapısal olarak mümkün değildir.
-      return const _BodyShimmer();
+      return Padding(
+        padding: EdgeInsets.only(top: topInset),
+        child: const _BodyShimmer(),
+      );
     }
 
     final html = body?.html;
     final plain = body?.plainText;
 
     if (html != null && html.trim().isNotEmpty) {
-      // İçeriğinin boyuna uzar; dikey kaydırmayı ekranın tek kaydırma alanı
-      // yapar (bkz. `_HtmlWebView`). İki parmakla yakınlaştırma bunun
-      // üstüne ayrı bir katman olarak eklenir (bkz. `_PinchZoomableBody`).
-      return _PinchZoomableBody(
-        contentKey: body!.messageId,
-        child: _HtmlWebView(html: html, onMailto: onMailto),
+      // WebView alanı doldurur ve kendi içinde kaydırır (bkz. `_HtmlWebView`).
+      return _HtmlWebView(
+        html: html,
+        onMailto: onMailto,
+        topInset: topInset,
+        onScrollY: onScrollY,
+        bridge: scrollBridge,
       );
     }
 
     if (plain != null && plain.trim().isNotEmpty) {
-      return _padded(
-        SelectableText(plain, style: Theme.of(context).textTheme.bodyLarge),
+      return _scrolls(
+        _padded(
+          SelectableText(plain, style: Theme.of(context).textTheme.bodyLarge),
+        ),
       );
     }
 
-    return _padded(
-      Padding(
-        padding: const EdgeInsets.symmetric(vertical: Space.xxl),
-        child: Text(
-          'Bu iletinin metin içeriği yok.',
-          style: Theme.of(
-            context,
-          ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
+    return _scrolls(
+      _padded(
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.xxl),
+          child: Text(
+            'Bu iletinin metin içeriği yok.',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
+          ),
         ),
       ),
     );
   }
 
-  /// Gövde ekranın tek kaydırma alanının parçasıdır (bkz. `MailDetailScreen`);
-  /// kendi kaydırma görünümü yoktur — iç içe kaydırma oluşmaz.
+  /// WebView dışındaki içerik (düz metin, hata, boş durum) kendi kaydırma
+  /// alanına sarılır; başlığın altından başlar ve konumunu bildirir.
+  Widget _scrolls(Widget child) => NotificationListener<ScrollNotification>(
+    onNotification: (n) {
+      if (n.depth == 0) onScrollY?.call(n.metrics.pixels);
+      return false;
+    },
+    child: SingleChildScrollView(
+      padding: EdgeInsets.only(top: topInset),
+      child: child,
+    ),
+  );
+
   Widget _padded(Widget child) => Padding(
     padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
     child: child,
@@ -1262,369 +1374,6 @@ class _BodyShimmer extends StatelessWidget {
   }
 }
 
-/// Gövdeye iki parmakla yakınlaştırma ekler — bazı bültenler/faturalar çok
-/// küçük punto ile geliyor. Referans, Outlook mobilin mail okuma
-/// deneyimidir: doğal, parmağa yapışık bir pinch, sıçramasız yakınlaştırma
-/// ve parmak kalktıktan sonra akıcı bir toparlanma.
-///
-/// `_HtmlWebView`'ın kendi (native) yakınlaştırması bilinçli olarak kapalı
-/// (bkz. o widget'ın belgesi): içerik boyuna uzatılmış bir WebView'da
-/// büyütülen içerik dikeyde kaydırılamaz. Bunun yerine burada saf `Listener`
-/// ile İKİ (veya daha fazla) parmağın konumu izlenir ve ölçek/kaydırma elle
-/// hesaplanıp bir `Transform` ile uygulanır — jest arenasına HİÇ girilmez
-/// (`Listener`, `GestureRecognizer` gibi bir hareketi tekeline almaz, sadece
-/// izler). Böylece normal boyda dış kaydırma, bağlantı dokunuşu ve uzun
-/// basmayla metin seçme korunur; yalnızca ikinci parmak eklendiğinde
-/// yakınlaştırma devreye girer. Büyütülen alan kendi kutusunun
-/// sınırlarıyla kırpılır (`ClipRect`) — komşu widget'ların (konu başlığı,
-/// ekler) üstüne taşmaz.
-///
-/// Normal boyda gövde, ekranın `CustomScrollView` kaydırmasına katılır.
-/// Yakınlaştırıldığında bu widget'ın koşullu `PanGestureRecognizer`ı tek
-/// parmaklı sürüklemeyi devralır ve dönüşümü hem yatay hem dikey günceller;
-/// iki parmaklı pinch ise aşağıdaki `Listener` tarafından izlenmeye devam
-/// eder. WebView'ın yerel yakınlaştırması kapalıdır ve HTML düzeni Flutter
-/// dönüşümünden habersizdir, bu yüzden pan WebView'ın kendi scroll alanında
-/// değil, aynı görsel dönüşüm katmanında yapılmalıdır.
-class _PinchZoomableBody extends StatefulWidget {
-  const _PinchZoomableBody({required this.contentKey, required this.child});
-
-  /// İçerik değişince (başka bir iletiye geçilince) yakınlaştırmayı
-  /// sıfırlamak için kullanılan kimlik — pratikte ileti id'si.
-  /// `_HtmlWebView`, önceki/sonraki iletiye akıcı geçiş için bilerek AYNI
-  /// örnekte kalır (bkz. o widget'ın belgesi); bu widget da bu yüzden aynı
-  /// `State`i korur ve zum durumu kendiliğinden sıfırlanmaz — dışarıdan bu
-  /// sinyal olmasa yeni bir iletiye önceki iletinin yakınlaştırmasıyla
-  /// girilirdi.
-  final Object contentKey;
-
-  final Widget child;
-
-  @override
-  State<_PinchZoomableBody> createState() => _PinchZoomableBodyState();
-}
-
-class _PinchZoomableBodyState extends State<_PinchZoomableBody>
-    with SingleTickerProviderStateMixin {
-  static const double _minScale = 1;
-  static const double _maxScale = 4;
-
-  /// Sınırın (`_minScale`/`_maxScale`) ötesine ne kadar esneyebileceği —
-  /// kauçuk bant hissi. Parmak bırakılınca `_snapToBounds` bunu geçerli
-  /// aralığa geri toplar.
-  static const double _overscrollFriction = 0.4;
-
-  /// Parmak(lar) kalktıktan sonra sınıra/kimliğe toparlanırken kullanılan
-  /// yanıt hızı (1/sn) — yalnızca BU geçiş animasyonludur. Parmaklar
-  /// ekrandayken ölçek/kaydırma parmaklara BİREBİR (gecikmesiz) uyar (bkz.
-  /// `_onPointerMove`): gerçek cihazların (iOS/Android) yerel pinch-zoom'unda
-  /// hissedilen bir gecikme yoktur. Önceki sürümde bu yumuşatma aktif pinch
-  /// sırasında da uygulanıyordu; bu da parmağın birkaç kare gerisinde kalan,
-  /// "lastik gibi" amatör bir his veriyordu.
-  static const double _snapResponse = 12;
-
-  /// O anda ekranda olan parmaklar (pointer id → son konum) — `Listener`in
-  /// kendi kutusuna göre, yani DÖNÜŞÜMDEN ÖNCEKİ ham koordinatlarla.
-  final Map<int, Offset> _pointers = {};
-
-  // Parmakların o an hedeflediği (ham, kauçuk bantlı olabilen) değer.
-  double _targetScale = 1;
-  Offset _targetOffset = Offset.zero;
-
-  // Ekrana çizilen değer. Parmaklar ekrandayken `_targetScale`/`_targetOffset`
-  // ile birebir aynıdır; yalnızca son parmak kalktıktan sonraki toparlanma
-  // sırasında bundan ayrılıp `_onTick` ile hedefe yumuşakça yaklaşır.
-  double _scale = 1;
-  Offset _offset = Offset.zero;
-
-  /// `_boundsKey`in gerçek (yerleşmiş) kutu boyu — bkz. `_measureSize`.
-  /// `LayoutBuilder`+`constraints.biggest` KASITLI olarak kullanılmaz: bu
-  /// widget bir `SliverToBoxAdapter` içinde, kaydırma ekseninde SINIRSIZ bir
-  /// üst kısıtla (`maxHeight: double.infinity`) düzenlenir — slivers,
-  /// içeriğin kendi boyuna göre uzasın diye kısıtı böyle verir. Önceki sürüm
-  /// tam da bu kısıtı (`constraints.biggest`) boy olarak kullanıyordu; sonuç
-  /// `Size(genişlik, double.infinity)` idi ve dikey kaydırma sınırlaması
-  /// (`_clamp`) etkisiz kalıyordu — yakınlaştırılmış içerik dikeyde SINIRSIZ
-  /// sürüklenebiliyor, parmak kalkınca da (sınır zaten "yok" sayıldığından)
-  /// asla geri toplanmıyordu. Burada bunun yerine gerçek, ÇÖZÜLMÜŞ yerleşim
-  /// boyu bir `GlobalKey` üzerinden doğrudan `RenderBox`tan okunur.
-  final GlobalKey _boundsKey = GlobalKey();
-  Size _size = Size.zero;
-
-  late final Ticker _ticker;
-  Duration _lastTick = Duration.zero;
-
-  // İki parmaklı hareketin başladığı (ya da parmak sayısı değiştiği) andaki
-  // anlık görüntü — sonraki her `onPointerMove` bu referansa göre yeni ölçek/
-  // odak noktasını hesaplar. `_startScale`/`_startOffset` EKRANDA O AN
-  // GÖRÜNEN (`_scale`/`_offset`) değerden alınır, `_targetScale`/
-  // `_targetOffset`den DEĞİL — parmak tam da bir toparlanma animasyonunun
-  // ortasında ekrana değerse (nadir ama mümkün) yeni pinch'in aniden
-  // animasyonun BİTİŞ değerine sıçramasını önler.
-  double _startSpan = 0;
-  double _startScale = 1;
-  Offset _startFocal = Offset.zero;
-  Offset _startOffset = Offset.zero;
-
-  @override
-  void initState() {
-    super.initState();
-    // Boşta (parmak yokken) kare tüketmemesi için yalnızca toparlanma
-    // gerektiğinde (`_snapToBounds`) başlatılır.
-    _ticker = createTicker(_onTick);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
-  }
-
-  @override
-  void dispose() {
-    _ticker.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant _PinchZoomableBody oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    // Başka bir iletiye geçildi: `_HtmlWebView` aynı örnekte kalıp içeriği
-    // yerinde değiştirdiği için (akıcı geçiş, bkz. o widget'ın belgesi) bu
-    // State de kendiliğinden sıfırlanmaz — önceki iletinin yakınlaştırması
-    // yeni iletiye taşınmasın diye elle sıfırlanır.
-    if (oldWidget.contentKey != widget.contentKey) {
-      _pointers.clear();
-      _ticker.stop();
-      _targetScale = _minScale;
-      _targetOffset = Offset.zero;
-      _scale = _minScale;
-      _offset = Offset.zero;
-      // Yeni iletinin gövdesi farklı yükseklikte olabilir.
-      WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
-    }
-  }
-
-  /// `_boundsKey`in gerçek yerleşim boyunu okur. Yalnızca boy GERÇEKTEN
-  /// değiştiyse `setState` tetikler.
-  void _measureSize() {
-    if (!mounted) return;
-    final box = _boundsKey.currentContext?.findRenderObject();
-    if (box is! RenderBox || !box.hasSize) return;
-    final size = box.size;
-    if (size != _size) setState(() => _size = size);
-  }
-
-  void _startTicking() {
-    if (!_ticker.isTicking) {
-      _lastTick = Duration.zero;
-      _ticker.start();
-    }
-  }
-
-  /// Render edilen `_scale`/`_offset`i hedefe üstel biçimde yaklaştırır.
-  /// Yalnızca son parmak kalktıktan sonraki toparlanma sırasında çalışır —
-  /// parmaklar ekrandayken hiç çağrılmaz (bkz.
-  /// `_onPointerMove`, orada değerler doğrudan atanır). Kare süresinden
-  /// bağımsızdır (`dtSeconds` ile ölçeklenir) — cihazın tazeleme hızı
-  /// 60/90/120 Hz farketmeksizin aynı hissi verir.
-  void _onTick(Duration elapsed) {
-    final rawDt = _lastTick == Duration.zero ? elapsed : elapsed - _lastTick;
-    _lastTick = elapsed;
-    final dtSeconds = (rawDt.inMicroseconds / Duration.microsecondsPerSecond)
-        .clamp(0.0, 1 / 30);
-
-    final t = 1 - math.exp(-_snapResponse * dtSeconds);
-    final nextScale = _scale + (_targetScale - _scale) * t;
-    final nextOffset = _offset + (_targetOffset - _offset) * t;
-
-    final settled =
-        (nextScale - _targetScale).abs() < 0.002 &&
-        (nextOffset - _targetOffset).distance < 0.1;
-    setState(() {
-      _scale = settled ? _targetScale : nextScale;
-      _offset = settled ? _targetOffset : nextOffset;
-    });
-    if (settled) _ticker.stop();
-  }
-
-  void _onPointerDown(PointerDownEvent event) {
-    _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length == 2) {
-      // Yeni pinch: olası bir toparlanma animasyonunun ortasındaysak onu
-      // kesip parmaklar O ANKİ render edilen değeri devralır (bkz.
-      // `_startScale`/`_startOffset` alan belgesi).
-      _ticker.stop();
-      _armGesture();
-    }
-  }
-
-  void _armGesture() {
-    final points = _pointers.values.toList(growable: false);
-    _startSpan = (points[0] - points[1]).distance;
-    _startScale = _scale;
-    _startFocal = (points[0] + points[1]) / 2;
-    _startOffset = _offset;
-  }
-
-  void _onPointerMove(PointerMoveEvent event) {
-    if (!_pointers.containsKey(event.pointer)) return;
-    _pointers[event.pointer] = event.localPosition;
-    if (_pointers.length < 2 || _startSpan < 1 || _size == Size.zero) return;
-
-    final points = _pointers.values.toList(growable: false);
-    final span = (points[0] - points[1]).distance;
-    final focal = (points[0] + points[1]) / 2;
-    final rawScale = _startScale * span / _startSpan;
-    final scale = _softClamp(rawScale, _minScale, _maxScale);
-
-    // `Transform`ın `alignment: Alignment.center`i yüzünden bir içerik
-    // noktası `p` ekranda `center + offset + ölçek*(p - center)`e düşer.
-    // Pinch'in başladığı andaki bu denklemden, parmakların o an TAM ÜSTÜNDE
-    // durduğu içerik noktası (`anchor`) geriye çözülür; sonra AYNI nokta
-    // yeni ölçekte parmakların GÜNCEL orta noktasına (`focal`) denk
-    // düşecek şekilde `rawOffset` ileri hesaplanır — bu da parmakların
-    // altındaki içeriği pinch boyunca tam parmakların altında tutar. ÖNCEKİ
-    // sürüm burada yalnızca odak noktasının HAM hareketini offsete
-    // ekliyordu (`_startOffset + (focal - _startFocal)`); bu yalnızca odak
-    // tam merkezdeyken doğruydu — merkez dışı bir noktada (ör. bir görselin
-    // üstünde) pinch yapılınca ölçek büyüdükçe içerik parmaklardan kayardı.
-    final center = _size.center(Offset.zero);
-    final anchor = center + (_startFocal - center - _startOffset) / _startScale;
-    final rawOffset = focal - center - (anchor - center) * scale;
-
-    setState(() {
-      _targetScale = scale;
-      _targetOffset = _clamp(rawOffset, scale);
-      _scale = _targetScale;
-      _offset = _targetOffset;
-    });
-  }
-
-  void _onPointerGone(int pointer) {
-    _pointers.remove(pointer);
-    if (_pointers.length >= 2) {
-      _armGesture();
-    } else if (_pointers.isEmpty) {
-      _snapToBounds();
-    }
-  }
-
-  void _onPanUpdate(DragUpdateDetails details) {
-    // Listener aynı anda ham pointer sayısını tutar. İki parmaklı pinch'te
-    // PanGestureRecognizer'ın centroid hareketini ayrıca uygulamayarak
-    // yakınlaştırma ile sürüklemenin iki kez sayılmasını önler.
-    if (_targetScale <= _minScale || _pointers.length != 1) return;
-    _ticker.stop();
-    final next = _clamp(_offset + details.delta, _scale);
-    setState(() {
-      _targetOffset = next;
-      _offset = next;
-    });
-  }
-
-  void _onPanEnd(DragEndDetails details) {
-    if (_pointers.isEmpty) _snapToBounds();
-  }
-
-  /// Son parmak da kalkınca: kauçuk bantla sınırın az ötesindeyse geçerli
-  /// aralığa, 1'e yakınsa tam kimliğe (`scale=1, offset=0`) yumuşakça
-  /// toparlar — `_onTick` bunu akıcı bir animasyona çevirir, aksi halde
-  /// (anlık `setState`) tam da şikayet edilen "sınırda kaybolma" sıçraması
-  /// oluşurdu.
-  void _snapToBounds() {
-    final clamped = _targetScale.clamp(_minScale, _maxScale);
-    _targetScale = clamped <= _minScale + 0.05 ? _minScale : clamped;
-    _targetOffset = _targetScale <= _minScale
-        ? Offset.zero
-        : _clamp(_targetOffset, _targetScale);
-    if (_targetScale == _scale && _targetOffset == _offset) return;
-    _startTicking();
-  }
-
-  /// Üst sınırın ötesine sert bir duvara çarpmış gibi değil, esneyerek gider
-  /// (kauçuk bant) — parmak bırakılınca `_snapToBounds` bunu geri toplar.
-  /// Ne kadar hızlı/geniş bir jestte bile mantıksız büyüklüklere gitmesin
-  /// diye esneme payının kendi de bir tavanla (`max * 1.5`) sınırlanır.
-  ///
-  /// Alt sınırın (1x, "normal boy") ASLA altına inmez — kasıtlı: içeriği
-  /// normal boyutundan küçültmenin okumada bir faydası yok, ÜSTELİK önceki
-  /// sürümde burada da esneme uygulanınca `scale < 1` oluyor, bu da
-  /// `_clamp`teki `(scale - 1)` ifadesini negatife düşürüp `offset.dx.clamp`
-  /// çağrısını `min > max` haliyle çöktürüyordu — kullanıcının "aşırı
-  /// uzaklaştırınca mail kayboluyor" diye bildirdiği hata tam buydu.
-  double _softClamp(double value, double min, double max) {
-    if (value <= min) return min;
-    if (value > max) {
-      final capped = math.min(value, max * 1.5);
-      return max + (capped - max) * _overscrollFriction;
-    }
-    return value;
-  }
-
-  Offset _clamp(Offset offset, double scale) {
-    // `scale <= 1` iken kaydırılacak bir şey yoktur (içerik viewport'u
-    // taşmaz) — bunu erken döndürmek hem doğru davranış hem de aşağıdaki
-    // `(scale - 1)` negatif olup `min > max` ile çökmesini YAPISAL olarak
-    // imkânsız kılar (bkz. `_softClamp` notu).
-    if (scale <= 1) return Offset.zero;
-    if (_size == Size.zero) return offset;
-    final maxDx = _size.width * (scale - 1) / 2;
-    final maxDy = _size.height * (scale - 1) / 2;
-    return Offset(
-      offset.dx.clamp(-maxDx, maxDx),
-      offset.dy.clamp(-maxDy, maxDy),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // `SizeChangedLayoutNotifier`, `_boundsKey`in gerçek kutusu her yeniden
-    // yerleşimde ÖLÇÜSÜ değiştiğinde (içerik yüklendikçe, ekran döndükçe)
-    // bunu yukarı bildirir; boy bir sonraki karede (yerleşim kesinleştikten
-    // sonra) `_measureSize` ile yeniden okunur (bkz. `_size` alan belgesi).
-    final panGestures = _scale > _minScale
-        ? <Type, GestureRecognizerFactory<OneSequenceGestureRecognizer>>{
-            PanGestureRecognizer:
-                GestureRecognizerFactoryWithHandlers<PanGestureRecognizer>(
-                  PanGestureRecognizer.new,
-                  (recognizer) => recognizer
-                    ..onUpdate = _onPanUpdate
-                    ..onEnd = _onPanEnd,
-                ),
-          }
-        : const <
-            Type,
-            GestureRecognizerFactory<OneSequenceGestureRecognizer>
-          >{};
-
-    return NotificationListener<SizeChangedLayoutNotification>(
-      onNotification: (_) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _measureSize());
-        return false;
-      },
-      child: SizeChangedLayoutNotifier(
-        child: ClipRect(
-          key: _boundsKey,
-          child: RawGestureDetector(
-            gestures: panGestures,
-            behavior: HitTestBehavior.translucent,
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: _onPointerDown,
-              onPointerMove: _onPointerMove,
-              onPointerUp: (e) => _onPointerGone(e.pointer),
-              onPointerCancel: (e) => _onPointerGone(e.pointer),
-              child: Transform(
-                alignment: Alignment.center,
-                transform: Matrix4.identity()
-                  ..translateByDouble(_offset.dx, _offset.dy, 0, 1)
-                  ..scaleByDouble(_scale, _scale, _scale, 1),
-                child: widget.child,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Gerçek tarayıcı motoruyla (Android'de sistem WebView) gövde render'ı.
 ///
 /// Karmaşık tablo/`div` düzenlerini (fatura/bülten şablonları gibi) hafif,
@@ -1636,34 +1385,33 @@ class _PinchZoomableBodyState extends State<_PinchZoomableBody>
 /// dönüşümü). Uygulamanın temasını (`KaydetTokens`) izler: tema değişince
 /// belge yeni renklerle yeniden kurulur.
 ///
-/// Kendi içinde KAYDIRMAZ: render betiği içeriğin yüksekliğini bildirir (bkz.
-/// `MailHtmlDocument.layoutChannel`) ve WebView o boya uzatılır; dikey
-/// kaydırma, başlıkla birlikte ekranın tek `CustomScrollView`ındadır. WebView
-/// yalnızca dokunma (bağlantılar) ve uzun basma (metin seçimi) hareketlerini
-/// alır. Yakınlaştırma kapalıdır:
-/// içerik boyundaki bir WebView'da büyütülen içerik dikeyde kaydırılamazdı.
-/// Sığmayan sabit genişlikli e-postalar Android'de yine "ekrana sığdır" ile
-/// açılır (`useWideViewPort` + overview kipi, yakınlaştırma ayarından
-/// bağımsızdır).
+/// YEREL KAYDIRMA: WebView, verilen alanı doldurur ve kendi içinde (yerel
+/// olarak) kaydırır; içeriğin boyuna uzatılmaz, kaydırma sırasında yeniden
+/// boyutlanmaz. Parmak → yerel WebView → yerel bileşik katman akışı Flutter'a
+/// hiç uğramaz. Flutter'a yalnızca (1) ilk "içerik hazır" bildirimi (yükleme
+/// iskeletini kaldırmak için) ve (2) başlığın kaydırmayla birlikte yukarı
+/// gitmesi için kaydırma konumu gider (yalnızca başlığın dönüşümünü yeniler,
+/// `setState` yok). Yakınlaştırma da yereldir (pinch).
 ///
-/// Android'de bileşim (composition) kipi İÇERİK BOYUNA GÖRE değişir (bkz.
-/// `_HtmlWebViewState._switchToHybridComposition`): normal boydaki e-postalar
-/// (büyük çoğunluk) `webview_flutter_android`in VARSAYILAN, doku (texture)
-/// tabanlı kipinde kalır — paketin kendi belgesi Hybrid Composition'ı "expensive"
-/// (`initExpensiveAndroidView`) olarak adlandırır: her kaydırma karesinde
-/// platform görünümünü Android'in kendi View ağacında yeniden konumlandırmak
-/// doku tabanlı kipe göre gözle görülür şekilde daha pahalıdır ve Outlook'un
-/// akıcı kaydırmasının aksine kare düşürür. Hybrid Composition SADECE içerik
-/// bu dokunun sığabileceğinden (GPU'nun garantili en düşük doku boyutu,
-/// `_hybridCompositionThresholdPx`) uzunsa devreye girer — aksi hâlde doku
-/// WebView'ı sığdıramaz ve uygulama çöker (flutter/flutter#104889, #116954).
-/// Ekranın kendisinin geri geçişte (bkz. `MailDetailScreen` belgesi) donmuş
-/// bir görüntüyle animasyonlanması, Hybrid Composition kipindeyken WebView'ın
-/// geçiş sırasında ekranda "yırtılmasını" (tearing) da önler.
+/// Android'de WebView varsayılan, doku (texture) tabanlı kipte çalışır: görünen
+/// alan boyunda olduğu için dokuya her zaman sığar ve Hybrid Composition'ın
+/// (kare düşüren) maliyeti yoktur.
 class _HtmlWebView extends StatefulWidget {
-  const _HtmlWebView({required this.html, required this.onMailto});
+  const _HtmlWebView({
+    required this.html,
+    required this.onMailto,
+    this.topInset = 0,
+    this.onScrollY,
+    this.bridge,
+  });
 
   final String html;
+
+  /// Belgenin üstünde bırakılacak boşluk (CSS `--kd-top`; başlığın altında
+  /// kalmasın diye), kaydırma konumu bildirimi ve sürükleme köprüsü.
+  final double topInset;
+  final ValueChanged<double>? onScrollY;
+  final _BodyScrollBridge? bridge;
 
   /// `mailto:` bağlantısına dokunulunca alıcı adres(ler)i ile çağrılır.
   final ValueChanged<String> onMailto;
@@ -1673,49 +1421,26 @@ class _HtmlWebView extends StatefulWidget {
 }
 
 class _HtmlWebViewState extends State<_HtmlWebView> {
-  /// İçerik ölçülene kadarki boy — yalnızca yükleme iskeletini taşıyacak kadar.
-  static const double _placeholderHeight = 200;
-
-  /// Son emniyet: bozuk bir yerleşim WebView'ı sınırsız uzatamasın. Gerçek
-  /// iletiler bunun çok altında kalır.
-  static const double _maxHeight = 100000;
-
-  /// Uzun basma WebView'ın metin seçimini korur. Tek parmak sürüklemesi,
-  /// gövde normal boydayken dıştaki kaydırma alanında; büyütülmüşken ise
-  /// `_PinchZoomableBody`ın pan tanıyıcısındadır.
+  /// WebView tüm dokunuşları (kaydırma, pinch, uzun basma) kendisi alır.
   static final Set<Factory<OneSequenceGestureRecognizer>> _gestures = {
-    Factory<LongPressGestureRecognizer>(LongPressGestureRecognizer.new),
+    Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
   };
 
-  /// Android'in dokuya (texture) sığdırabileceği garantili en düşük yükseklik
-  /// (fiziksel piksel) — GLES'in garantili asgari `GL_MAX_TEXTURE_SIZE`si.
-  /// Gerçek cihazların çoğu çok daha fazlasını destekler, ama bilinmeyen bir
-  /// cihazda dokuyu bunun üstüne çıkarmak (bkz. `_switchToHybridComposition`)
-  /// az önce yazılıp iskeletten yeni çıkmış bir ekranı çökertme riski taşır —
-  /// bu yüzden kasıtlı olarak muhafazakâr seçilir.
-  static const double _hybridCompositionThresholdPx = 4096;
-
-  late WebViewController _controller;
-  late Widget _webView;
-
-  /// `true` olunca `_controller`/`_webView` Hybrid Composition ile kurulur
-  /// (bkz. `_createWebView`). Yeni bir iletiye geçilince (bkz.
-  /// `didUpdateWidget`) sıfıra döner — önceki ileti devasa olsa bile sıradaki
-  /// normal boyuttaki ileti yine hızlı doku kipinden başlar.
-  bool _hybridComposition = false;
+  late final WebViewController _controller;
+  late final Widget _webView;
 
   // `_load()` art arda (ör. ilk `didChangeDependencies` hemen ardından
   // `didUpdateWidget`) tetiklenirse, önce başlayan ama geç biten bir isolate
   // çağrısı sonucu yeni içeriğin üzerine yazmasın diye her çağrının kendi
   // sırası tutulur. Belgeye de kimlik olarak yazılır: yerine yenisi yüklenmiş
-  // eski belgeden geç gelen yükseklik bildirimi bununla ayıklanır.
+  // eski belgeden geç gelen "hazır" bildirimi bununla ayıklanır.
   int _loadToken = 0;
 
   // Belgenin en son hangi temayla kurulduğu. Tema `initState`te okunamayan bir
   // InheritedWidget'tır; bu yüzden ilk yükleme `didChangeDependencies`te yapılır.
   KaydetTokens? _tokens;
   Timer? _themeReload;
-  Timer? _measureFallback;
+  Timer? _readyFallback;
 
   // İlk yüklemenin, ekranın giriş geçişi bitene kadar ertelenmesi için (bkz.
   // `_scheduleInitialLoad`) — geçiş erken kapanırsa (ör. geri dönüldüyse)
@@ -1723,31 +1448,39 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   Animation<double>? _entranceAnimation;
   void Function(AnimationStatus)? _entranceListener;
 
-  /// WebView'ın ekrandaki genişliği (mantıksal piksel).
-  double _viewWidth = 0;
+  /// Android kaydırma konumunu mantıksal piksele çevirmek için.
+  double _pixelRatio = 1;
 
-  // Betiğin son bildirdiği içerik yüksekliği ve görünen alan genişliği (CSS px).
-  double? _cssHeight;
-  double? _cssWidth;
-
-  /// Gövdenin ekrandaki yüksekliği; `null` iken içerik henüz ölçülmedi ve
-  /// WebView'ın üstünde yükleme iskeleti durur.
-  double? _height;
+  /// İçerik yerleşti mi: `false` iken WebView'ın üstünde yükleme iskeleti durur.
+  bool _ready = false;
 
   @override
   void initState() {
     super.initState();
     _createWebView();
+    _registerBridge();
   }
 
-  /// `_controller`/`_webView`i (yeniden) kurar. Bileşim kipi `_hybridComposition`
-  /// tarafından belirlenir (bkz. alan belgesi ve `_switchToHybridComposition`).
+  void _registerBridge() {
+    widget.bridge?.scrollBy = (dy) => _controller.scrollBy(0, dy);
+  }
+
+  /// Belgenin üst boşluğunu (başlık boyu) CSS değişkenine yazar.
+  void _applyTopInset() {
+    unawaited(
+      _controller.runJavaScript(
+        "document.documentElement.style.setProperty('--kd-top', "
+        "'${widget.topInset.toStringAsFixed(1)}px');",
+      ),
+    );
+  }
+
   void _createWebView() {
     // JS açık: çalışan tek betik `MailHtmlDocument`in nonce'lu render
     // betiğidir; e-postanın kendi betikleri belgedeki CSP ile engellenir.
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..enableZoom(false)
+      ..enableZoom(true)
       ..setVerticalScrollBarEnabled(false)
       ..setOverScrollMode(WebViewOverScrollMode.never)
       ..addJavaScriptChannel(
@@ -1771,27 +1504,24 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     if (platform is AndroidWebViewController) {
       unawaited(platform.setUseWideViewPort(true));
     }
-    // Android'de kip: VARSAYILAN (doku tabanlı, `_hybridComposition == false`)
-    // hızlıdır ama platform görünümünü boyutu kadar bir dokuya çizdiğinden
-    // dokunun sığamayacağı kadar uzun içerikte uygulamayı çökertir (bkz. sınıf
-    // belgesi). Yalnızca `_switchToHybridComposition` bunu tespit edip
-    // Hybrid Composition'a geçtiğinde `true` olur — o kip WebView'ı gerçek bir
-    // Android görünümü olarak yerleştirir (dokuya bağlı değildir) ama daha
-    // pahalıdır.
-    _webView = platform is AndroidWebViewController
-        ? WebViewWidget.fromPlatformCreationParams(
-            params: AndroidWebViewWidgetCreationParams(
-              controller: platform,
-              displayWithHybridComposition: _hybridComposition,
-              gestureRecognizers: _gestures,
-            ),
-          )
-        : WebViewWidget(controller: _controller, gestureRecognizers: _gestures);
+    // Yerel kaydırma konumu: başlık bununla birebir kayar. Android bu değeri
+    // fiziksel pikselle bildirir; mantıksal piksele çevrilir.
+    unawaited(
+      _controller.setOnScrollPositionChange((change) {
+        final scale = platform is AndroidWebViewController ? _pixelRatio : 1.0;
+        widget.onScrollY?.call(change.y / scale);
+      }),
+    );
+    _webView = WebViewWidget(
+      controller: _controller,
+      gestureRecognizers: _gestures,
+    );
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _pixelRatio = MediaQuery.devicePixelRatioOf(context);
     final tokens = context.tokens;
     final previous = _tokens;
     _tokens = tokens;
@@ -1817,7 +1547,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   void dispose() {
     _themeReload?.cancel();
-    _measureFallback?.cancel();
+    _readyFallback?.cancel();
     _cancelEntranceListener();
     super.dispose();
   }
@@ -1825,53 +1555,15 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   void didUpdateWidget(covariant _HtmlWebView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _registerBridge();
+    if (oldWidget.topInset != widget.topInset) _applyTopInset();
     if (oldWidget.html != widget.html) {
-      // Yeni içerik: eski ölçü geçersizdir; yeni belge ölçülene kadar iskelet.
-      _height = null;
-      _cssHeight = null;
-      _cssWidth = null;
-      // Önceki ileti devasa olup Hybrid Composition'a geçirdiyse (bkz.
-      // `_switchToHybridComposition`) bu STATE (`_HtmlWebViewState`) akıcı
-      // geçiş için AYNI kalır (bkz. sınıf belgesi) — kip kendiliğinden
-      // sıfırlanmaz. Sıradaki ileti normal boyuttaysa yine de pahalı kipte
-      // kalıp gereksiz yere kaydırma FPS'inden ödün vermesin diye burada
-      // elle sıfırlanıp WebView yeniden (hızlı, doku tabanlı kipte) kurulur.
-      if (_hybridComposition) {
-        _hybridComposition = false;
-        _createWebView();
-        final tokens = _tokens;
-        if (tokens != null) {
-          unawaited(_controller.setBackgroundColor(tokens.readingBg));
-        }
-      }
+      // Yeni içerik: yeni belge yerleşene kadar iskelet. WebView AYNI kalır
+      // (yalnızca içerik yüklenir) — önceki/sonraki iletiye geçiş akıcıdır.
+      _ready = false;
+      widget.onScrollY?.call(0);
       unawaited(_load());
     }
-  }
-
-  /// Doku tabanlı (varsayılan, hızlı) kipten Hybrid Composition'a (yavaş ama
-  /// her boyu kaldırabilen) geçer — yalnızca `_applyHeight`/`_measureDirectly`
-  /// içerik boyunun dokuya sığamayacağını tespit ettiğinde çağrılır (bkz.
-  /// `_hybridCompositionThresholdPx`). WebView'ın platform görünümü bileşim
-  /// kipi kurulduktan sonra değiştirilemez, bu yüzden `_controller`/`_webView`
-  /// baştan kurulup içerik yeniden yüklenir; `_load()` yeni bir `_loadToken`
-  /// aldığından eski (artık sökülen) WebView'dan geç gelebilecek bir bildirim
-  /// zaten `_onLayoutMessage`de ayıklanır.
-  void _switchToHybridComposition() {
-    if (_hybridComposition || !mounted) return;
-    _hybridComposition = true;
-    _createWebView();
-    // Yeni `_controller` için `didChangeDependencies` bir daha çalışmaz —
-    // zemin rengi burada elle uygulanmazsa yeni WebView sayfa yüklenene kadar
-    // kendi varsayılan (beyaz) zeminiyle bir kare görünür (bkz.
-    // `didChangeDependencies`deki aynı satırın belgesi).
-    final tokens = _tokens;
-    if (tokens != null) unawaited(_controller.setBackgroundColor(tokens.readingBg));
-    setState(() {
-      _height = null;
-      _cssHeight = null;
-      _cssWidth = null;
-    });
-    unawaited(_load());
   }
 
   /// İlk yükleme (büyük gövdelerde platform kanalından geçen ağır
@@ -1937,6 +1629,10 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
       // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
       final noConflictingViewport = TextExtraction.stripMetaRefresh(
         TextExtraction.stripViewportMeta(html),
+      ).replaceAllMapped(
+        // Görsel çözme (decode) ana iş parçacığını tutmasın: `decoding=async`.
+        RegExp(r'<img\b(?![^>]*\bdecoding\s*=)', caseSensitive: false),
+        (m) => '<img decoding="async"',
       );
       return (
         TextExtraction.resolveColorSchemeQueries(
@@ -1964,7 +1660,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     );
   }
 
-  /// Render betiğinin yükseklik bildirimi: `{doc, h, w}` (CSS pikseli).
+  /// Render betiğinin "içerik yerleşti" bildirimi: `{doc, h, w}`. WebView
+  /// yerel kaydırdığı için boyun kendisi kullanılmaz; yalnızca yükleme
+  /// iskeletini kaldırmak için ilk bildirim beklenir.
   void _onLayoutMessage(JavaScriptMessage message) {
     final Object? data;
     try {
@@ -1972,92 +1670,23 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     } on FormatException {
       return;
     }
-    if (data case {
-      'doc': final int doc,
-      'h': final num h,
-      'w': final num w,
-    } when doc == _loadToken) {
-      _cssHeight = h.toDouble();
-      _cssWidth = w.toDouble();
-      _applyHeight();
+    if (data case {'doc': final int doc} when doc == _loadToken) {
+      _markReady();
     }
   }
 
-  void _applyHeight() {
-    final cssHeight = _cssHeight;
-    final cssWidth = _cssWidth;
-    if (!mounted || cssHeight == null || cssWidth == null) return;
-    if (cssWidth <= 0 || _viewWidth <= 0) return;
-    // Ekrandaki boy = CSS boyu × ölçek. Ölçek genellikle 1'dir; sığmayan
-    // sabit genişlikli e-postalar Android'de uzaklaştırılmış (< 1) açılır.
-    final height = clampDouble(
-      (cssHeight * _viewWidth / cssWidth).ceilToDouble(),
-      1,
-      _maxHeight,
-    );
-    _measureFallback?.cancel();
-    _applyMeasuredHeight(height);
+  void _markReady() {
+    _readyFallback?.cancel();
+    if (!_ready && mounted) setState(() => _ready = true);
   }
 
-  /// Ölçülen boyu uygular — ama önce Android'de doku tabanlı (hızlı, varsayılan)
-  /// kipteyken bu boyun dokuya sığıp sığmayacağını denetler (bkz.
-  /// `_hybridCompositionThresholdPx`). Sığmıyorsa boy hiç uygulanmaz; bunun
-  /// yerine `_switchToHybridComposition` WebView'ı güvenli (ama daha pahalı)
-  /// kipte yeniden kurup aynı içeriği tekrar yükler — o yüklemenin sonunda bu
-  /// metot yeniden çağrıldığında `_hybridComposition == true` olacağından
-  /// aşağıdaki denetim atlanıp boy normalce uygulanır.
-  void _applyMeasuredHeight(double height) {
-    if (!_hybridComposition) {
-      final platform = _controller.platform;
-      if (platform is AndroidWebViewController &&
-          height * MediaQuery.devicePixelRatioOf(context) >
-              _hybridCompositionThresholdPx) {
-        _switchToHybridComposition();
-        return;
-      }
-    }
-    if (height != _height) setState(() => _height = height);
-  }
-
-  void _trackViewWidth(double width) {
-    if (width == _viewWidth) return;
-    _viewWidth = width;
-    // Genişlik değişince (döndürme) içerik yeniden akar ve betik yeni ölçüyü
-    // kendisi bildirir. Yalnızca ilk bildirim WebView yerleşmeden gelmişse
-    // (beklenmez) genişlik belli olunca uygulanır.
-    if (_height == null && _cssHeight != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _applyHeight());
-    }
-  }
-
-  /// Emniyet ağı: render betiği yüksekliği bildiremezse (beklenmez) iskelet
-  /// sonsuza dek kalmasın — sayfa yüklendikten kısa süre sonra yükseklik
-  /// doğrudan sorulur.
+  /// Emniyet ağı: render betiği bildirim yapamazsa (beklenmez) iskelet sonsuza
+  /// dek kalmasın — sayfa yüklendikten kısa süre sonra hazır sayılır.
   void _onPageFinished(String url) {
-    if (_height != null) return;
-    _measureFallback?.cancel();
-    _measureFallback = Timer(const Duration(seconds: 1), _measureDirectly);
-  }
-
-  Future<void> _measureDirectly() async {
-    final token = _loadToken;
-    Object? ratio;
-    try {
-      // İçerik yüksekliğinin görünen alan genişliğine oranı (ikisi de CSS
-      // px): ekrandaki yükseklik = oran × WebView genişliği.
-      ratio = await _controller.runJavaScriptReturningResult(
-        'document.documentElement.scrollHeight / '
-        '((window.visualViewport && window.visualViewport.width) || '
-        'window.innerWidth)',
-      );
-    } catch (_) {
-      // Ölçülemedi: iskelet yer tutucu boyda kalkar.
-    }
-    if (!mounted || token != _loadToken || _height != null) return;
-    final height = ratio is num && ratio > 0 && _viewWidth > 0
-        ? (ratio * _viewWidth).ceilToDouble()
-        : _placeholderHeight;
-    _applyMeasuredHeight(clampDouble(height, 1, _maxHeight));
+    _applyTopInset();
+    if (_ready) return;
+    _readyFallback?.cancel();
+    _readyFallback = Timer(const Duration(seconds: 1), _markReady);
   }
 
   /// Bağlantı tıklamaları WebView içinde takip edilmez — aksi hâlde kullanıcı
@@ -2129,44 +1758,38 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        _trackViewWidth(constraints.maxWidth);
-        return SizedBox(
-          height: _height ?? _placeholderHeight,
-          child: Stack(
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        _webView,
+        // İçerik yerleşene kadar gövde iskeleti WebView'ın üstünde durur
+        // (anında belirir); hazır olunca yumuşakça söner ve ağaçtan çıkar —
+        // shimmer animasyonu görünmezken boşuna dönmez. İskelet başlığın
+        // altından başlar.
+        AnimatedSwitcher(
+          duration: Motion.instant,
+          reverseDuration: Motion.base,
+          layoutBuilder: (current, previous) => Stack(
             fit: StackFit.expand,
-            children: [
-              _webView,
-              // İçerik ölçülene kadar gövde iskeleti WebView'ın üstünde durur
-              // (anında belirir); ölçü gelince yumuşakça söner ve ağaçtan
-              // çıkar — shimmer animasyonu görünmezken boşuna dönmez.
-              AnimatedSwitcher(
-                duration: Motion.instant,
-                reverseDuration: Motion.base,
-                layoutBuilder: (current, previous) => Stack(
-                  fit: StackFit.expand,
-                  children: [...previous, ?current],
-                ),
-                child: _height == null
-                    ? ColoredBox(
-                        color: t.readingBg,
-                        // Sönerken gövde iskeletten kısa olabilir: iskelet
-                        // kendi boyunda çizilip kırpılır, taşma olmaz.
-                        child: const ClipRect(
-                          child: OverflowBox(
-                            alignment: Alignment.topCenter,
-                            maxHeight: double.infinity,
-                            child: _BodyShimmer(),
-                          ),
-                        ),
-                      )
-                    : const SizedBox.shrink(),
-              ),
-            ],
+            children: [...previous, ?current],
           ),
-        );
-      },
+          child: _ready
+              ? const SizedBox.shrink()
+              : ColoredBox(
+                  color: t.readingBg,
+                  child: ClipRect(
+                    child: OverflowBox(
+                      alignment: Alignment.topCenter,
+                      maxHeight: double.infinity,
+                      child: Padding(
+                        padding: EdgeInsets.only(top: widget.topInset),
+                        child: const _BodyShimmer(),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 }

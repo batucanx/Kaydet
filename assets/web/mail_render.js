@@ -31,11 +31,11 @@
  *     içindeki metin) tasarlandığı gibi bırakılır. Her metin, çevrildikten
  *     sonraki gerçek zeminine göre okunabilir kontrasta zorlanır.
  *
- *  4. Yükseklik bildirimi — okuma ekranında WebView kendi içinde kaydırmaz:
- *     boyu içeriğin boyuna eşitlenir ve e-posta başlığıyla birlikte ekranın
- *     TEK kaydırma alanında kayar. İçerik boyu her değiştiğinde uygulamaya
- *     bildirilir. Bunun ön koşulu olarak vh/vmin/vmax birimleri ekran boyuna
- *     göre piksele sabitlenir (aksi hâlde boy uzadıkça içerik de uzar).
+ *  4. "İçerik yerleşti" bildirimi — WebView kendi içinde (yerel olarak)
+ *     kaydırır; içerik boyu uygulamaya yalnızca ilk yerleşimden sonra BİR KEZ
+ *     bildirilir (yükleme iskeletini kaldırmak için), sonrasında ölçüm ve
+ *     bildirim yapılmaz (`cfg.once`). vh/vmin/vmax birimleri ekran boyuna
+ *     göre piksele sabitlenir (e-postanın tasarlandığı gibi).
  *
  * Tüm hesap `getComputedStyle` üzerinden yapılır: satır içi stil, <style>
  * sınıfları, bgcolor/color/text nitelikleri ve kalıtım hazır çözülmüş gelir.
@@ -377,15 +377,11 @@
   // durumda native WebView (`useWideViewPort`, bkz. `_HtmlWebView`) sayfayı
   // OLDUĞU GENİŞLİKTE yerleştirip bütününü ekrana sığacak şekilde küçültür;
   // WKWebView'da (iOS) bunun karşılığı yok — taşan içerik sağdan kırpılır
-  // (yakınlaştırma da kapalı, bkz. `enableZoom(false)`, kullanıcı kaydırıp
-  // da göremez). Aynı "bütünü küçült" davranışı burada `<kd-root>`a bir
-  // `transform: scale()` ile taklit edilir; yalnızca `applyFluid`den SONRA
-  // hâlâ taşma varsa devreye girer, onun başarılı olduğu e-postalara
-  // dokunmaz. `getBoundingClientRect` (bkz. `contentHeight`) CSS transform'u
-  // zaten hesaba kattığı için Dart tarafında ek bir değişiklik gerekmez —
-  // bildirilen yükseklik doğrudan küçültülmüş olarak çıkar. Küçültülmüş
-  // metni yakından okumak için kullanıcı iki parmakla yakınlaştırabilir
-  // (bkz. `_PinchZoomableBody`).
+  // (taşan içerik sağdan kırpılırdı). Aynı "bütünü küçült" davranışı burada
+  // `<kd-root>`a bir `transform: scale()` ile taklit edilir; yalnızca
+  // `applyFluid`den SONRA hâlâ taşma varsa devreye girer, onun başarılı
+  // olduğu e-postalara dokunmaz. Küçültülmüş metni yakından okumak için
+  // kullanıcı iki parmakla yakınlaştırabilir (WebView'ın yerel pinch'i).
   var shrinkWrap = null;
   var shrinkScale = 1;
 
@@ -424,9 +420,7 @@
 
   // ── Görünüm birimleri ─────────────────────────────────────────────────
 
-  // WebView içerik boyuna uzatıldığı için "100vh" ekranı değil tüm içeriği
-  // ifade eder: vh'ye bağlı bir blok her uzamada yeniden uzar ve boy sonsuza
-  // dek büyür. vh/vb/vmin/vmax (s/l/d önekleriyle) e-postanın tasarlandığı
+  // vh/vb/vmin/vmax (s/l/d önekleriyle) e-postanın tasarlandığı
   // gibi ekran boyuna göre piksele sabitlenir; vw'ye dokunulmaz (genişlik
   // zaten ekran genişliğidir). `url(...)` içindeki dosya adları eşleşmez:
   // sayıdan önce boşluk/`(`/`,`, birimden sonra da `.`/harf olmaması aranır.
@@ -502,8 +496,13 @@
       (parseFloat(bs.marginBottom) || 0);
   }
 
+  var reported = false;
+
   function report() {
     reportTimer = 0;
+    // Yerel kaydırma: boy yalnızca ilk kez bildirilir (yerleşim okuması ve
+    // kanal trafiği sonrasında yok).
+    if (cfg.once && reported) return;
     var channel = cfg.channel && window[cfg.channel];
     if (!channel || typeof channel.postMessage !== 'function') return;
     var vv = window.visualViewport;
@@ -514,6 +513,7 @@
     lastHeight = h;
     lastWidth = w;
     channel.postMessage(JSON.stringify({ doc: cfg.doc, h: h, w: w }));
+    reported = true;
   }
 
   // Geriye sayan (trailing) debounce: her yeni tetikleyici sayacı sıfırlar,
@@ -522,6 +522,7 @@
   // bir bildirime/yeniden boyutlandırmaya iner. rAF yerine zamanlayıcı: WebView
   // ekranın dışındayken (başlık uzun, gövde henüz aşağıda) rAF hiç çalışmayabilir.
   function scheduleReport() {
+    if (cfg.once && reported) return;
     clearTimeout(reportTimer);
     reportTimer = setTimeout(function () {
       reportTimer = 0;

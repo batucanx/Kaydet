@@ -30,13 +30,19 @@ import '../../core/theme/tokens.dart';
 ///    tedarikçi) posta geldiği için bu emniyet kemeri çıkarılmaz; render'a
 ///    hiçbir etkisi yoktur.
 ///
-/// 4. **Ölçü sarmalayıcısı** — gövde `<kd-root>` içine alınır. Okuma
-///    ekranında WebView kendi içinde kaydırmaz, boyu içeriğin boyuna eşitlenir;
-///    render betiği bu öğenin yüksekliğini [layoutChannel] üzerinden bildirir.
-///    Belgenin `scrollHeight`'i bunun için kullanılamaz: görünen alandan küçük
-///    olamaz ve `body { height: 100% }` gibi kurallarda WebView'ın kendi
-///    boyunu geri döndürür. Webmail istemcileri (Gmail, Outlook.com) de
-///    e-postayı bir sarmalayıcıya aldığından e-posta CSS'i buna hazırdır.
+/// 4. **Ölçü sarmalayıcısı** — gövde `<kd-root>` içine alınır. WebView kendi
+///    içinde (yerel olarak) kaydırır; render betiği bu öğenin yüksekliğini
+///    [layoutChannel] üzerinden YALNIZCA BİR KEZ, "içerik yerleşti" işareti
+///    olarak bildirir. Belgenin `scrollHeight`'i bunun için kullanılamaz:
+///    görünen alandan küçük olamaz ve `body { height: 100% }` gibi kurallarda
+///    WebView'ın kendi boyunu geri döndürür. Webmail istemcileri (Gmail,
+///    Outlook.com) de e-postayı bir sarmalayıcıya aldığından e-posta CSS'i buna
+///    hazırdır.
+///
+/// 5. **Üst boşluk** — başlık (Flutter) gövdenin üstünde bir katman olduğu için
+///    `<kd-root>`'tan önce, yüksekliği `--kd-top` CSS değişkeninden gelen bir
+///    boşluk öğesi (`#kd-top`) durur. Değişkeni Flutter yazar; öğe satır içi
+///    `!important` taşıdığından e-postanın kendi CSS'i onu ezemez.
 abstract final class MailHtmlDocument {
   static const String _scriptAsset = 'assets/web/mail_render.js';
 
@@ -76,6 +82,10 @@ abstract final class MailHtmlDocument {
       'minFont': minFontPx,
       'channel': layoutChannel,
       'doc': documentId,
+      // WebView yerel kaydırdığı için içerik boyu Flutter'a yalnızca bir kez
+      // ("içerik yerleşti" işareti olarak) bildirilir; sonrasında ölçüm ve
+      // bildirim yapılmaz.
+      'once': true,
     });
 
     return '''
@@ -86,13 +96,15 @@ abstract final class MailHtmlDocument {
 <meta http-equiv="Content-Security-Policy" content="script-src 'nonce-$nonce'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width">
 <style>
+html { -webkit-tap-highlight-color: transparent; }
 :root { color-scheme: ${dark ? 'dark' : 'light'}; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 html { background: ${_hex(tokens.readingBg)}; overflow-x: hidden; }
 body { margin: 0; padding: 16px; color: ${_hex(tokens.textPrimary)}; font-family: -apple-system, Roboto, sans-serif; overflow-wrap: break-word; overflow-x: hidden; }
 a { overflow-wrap: anywhere; }
 img { max-width: 100%; }
+video, iframe, embed, object { max-width: 100%; }
 img:not([width="1"]):not([height="1"]) { height: auto; }
-pre { white-space: pre-wrap; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 kd-root { display: flow-root; }
 </style>
 <script nonce="$nonce">window.__kaydet = $config;</script>
@@ -100,7 +112,7 @@ kd-root { display: flow-root; }
 $script
 </script>
 </head>
-<body><kd-root>$body</kd-root></body>
+<body><div id="kd-top" style="height:var(--kd-top,0px) !important;margin:0 !important;padding:0 !important;border:0 !important;overflow:hidden"></div><kd-root>$body</kd-root></body>
 </html>
 ''';
   }
