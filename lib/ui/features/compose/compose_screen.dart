@@ -30,6 +30,7 @@ import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
 import '../../core/navigation/kaydet_route.dart';
+import '../settings/signatures_settings_screen.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
@@ -777,6 +778,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// yazmayla aynı yerleştirme deseni (bkz. `_startListening`).
   void _insertSignature(String body) {
     if (body.isEmpty) return;
+    // Aynı imza gövdede zaten varsa (otomatik eklenen varsayılan dahil) tekrar
+    // eklenmez.
+    if (_bodyPlainText.contains(body.trim())) return;
     final selection = _quill.selection;
     final index = selection.isValid
         ? selection.start
@@ -1684,7 +1688,23 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
   }
 
   void _onFocusChange() {
-    if (!widget.focusNode.hasFocus) _commitFragment();
+    if (widget.focusNode.hasFocus) return;
+    _commitFragment();
+    if (_expandedAll && mounted) setState(() => _expandedAll = false);
+  }
+
+  /// Odak dışındayken en fazla bu kadar çip görünür; kalanı "+N" olur.
+  static const _collapsedVisible = 2;
+
+  /// "+N"e dokunulunca alan, odağını kaybedene kadar tüm çipleri gösterir.
+  bool _expandedAll = false;
+
+  /// Alanı etkinleştirir; daraltılmışsa önce açılır, sonra odak verilir.
+  void _activate(FocusNode node) {
+    if (!_expandedAll) setState(() => _expandedAll = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) node.requestFocus();
+    });
   }
 
   /// Boş alanda geri tuşu son çipi siler. `TextField` bu tuşu boş metinde
@@ -1791,7 +1811,7 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
             _fieldWidth = constraints.maxWidth;
             return GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: focusNode.requestFocus,
+              onTap: () => _activate(focusNode),
               child: Container(
                 constraints: const BoxConstraints(minHeight: 48),
                 decoration: BoxDecoration(
@@ -1821,9 +1841,16 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                         // (bkz. `RecipientChipLayout`).
                         child: LayoutBuilder(
                           builder: (context, box) {
+                            final collapsed =
+                                !focusNode.hasFocus &&
+                                !_expandedAll &&
+                                _chips.length > _collapsedVisible;
+                            final shown = collapsed
+                                ? _chips.take(_collapsedVisible).toList()
+                                : _chips;
                             final maxWidths = RecipientChipLayout.maxWidths(
                               naturalWidths: [
-                                for (final chip in _chips)
+                                for (final chip in shown)
                                   _RecipientChip.naturalWidth(context, chip),
                               ],
                               available: box.maxWidth,
@@ -1839,13 +1866,37 @@ class _RecipientChipsFieldState extends ConsumerState<_RecipientChipsField> {
                                 // anında `_chips[i]`ye değil, çizildiği andaki
                                 // çipe bağlı kalır (aynı karede silinse bile
                                 // aralık hatası olmaz).
-                                for (final (i, chip) in _chips.indexed)
+                                for (final (i, chip) in shown.indexed)
                                   _RecipientChip(
                                     address: chip,
                                     maxWidth: maxWidths[i],
                                     onTap: () => _showDetails(chip),
                                     onRemove: () => _removeChip(chip),
                                   ),
+                                if (collapsed)
+                                  InkWell(
+                                    onTap: () => _activate(focusNode),
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.sm,
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: Space.sm,
+                                        vertical: Space.xs,
+                                      ),
+                                      child: Text(
+                                        '+${_chips.length - _collapsedVisible}',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .labelMedium
+                                            ?.copyWith(
+                                              color: t.accent,
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                      ),
+                                    ),
+                                  )
+                                else
                                 IntrinsicWidth(
                                   child: ConstrainedBox(
                                     constraints: const BoxConstraints(
@@ -2521,17 +2572,92 @@ class _SignatureMenuButton extends StatelessWidget {
   final ValueChanged<SignatureRow> onSelected;
   final Color? color;
 
+  static const double _menuWidth = 264;
+
   @override
   Widget build(BuildContext context) {
+    final t = context.tokens;
+    final textTheme = Theme.of(context).textTheme;
+    // Varsayılan imza en üstte; geri kalanın göreli sırası korunur.
+    final ordered = [
+      ...signatures.where((s) => s.isDefault),
+      ...signatures.where((s) => !s.isDefault),
+    ];
     return MenuAnchor(
       animated: true,
       menuChildren: [
-        for (final signature in signatures)
+        if (ordered.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: Space.lg,
+              vertical: Space.md,
+            ),
+            child: Text(
+              'Henüz imza eklenmedi',
+              style: textTheme.bodyMedium?.copyWith(color: t.textTertiary),
+            ),
+          ),
+        for (final signature in ordered)
           MenuItemButton(
             leadingIcon: const Icon(LucideIcons.penLine),
             onPressed: () => onSelected(signature),
-            child: Text(signature.name),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minWidth: _menuWidth,
+                maxWidth: _menuWidth,
+                minHeight: Dimens.touchTarget,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: Space.xs),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            signature.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (signature.isDefault) ...[
+                          const SizedBox(width: Space.sm),
+                          Text(
+                            'Varsayılan',
+                            style: textTheme.labelSmall?.copyWith(
+                              color: t.textTertiary,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    if (signature.body.trim().isNotEmpty)
+                      Text(
+                        signature.body.trim(),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall?.copyWith(
+                          color: t.textSecondary,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
           ),
+        Divider(height: 1, color: t.divider),
+        // Yönetim ekranı yeniden yazılmaz: mevcut Ayarlar → İmzalar açılır.
+        // Yazma ekranı yığında kalır (taslak/gövde korunur); imza listesi
+        // `signaturesForAccountProvider` akışı olduğu için dönüşte kendiliğinden
+        // güncellenir.
+        MenuItemButton(
+          leadingIcon: const Icon(LucideIcons.plus),
+          onPressed: () =>
+              context.pushScreen<void>(const SignaturesSettingsScreen()),
+          child: const Text('Yeni imza'),
+        ),
       ],
       builder: (context, controller, child) => IconButton(
         icon: Icon(LucideIcons.penLine, size: IconSize.md, color: color),
@@ -3139,12 +3265,11 @@ class _MainToolbarRow extends StatelessWidget {
         // Yazma açılışında zaten varsayılan imza otomatik eklendiği için bu,
         // kullanıcının isteğe bağlı olarak başka bir imza eklemesi/
         // değiştirmesi içindir (bkz. `_ComposeScreenState._insertSignature`).
-        if (signatures.isNotEmpty)
-          _SignatureMenuButton(
-            signatures: signatures,
-            onSelected: onSignatureSelected,
-            color: t.textSecondary,
-          ),
+        _SignatureMenuButton(
+          signatures: signatures,
+          onSelected: onSignatureSelected,
+          color: t.textSecondary,
+        ),
         IconButton(
           icon: Icon(
             LucideIcons.layoutTemplate,
