@@ -75,6 +75,43 @@ export function openDatabase(path: string): Database.Database {
       created_at INTEGER NOT NULL,
       UNIQUE (device_id, client_account_id)
     );
+
+    -- Çeviri kotası: ay ('2026-09') başına ayrı satır; eski aylar geçmiş
+    -- kullanım analizi için silinmez. reserved = Azure'a gitmek üzere ayrılmış
+    -- (henüz sonuçlanmamış), consumed = harcanmış karakter.
+    CREATE TABLE IF NOT EXISTS translation_usage (
+      month TEXT PRIMARY KEY,
+      reserved_characters INTEGER NOT NULL DEFAULT 0,
+      consumed_characters INTEGER NOT NULL DEFAULT 0,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS user_translation_usage (
+      user_id TEXT NOT NULL,
+      month TEXT NOT NULL,
+      reserved_characters INTEGER NOT NULL DEFAULT 0,
+      consumed_characters INTEGER NOT NULL DEFAULT 0,
+      request_count INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, month)
+    );
+    -- Çeviri önbelleği. Anahtar kullanıcıya da bağlıdır: ileti kimliği
+    -- (istemcideki yerel satır no) kullanıcılar arasında çakışabilir, bir
+    -- kullanıcı başkasının çevirisini görmemeli. source_hash, aynı anahtar için
+    -- içerik değişmişse eski çeviriyi sunmayı önler.
+    CREATE TABLE IF NOT EXISTS translated_email_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      source_language TEXT NOT NULL,
+      target_language TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      translated_subject TEXT NOT NULL,
+      translated_segments TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE (user_id, message_id, source_language, target_language)
+    );
   `);
   return db;
 }

@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -17,9 +18,12 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/translation_providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/repositories/translation_repository.dart'
+    show MailTranslation;
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/attachment_type.dart';
 import '../../../domain/use_cases/text_extraction.dart';
@@ -36,6 +40,7 @@ import '../compose/compose_launcher.dart';
 import '../compose/compose_screen.dart' show ComposeMode;
 import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
+import 'translate_bar.dart';
 
 /// İleti okuma ekranı.
 ///
@@ -242,9 +247,18 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       );
     }
 
-    final subject = message.subject.trim().isEmpty
+    // Çeviri gösteriliyorsa konu ve gövde çevrilmiş halleriyle çizilir;
+    // gövde WebView'ı aynı örnekte kalıp yalnızca içeriğini değiştirir.
+    final translation = ref
+        .watch(translationControllerProvider(_messageId))
+        .translation;
+    final originalSubject = message.subject.trim().isEmpty
         ? '(konu yok)'
         : message.subject;
+    final subject = (translation?.subject.trim().isNotEmpty ?? false)
+        ? translation!.subject
+        : originalSubject;
+    final shownBody = _withTranslation(body, translation);
 
     return RepaintBoundary(
       key: _screenBoundaryKey,
@@ -326,6 +340,12 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
                                 _AttachmentStrip(attachments: attachments),
                                 const SizedBox(height: Space.lg),
                               ],
+                              TranslateBar(
+                                messageId: _messageId,
+                                subject: message.subject,
+                                body: body,
+                                noticeBottomInset: _ActionBar.height,
+                              ),
                             ],
                           ),
                         ),
@@ -335,7 +355,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
                       ),
                       SliverToBoxAdapter(
                         child: _BodyView(
-                          body: body,
+                          body: shownBody,
                           fetchStatus: bodyFetch,
                           onRetry: () =>
                               ref.invalidate(bodyFetchProvider(_messageId)),
@@ -361,6 +381,19 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       ),
     );
   }
+}
+
+/// Çeviri gösteriliyorsa gövdenin içeriğini çevrilmiş haliyle değiştirir
+/// (HTML iletide `html`, düz metin iletide `plainText`); değilse aynen döner.
+MessageBodyRow? _withTranslation(
+  MessageBodyRow? body,
+  MailTranslation? translation,
+) {
+  if (body == null || translation == null) return body;
+  final hasHtml = body.html?.trim().isNotEmpty ?? false;
+  return hasHtml
+      ? body.copyWith(html: Value(translation.content))
+      : body.copyWith(plainText: Value(translation.content));
 }
 
 class _BackButton extends StatelessWidget {

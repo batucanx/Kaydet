@@ -61,6 +61,8 @@ class AttachmentSearchResult {
     Signatures,
     Contacts,
     PendingOperations,
+    TranslatedEmailCache,
+    MessageLanguages,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -76,7 +78,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -179,6 +181,15 @@ class AppDatabase extends _$AppDatabase {
       // dizin atılıp yerel iletilerden yeniden kurulur.
       if (from < 12) {
         await _rebuildFtsIndex();
+      }
+      // v12 → v13: İleti çevirisi önbelleği (bkz. `TranslationRepository`).
+      // Yalnızca yeni tablo; var olan veriye dokunulmaz.
+      if (from < 13) {
+        await m.createTable(translatedEmailCache);
+      }
+      // v13 → v14: algılanan kaynak dil önbelleği (yalnızca yeni tablo).
+      if (from < 14) {
+        await m.createTable(messageLanguages);
       }
     },
     beforeOpen: (details) async {
@@ -1276,6 +1287,72 @@ class AppDatabase extends _$AppDatabase {
       q.where((c) => c.accountId.equals(accountId));
     }
     return q.watch();
+  }
+
+  /// İletinin önbellekteki çevirisi; yoksa `null`.
+  Future<TranslatedEmailCacheRow?> getTranslation({
+    required int messageId,
+    required String sourceLanguage,
+    required String targetLanguage,
+  }) =>
+      (select(translatedEmailCache)..where(
+            (t) =>
+                t.messageId.equals(messageId) &
+                t.sourceLanguage.equals(sourceLanguage) &
+                t.targetLanguage.equals(targetLanguage),
+          ))
+          .getSingleOrNull();
+
+  /// İletinin daha önce algılanmış kaynak dili; yoksa `null`.
+  Future<String?> getMessageLanguage(int messageId) async {
+    final row = await (select(
+      messageLanguages,
+    )..where((t) => t.messageId.equals(messageId))).getSingleOrNull();
+    return row?.language;
+  }
+
+  Future<void> saveMessageLanguage(int messageId, String language) =>
+      into(messageLanguages).insertOnConflictUpdate(
+        MessageLanguagesCompanion.insert(
+          messageId: Value(messageId),
+          language: language,
+          detectedAt: Value(DateTime.now()),
+        ),
+      );
+
+  /// Çeviriyi kaydeder; (ileti, kaynak dil, hedef dil) için zaten kayıt varsa
+  /// günceller — tekil anahtar yüzünden yinelenen kayıt oluşmaz.
+  Future<void> saveTranslation({
+    required int messageId,
+    required String sourceLanguage,
+    required String targetLanguage,
+    required String translatedSubject,
+    required String translatedHtml,
+  }) async {
+    final now = DateTime.now();
+    await into(translatedEmailCache).insert(
+      TranslatedEmailCacheCompanion.insert(
+        messageId: messageId,
+        sourceLanguage: Value(sourceLanguage),
+        targetLanguage: targetLanguage,
+        translatedSubject: Value(translatedSubject),
+        translatedHtml: Value(translatedHtml),
+        createdAt: Value(now),
+        updatedAt: Value(now),
+      ),
+      onConflict: DoUpdate(
+        (old) => TranslatedEmailCacheCompanion(
+          translatedSubject: Value(translatedSubject),
+          translatedHtml: Value(translatedHtml),
+          updatedAt: Value(now),
+        ),
+        target: [
+          translatedEmailCache.messageId,
+          translatedEmailCache.sourceLanguage,
+          translatedEmailCache.targetLanguage,
+        ],
+      ),
+    );
   }
 
   /// Kişiyi ekler; zaten varsa kullanım sayacını/son kullanım zamanını

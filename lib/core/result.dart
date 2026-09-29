@@ -214,6 +214,41 @@ final class RecipientRejectedFailure extends AppFailure {
   bool get isActionable => true;
 }
 
+/// Aylık genel çeviri limiti doldu (sunucu `TRANSLATION_MONTHLY_LIMIT_REACHED`).
+final class TranslationMonthlyLimitFailure extends AppFailure {
+  const TranslationMonthlyLimitFailure({super.detail});
+
+  @override
+  String get userMessage => 'Bu ay için çeviri kullanım limitine ulaşıldı.';
+}
+
+/// Kullanıcının aylık çeviri limiti doldu (`TRANSLATION_USER_LIMIT_REACHED`).
+final class TranslationUserLimitFailure extends AppFailure {
+  const TranslationUserLimitFailure({super.detail});
+
+  @override
+  String get userMessage => 'Bu ay için çeviri kullanım limitine ulaşıldı.';
+}
+
+/// Çeviri için internet yok (`TRANSLATION_NETWORK_ERROR`). Önbellekte çeviri
+/// varsa bu hata hiç oluşmaz.
+final class TranslationNetworkFailure extends AppFailure {
+  const TranslationNetworkFailure({super.detail});
+
+  @override
+  String get userMessage => 'Çeviri için internet bağlantısı gerekiyor.';
+}
+
+/// Çeviri hizmeti kullanılamıyor (`TRANSLATION_UNAVAILABLE`): yapılandırılmamış,
+/// sağlayıcı hatası ya da beklenmeyen sunucu yanıtı. Teknik ayrıntı
+/// kullanıcıya gösterilmez.
+final class TranslationUnavailableFailure extends AppFailure {
+  const TranslationUnavailableFailure({super.detail});
+
+  @override
+  String get userMessage => 'Çeviri şu anda kullanılamıyor.';
+}
+
 /// Beklenmeyen hata — yakalanamayan her şey buraya düşer.
 final class UnknownFailure extends AppFailure {
   const UnknownFailure({super.detail});

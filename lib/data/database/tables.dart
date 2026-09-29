@@ -156,6 +156,49 @@ class MessageBodies extends Table {
   Set<Column> get primaryKey => {messageId};
 }
 
+/// İletinin çevirisi. Aynı ileti + kaynak dil + hedef dil için tek kayıt
+/// vardır (tekil anahtar) ve çeviri bir kez alınınca çevrimdışı da gösterilir.
+/// İleti silinince kayıt da silinir (cascade).
+///
+/// `translatedHtml`, HTML iletilerde çevrilmiş HTML'dir; yalnızca düz metin
+/// iletilerde çevrilmiş düz metindir (hangisi olduğunu iletinin kendi gövdesi
+/// belirler).
+@DataClassName('TranslatedEmailCacheRow')
+class TranslatedEmailCache extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get messageId =>
+      integer().references(Messages, #id, onDelete: KeyAction.cascade)();
+
+  /// Kaynak dil kodu; `auto` = sağlayıcı algıladı.
+  TextColumn get sourceLanguage => text().withDefault(const Constant('auto'))();
+  TextColumn get targetLanguage => text()();
+  TextColumn get translatedSubject => text().withDefault(const Constant(''))();
+  TextColumn get translatedHtml => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {messageId, sourceLanguage, targetLanguage},
+  ];
+}
+
+/// İletinin algılanan kaynak dili (bkz. `TranslationRepository.detectLanguage`):
+/// aynı ileti her açılışta yeniden algılanmasın (algılama da kota harcar).
+/// İleti silinince kayıt da silinir (cascade).
+@DataClassName('MessageLanguageRow')
+class MessageLanguages extends Table {
+  IntColumn get messageId =>
+      integer().references(Messages, #id, onDelete: KeyAction.cascade)();
+
+  /// Azure dil kodu (`en`, `de`, `zh-Hans`…).
+  TextColumn get language => text()();
+  DateTimeColumn get detectedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {messageId};
+}
+
 @DataClassName('AttachmentRow')
 class Attachments extends Table {
   IntColumn get id => integer().autoIncrement()();

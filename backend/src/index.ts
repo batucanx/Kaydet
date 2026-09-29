@@ -7,6 +7,8 @@ import { openDatabase } from './db.js';
 import { Notifier } from './notifier.js';
 import { Repository } from './repository.js';
 import { WatcherManager } from './watcher.js';
+import { AzureTranslatorProvider } from './azure-translator.js';
+import { defaultBatchLimits, TranslationService, TranslationStore } from './translation.js';
 
 process.on('uncaughtException', (err) => {
   console.error('Kritik Yakalanmamış Hata (uncaughtException):', err);
@@ -56,7 +58,33 @@ try {
     log: (message) => console.log(message),
   });
 
-  const app = buildApp({ repo, apiKey: config.API_KEY, hooks: watchers });
+  const translationStore = new TranslationStore(db);
+  // Önceki çalışma yanıt beklerken kapandıysa ayrılmış karakterler harcanmış sayılır.
+  translationStore.settleStaleReservations(Date.now());
+  translationStore.pruneCache(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const translation = new TranslationService({
+    store: translationStore,
+    provider:
+      config.AZURE_TRANSLATOR_ENABLED && config.AZURE_TRANSLATOR_KEY?.trim()
+        ? new AzureTranslatorProvider({
+            endpoint:
+              config.AZURE_TRANSLATOR_ENDPOINT.trim() ||
+              'https://api.cognitive.microsofttranslator.com',
+            key: config.AZURE_TRANSLATOR_KEY.trim(),
+            region: config.AZURE_TRANSLATOR_REGION?.trim() || undefined,
+          })
+        : null,
+    limits: {
+      monthlyLimit: config.AZURE_TRANSLATOR_MONTHLY_LIMIT,
+      warningLimit: config.AZURE_TRANSLATOR_WARNING_LIMIT,
+      userMonthlyLimit: config.AZURE_TRANSLATOR_USER_MONTHLY_LIMIT,
+      maxRequestChars: config.AZURE_TRANSLATOR_MAX_REQUEST_CHARS,
+      ...defaultBatchLimits,
+    },
+    log: (message) => console.log(message),
+  });
+
+  const app = buildApp({ repo, apiKey: config.API_KEY, hooks: watchers, translation });
 
   await app.listen({ port: config.PORT, host: config.HOST });
   console.log(`Kaydet push backend dinliyor: ${config.HOST}:${config.PORT}`);

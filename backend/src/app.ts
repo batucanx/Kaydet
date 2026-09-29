@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { AccountRow } from './db.js';
 import type { Repository } from './repository.js';
+import type { TranslationService } from './translation.js';
 
 /** İzleyici (IDLE) katmanının hesap değişikliklerinden haberdar olması için. */
 export interface AccountHooks {
@@ -41,6 +42,24 @@ const deleteAccountSchema = z.object({
 
 const deleteDeviceSchema = z.object({ apnsToken: tokenSchema });
 
+const languageSchema = z.string().regex(/^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/);
+
+const translateSchema = z.object({
+  // Kullanıcı bazlı kota için kararlı, istemciye özel kimlik (bkz. app tarafı).
+  userId: z.string().min(8).max(128),
+  messageId: z.string().min(1).max(200),
+  // `auto`: kaynak dil sağlayıcıya bırakılır.
+  sourceLanguage: z.union([z.literal('auto'), languageSchema]),
+  targetLanguage: languageSchema,
+  subject: z.string().max(100_000),
+  segments: z.array(z.string().max(100_000)).max(20_000),
+});
+
+const detectSchema = z.object({
+  userId: z.string().min(8).max(128),
+  sample: z.string().max(20_000),
+});
+
 function safeEqual(a: string, b: string): boolean {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
@@ -51,6 +70,8 @@ export function buildApp(opts: {
   repo: Repository;
   apiKey: string;
   hooks?: AccountHooks;
+  /** Verilmezse `/v1/translate` TRANSLATION_UNAVAILABLE döner. */
+  translation?: TranslationService;
 }): FastifyInstance {
   const { repo, apiKey } = opts;
   const hooks = opts.hooks ?? noopHooks;
@@ -118,6 +139,52 @@ export function buildApp(opts: {
     );
     if (id !== null) hooks.onAccountsRemoved([id]);
     return reply.code(204).send();
+  });
+
+  // Mail çevirisi. Gövde mail metni içerir: loglanmaz (logger kapalı).
+  app.post('/v1/translate', { bodyLimit: 4 * 1024 * 1024 }, async (request, reply) => {
+    const parsed = translateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid_request', issues: parsed.error.issues });
+    }
+    if (!opts.translation) {
+      return reply.code(503).send({ error: 'TRANSLATION_UNAVAILABLE' });
+    }
+    const outcome = await opts.translation.translate(parsed.data);
+    if (!outcome.ok) {
+      return reply.code(outcome.status).send({ error: outcome.code });
+    }
+    return reply.send({
+      translatedSubject: outcome.translatedSubject,
+      segments: outcome.segments,
+      cacheHit: outcome.cacheHit,
+      nearLimit: outcome.nearLimit,
+    });
+  });
+
+  // Kaynak dil algılama (mail açılınca "Türkçeye Çevir" düğmesine karar vermek
+  // için). Örnek metin loglanmaz.
+  app.post('/v1/translate/detect', async (request, reply) => {
+    const parsed = detectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid_request', issues: parsed.error.issues });
+    }
+    if (!opts.translation) {
+      return reply.code(503).send({ error: 'TRANSLATION_UNAVAILABLE' });
+    }
+    const outcome = await opts.translation.detect(parsed.data);
+    if (!outcome.ok) {
+      return reply.code(outcome.status).send({ error: outcome.code });
+    }
+    return reply.send({
+      language: outcome.language,
+      score: outcome.score,
+      nearLimit: outcome.nearLimit,
+    });
   });
 
   app.delete('/v1/devices', async (request, reply) => {

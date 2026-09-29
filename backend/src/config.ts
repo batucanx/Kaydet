@@ -14,12 +14,38 @@ const schema = z.object({
   APNS_KEY_ID: z.string().min(1),
   APNS_TEAM_ID: z.string().min(1),
   APNS_BUNDLE_ID: z.string().default('tr.com.pazarlik.kaydet'),
-}).refine(
-  (data) =>
-    (data.APNS_KEY_PATH != null && data.APNS_KEY_PATH.trim().length > 0) ||
-    (data.APNS_KEY_PEM != null && data.APNS_KEY_PEM.trim().length > 0),
-  { message: 'APNS_KEY_PATH veya APNS_KEY_PEM en az biri tanımlanmalı' },
-);
+
+  // Mail çevirisi (Azure AI Translator, F0 ücretsiz katman: 2.000.000
+  // karakter/ay). Kapalıysa ya da anahtar yoksa çeviri uç noktaları
+  // TRANSLATION_UNAVAILABLE döner; diğer özellikler etkilenmez. Limitler
+  // ücretsiz kotanın ALTINDA tutulur (ölçüm farkları ve eşzamanlı istekler için
+  // güvenlik payı). Geliştirmede `AZURE_TRANSLATOR_MONTHLY_LIMIT=10000` gibi
+  // küçük bir değerle denenebilir.
+  AZURE_TRANSLATOR_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  AZURE_TRANSLATOR_ENDPOINT: z.string().default('https://api.cognitive.microsofttranslator.com'),
+  AZURE_TRANSLATOR_KEY: z.string().optional(),
+  AZURE_TRANSLATOR_REGION: z.string().optional(),
+  AZURE_TRANSLATOR_MONTHLY_LIMIT: z.coerce.number().int().nonnegative().default(1_800_000),
+  AZURE_TRANSLATOR_WARNING_LIMIT: z.coerce.number().int().nonnegative().default(1_600_000),
+  AZURE_TRANSLATOR_USER_MONTHLY_LIMIT: z.coerce.number().int().nonnegative().default(200_000),
+  AZURE_TRANSLATOR_MAX_REQUEST_CHARS: z.coerce.number().int().positive().default(100_000),
+})
+  .refine(
+    (data) =>
+      (data.APNS_KEY_PATH != null && data.APNS_KEY_PATH.trim().length > 0) ||
+      (data.APNS_KEY_PEM != null && data.APNS_KEY_PEM.trim().length > 0),
+    { message: 'APNS_KEY_PATH veya APNS_KEY_PEM en az biri tanımlanmalı' },
+  )
+  .refine(
+    (data) => data.AZURE_TRANSLATOR_WARNING_LIMIT <= data.AZURE_TRANSLATOR_MONTHLY_LIMIT,
+    {
+      message: 'AZURE_TRANSLATOR_WARNING_LIMIT, AZURE_TRANSLATOR_MONTHLY_LIMIT değerini aşamaz',
+      path: ['AZURE_TRANSLATOR_WARNING_LIMIT'],
+    },
+  );
 
 export type Config = z.infer<typeof schema>;
 

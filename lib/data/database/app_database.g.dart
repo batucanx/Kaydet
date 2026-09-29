@@ -6303,6 +6303,796 @@ class PendingOperationsCompanion extends UpdateCompanion<PendingOperationRow> {
   }
 }
 
+class $TranslatedEmailCacheTable extends TranslatedEmailCache
+    with TableInfo<$TranslatedEmailCacheTable, TranslatedEmailCacheRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TranslatedEmailCacheTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<int> messageId = GeneratedColumn<int>(
+    'message_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES messages (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _sourceLanguageMeta = const VerificationMeta(
+    'sourceLanguage',
+  );
+  @override
+  late final GeneratedColumn<String> sourceLanguage = GeneratedColumn<String>(
+    'source_language',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('auto'),
+  );
+  static const VerificationMeta _targetLanguageMeta = const VerificationMeta(
+    'targetLanguage',
+  );
+  @override
+  late final GeneratedColumn<String> targetLanguage = GeneratedColumn<String>(
+    'target_language',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _translatedSubjectMeta = const VerificationMeta(
+    'translatedSubject',
+  );
+  @override
+  late final GeneratedColumn<String> translatedSubject =
+      GeneratedColumn<String>(
+        'translated_subject',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant(''),
+      );
+  static const VerificationMeta _translatedHtmlMeta = const VerificationMeta(
+    'translatedHtml',
+  );
+  @override
+  late final GeneratedColumn<String> translatedHtml = GeneratedColumn<String>(
+    'translated_html',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    messageId,
+    sourceLanguage,
+    targetLanguage,
+    translatedSubject,
+    translatedHtml,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'translated_email_cache';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TranslatedEmailCacheRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_messageIdMeta);
+    }
+    if (data.containsKey('source_language')) {
+      context.handle(
+        _sourceLanguageMeta,
+        sourceLanguage.isAcceptableOrUnknown(
+          data['source_language']!,
+          _sourceLanguageMeta,
+        ),
+      );
+    }
+    if (data.containsKey('target_language')) {
+      context.handle(
+        _targetLanguageMeta,
+        targetLanguage.isAcceptableOrUnknown(
+          data['target_language']!,
+          _targetLanguageMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_targetLanguageMeta);
+    }
+    if (data.containsKey('translated_subject')) {
+      context.handle(
+        _translatedSubjectMeta,
+        translatedSubject.isAcceptableOrUnknown(
+          data['translated_subject']!,
+          _translatedSubjectMeta,
+        ),
+      );
+    }
+    if (data.containsKey('translated_html')) {
+      context.handle(
+        _translatedHtmlMeta,
+        translatedHtml.isAcceptableOrUnknown(
+          data['translated_html']!,
+          _translatedHtmlMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {messageId, sourceLanguage, targetLanguage},
+  ];
+  @override
+  TranslatedEmailCacheRow map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TranslatedEmailCacheRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}message_id'],
+      )!,
+      sourceLanguage: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source_language'],
+      )!,
+      targetLanguage: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}target_language'],
+      )!,
+      translatedSubject: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}translated_subject'],
+      )!,
+      translatedHtml: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}translated_html'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TranslatedEmailCacheTable createAlias(String alias) {
+    return $TranslatedEmailCacheTable(attachedDatabase, alias);
+  }
+}
+
+class TranslatedEmailCacheRow extends DataClass
+    implements Insertable<TranslatedEmailCacheRow> {
+  final int id;
+  final int messageId;
+
+  /// Kaynak dil kodu; `auto` = sağlayıcı algıladı.
+  final String sourceLanguage;
+  final String targetLanguage;
+  final String translatedSubject;
+  final String translatedHtml;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const TranslatedEmailCacheRow({
+    required this.id,
+    required this.messageId,
+    required this.sourceLanguage,
+    required this.targetLanguage,
+    required this.translatedSubject,
+    required this.translatedHtml,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['message_id'] = Variable<int>(messageId);
+    map['source_language'] = Variable<String>(sourceLanguage);
+    map['target_language'] = Variable<String>(targetLanguage);
+    map['translated_subject'] = Variable<String>(translatedSubject);
+    map['translated_html'] = Variable<String>(translatedHtml);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  TranslatedEmailCacheCompanion toCompanion(bool nullToAbsent) {
+    return TranslatedEmailCacheCompanion(
+      id: Value(id),
+      messageId: Value(messageId),
+      sourceLanguage: Value(sourceLanguage),
+      targetLanguage: Value(targetLanguage),
+      translatedSubject: Value(translatedSubject),
+      translatedHtml: Value(translatedHtml),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory TranslatedEmailCacheRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TranslatedEmailCacheRow(
+      id: serializer.fromJson<int>(json['id']),
+      messageId: serializer.fromJson<int>(json['messageId']),
+      sourceLanguage: serializer.fromJson<String>(json['sourceLanguage']),
+      targetLanguage: serializer.fromJson<String>(json['targetLanguage']),
+      translatedSubject: serializer.fromJson<String>(json['translatedSubject']),
+      translatedHtml: serializer.fromJson<String>(json['translatedHtml']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'messageId': serializer.toJson<int>(messageId),
+      'sourceLanguage': serializer.toJson<String>(sourceLanguage),
+      'targetLanguage': serializer.toJson<String>(targetLanguage),
+      'translatedSubject': serializer.toJson<String>(translatedSubject),
+      'translatedHtml': serializer.toJson<String>(translatedHtml),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  TranslatedEmailCacheRow copyWith({
+    int? id,
+    int? messageId,
+    String? sourceLanguage,
+    String? targetLanguage,
+    String? translatedSubject,
+    String? translatedHtml,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => TranslatedEmailCacheRow(
+    id: id ?? this.id,
+    messageId: messageId ?? this.messageId,
+    sourceLanguage: sourceLanguage ?? this.sourceLanguage,
+    targetLanguage: targetLanguage ?? this.targetLanguage,
+    translatedSubject: translatedSubject ?? this.translatedSubject,
+    translatedHtml: translatedHtml ?? this.translatedHtml,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  TranslatedEmailCacheRow copyWithCompanion(
+    TranslatedEmailCacheCompanion data,
+  ) {
+    return TranslatedEmailCacheRow(
+      id: data.id.present ? data.id.value : this.id,
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      sourceLanguage: data.sourceLanguage.present
+          ? data.sourceLanguage.value
+          : this.sourceLanguage,
+      targetLanguage: data.targetLanguage.present
+          ? data.targetLanguage.value
+          : this.targetLanguage,
+      translatedSubject: data.translatedSubject.present
+          ? data.translatedSubject.value
+          : this.translatedSubject,
+      translatedHtml: data.translatedHtml.present
+          ? data.translatedHtml.value
+          : this.translatedHtml,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TranslatedEmailCacheRow(')
+          ..write('id: $id, ')
+          ..write('messageId: $messageId, ')
+          ..write('sourceLanguage: $sourceLanguage, ')
+          ..write('targetLanguage: $targetLanguage, ')
+          ..write('translatedSubject: $translatedSubject, ')
+          ..write('translatedHtml: $translatedHtml, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    messageId,
+    sourceLanguage,
+    targetLanguage,
+    translatedSubject,
+    translatedHtml,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TranslatedEmailCacheRow &&
+          other.id == this.id &&
+          other.messageId == this.messageId &&
+          other.sourceLanguage == this.sourceLanguage &&
+          other.targetLanguage == this.targetLanguage &&
+          other.translatedSubject == this.translatedSubject &&
+          other.translatedHtml == this.translatedHtml &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class TranslatedEmailCacheCompanion
+    extends UpdateCompanion<TranslatedEmailCacheRow> {
+  final Value<int> id;
+  final Value<int> messageId;
+  final Value<String> sourceLanguage;
+  final Value<String> targetLanguage;
+  final Value<String> translatedSubject;
+  final Value<String> translatedHtml;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  const TranslatedEmailCacheCompanion({
+    this.id = const Value.absent(),
+    this.messageId = const Value.absent(),
+    this.sourceLanguage = const Value.absent(),
+    this.targetLanguage = const Value.absent(),
+    this.translatedSubject = const Value.absent(),
+    this.translatedHtml = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  });
+  TranslatedEmailCacheCompanion.insert({
+    this.id = const Value.absent(),
+    required int messageId,
+    this.sourceLanguage = const Value.absent(),
+    required String targetLanguage,
+    this.translatedSubject = const Value.absent(),
+    this.translatedHtml = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  }) : messageId = Value(messageId),
+       targetLanguage = Value(targetLanguage);
+  static Insertable<TranslatedEmailCacheRow> custom({
+    Expression<int>? id,
+    Expression<int>? messageId,
+    Expression<String>? sourceLanguage,
+    Expression<String>? targetLanguage,
+    Expression<String>? translatedSubject,
+    Expression<String>? translatedHtml,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (messageId != null) 'message_id': messageId,
+      if (sourceLanguage != null) 'source_language': sourceLanguage,
+      if (targetLanguage != null) 'target_language': targetLanguage,
+      if (translatedSubject != null) 'translated_subject': translatedSubject,
+      if (translatedHtml != null) 'translated_html': translatedHtml,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+    });
+  }
+
+  TranslatedEmailCacheCompanion copyWith({
+    Value<int>? id,
+    Value<int>? messageId,
+    Value<String>? sourceLanguage,
+    Value<String>? targetLanguage,
+    Value<String>? translatedSubject,
+    Value<String>? translatedHtml,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+  }) {
+    return TranslatedEmailCacheCompanion(
+      id: id ?? this.id,
+      messageId: messageId ?? this.messageId,
+      sourceLanguage: sourceLanguage ?? this.sourceLanguage,
+      targetLanguage: targetLanguage ?? this.targetLanguage,
+      translatedSubject: translatedSubject ?? this.translatedSubject,
+      translatedHtml: translatedHtml ?? this.translatedHtml,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (messageId.present) {
+      map['message_id'] = Variable<int>(messageId.value);
+    }
+    if (sourceLanguage.present) {
+      map['source_language'] = Variable<String>(sourceLanguage.value);
+    }
+    if (targetLanguage.present) {
+      map['target_language'] = Variable<String>(targetLanguage.value);
+    }
+    if (translatedSubject.present) {
+      map['translated_subject'] = Variable<String>(translatedSubject.value);
+    }
+    if (translatedHtml.present) {
+      map['translated_html'] = Variable<String>(translatedHtml.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TranslatedEmailCacheCompanion(')
+          ..write('id: $id, ')
+          ..write('messageId: $messageId, ')
+          ..write('sourceLanguage: $sourceLanguage, ')
+          ..write('targetLanguage: $targetLanguage, ')
+          ..write('translatedSubject: $translatedSubject, ')
+          ..write('translatedHtml: $translatedHtml, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $MessageLanguagesTable extends MessageLanguages
+    with TableInfo<$MessageLanguagesTable, MessageLanguageRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MessageLanguagesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<int> messageId = GeneratedColumn<int>(
+    'message_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES messages (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _languageMeta = const VerificationMeta(
+    'language',
+  );
+  @override
+  late final GeneratedColumn<String> language = GeneratedColumn<String>(
+    'language',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _detectedAtMeta = const VerificationMeta(
+    'detectedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> detectedAt = GeneratedColumn<DateTime>(
+    'detected_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [messageId, language, detectedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'message_languages';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<MessageLanguageRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    }
+    if (data.containsKey('language')) {
+      context.handle(
+        _languageMeta,
+        language.isAcceptableOrUnknown(data['language']!, _languageMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_languageMeta);
+    }
+    if (data.containsKey('detected_at')) {
+      context.handle(
+        _detectedAtMeta,
+        detectedAt.isAcceptableOrUnknown(data['detected_at']!, _detectedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {messageId};
+  @override
+  MessageLanguageRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MessageLanguageRow(
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}message_id'],
+      )!,
+      language: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}language'],
+      )!,
+      detectedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}detected_at'],
+      )!,
+    );
+  }
+
+  @override
+  $MessageLanguagesTable createAlias(String alias) {
+    return $MessageLanguagesTable(attachedDatabase, alias);
+  }
+}
+
+class MessageLanguageRow extends DataClass
+    implements Insertable<MessageLanguageRow> {
+  final int messageId;
+
+  /// Azure dil kodu (`en`, `de`, `zh-Hans`…).
+  final String language;
+  final DateTime detectedAt;
+  const MessageLanguageRow({
+    required this.messageId,
+    required this.language,
+    required this.detectedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['message_id'] = Variable<int>(messageId);
+    map['language'] = Variable<String>(language);
+    map['detected_at'] = Variable<DateTime>(detectedAt);
+    return map;
+  }
+
+  MessageLanguagesCompanion toCompanion(bool nullToAbsent) {
+    return MessageLanguagesCompanion(
+      messageId: Value(messageId),
+      language: Value(language),
+      detectedAt: Value(detectedAt),
+    );
+  }
+
+  factory MessageLanguageRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MessageLanguageRow(
+      messageId: serializer.fromJson<int>(json['messageId']),
+      language: serializer.fromJson<String>(json['language']),
+      detectedAt: serializer.fromJson<DateTime>(json['detectedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'messageId': serializer.toJson<int>(messageId),
+      'language': serializer.toJson<String>(language),
+      'detectedAt': serializer.toJson<DateTime>(detectedAt),
+    };
+  }
+
+  MessageLanguageRow copyWith({
+    int? messageId,
+    String? language,
+    DateTime? detectedAt,
+  }) => MessageLanguageRow(
+    messageId: messageId ?? this.messageId,
+    language: language ?? this.language,
+    detectedAt: detectedAt ?? this.detectedAt,
+  );
+  MessageLanguageRow copyWithCompanion(MessageLanguagesCompanion data) {
+    return MessageLanguageRow(
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      language: data.language.present ? data.language.value : this.language,
+      detectedAt: data.detectedAt.present
+          ? data.detectedAt.value
+          : this.detectedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MessageLanguageRow(')
+          ..write('messageId: $messageId, ')
+          ..write('language: $language, ')
+          ..write('detectedAt: $detectedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(messageId, language, detectedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MessageLanguageRow &&
+          other.messageId == this.messageId &&
+          other.language == this.language &&
+          other.detectedAt == this.detectedAt);
+}
+
+class MessageLanguagesCompanion extends UpdateCompanion<MessageLanguageRow> {
+  final Value<int> messageId;
+  final Value<String> language;
+  final Value<DateTime> detectedAt;
+  const MessageLanguagesCompanion({
+    this.messageId = const Value.absent(),
+    this.language = const Value.absent(),
+    this.detectedAt = const Value.absent(),
+  });
+  MessageLanguagesCompanion.insert({
+    this.messageId = const Value.absent(),
+    required String language,
+    this.detectedAt = const Value.absent(),
+  }) : language = Value(language);
+  static Insertable<MessageLanguageRow> custom({
+    Expression<int>? messageId,
+    Expression<String>? language,
+    Expression<DateTime>? detectedAt,
+  }) {
+    return RawValuesInsertable({
+      if (messageId != null) 'message_id': messageId,
+      if (language != null) 'language': language,
+      if (detectedAt != null) 'detected_at': detectedAt,
+    });
+  }
+
+  MessageLanguagesCompanion copyWith({
+    Value<int>? messageId,
+    Value<String>? language,
+    Value<DateTime>? detectedAt,
+  }) {
+    return MessageLanguagesCompanion(
+      messageId: messageId ?? this.messageId,
+      language: language ?? this.language,
+      detectedAt: detectedAt ?? this.detectedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (messageId.present) {
+      map['message_id'] = Variable<int>(messageId.value);
+    }
+    if (language.present) {
+      map['language'] = Variable<String>(language.value);
+    }
+    if (detectedAt.present) {
+      map['detected_at'] = Variable<DateTime>(detectedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MessageLanguagesCompanion(')
+          ..write('messageId: $messageId, ')
+          ..write('language: $language, ')
+          ..write('detectedAt: $detectedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -6316,6 +7106,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ContactsTable contacts = $ContactsTable(this);
   late final $PendingOperationsTable pendingOperations =
       $PendingOperationsTable(this);
+  late final $TranslatedEmailCacheTable translatedEmailCache =
+      $TranslatedEmailCacheTable(this);
+  late final $MessageLanguagesTable messageLanguages = $MessageLanguagesTable(
+    this,
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -6330,6 +7125,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     signatures,
     contacts,
     pendingOperations,
+    translatedEmailCache,
+    messageLanguages,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -6395,6 +7192,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('pending_operations', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'messages',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('translated_email_cache', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'messages',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('message_languages', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -8231,6 +9042,51 @@ final class $$MessagesTableReferences
       manager.$state.copyWith(prefetchedData: cache),
     );
   }
+
+  static MultiTypedResultKey<
+    $TranslatedEmailCacheTable,
+    List<TranslatedEmailCacheRow>
+  >
+  _translatedEmailCacheRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.translatedEmailCache,
+        aliasName: 'messages__id__translated_email_cache__message_id',
+      );
+
+  $$TranslatedEmailCacheTableProcessedTableManager
+  get translatedEmailCacheRefs {
+    final manager = $$TranslatedEmailCacheTableTableManager(
+      $_db,
+      $_db.translatedEmailCache,
+    ).filter((f) => f.messageId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _translatedEmailCacheRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$MessageLanguagesTable, List<MessageLanguageRow>>
+  _messageLanguagesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.messageLanguages,
+    aliasName: 'messages__id__message_languages__message_id',
+  );
+
+  $$MessageLanguagesTableProcessedTableManager get messageLanguagesRefs {
+    final manager = $$MessageLanguagesTableTableManager(
+      $_db,
+      $_db.messageLanguages,
+    ).filter((f) => f.messageId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _messageLanguagesRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$MessagesTableFilterComposer
@@ -8475,6 +9331,56 @@ class $$MessagesTableFilterComposer
           }) => $$AttachmentsTableFilterComposer(
             $db: $db,
             $table: $db.attachments,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> translatedEmailCacheRefs(
+    Expression<bool> Function($$TranslatedEmailCacheTableFilterComposer f) f,
+  ) {
+    final $$TranslatedEmailCacheTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.translatedEmailCache,
+      getReferencedColumn: (t) => t.messageId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TranslatedEmailCacheTableFilterComposer(
+            $db: $db,
+            $table: $db.translatedEmailCache,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> messageLanguagesRefs(
+    Expression<bool> Function($$MessageLanguagesTableFilterComposer f) f,
+  ) {
+    final $$MessageLanguagesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.messageLanguages,
+      getReferencedColumn: (t) => t.messageId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessageLanguagesTableFilterComposer(
+            $db: $db,
+            $table: $db.messageLanguages,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -8904,6 +9810,57 @@ class $$MessagesTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> translatedEmailCacheRefs<T extends Object>(
+    Expression<T> Function($$TranslatedEmailCacheTableAnnotationComposer a) f,
+  ) {
+    final $$TranslatedEmailCacheTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.translatedEmailCache,
+          getReferencedColumn: (t) => t.messageId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$TranslatedEmailCacheTableAnnotationComposer(
+                $db: $db,
+                $table: $db.translatedEmailCache,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<T> messageLanguagesRefs<T extends Object>(
+    Expression<T> Function($$MessageLanguagesTableAnnotationComposer a) f,
+  ) {
+    final $$MessageLanguagesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.messageLanguages,
+      getReferencedColumn: (t) => t.messageId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessageLanguagesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.messageLanguages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$MessagesTableTableManager
@@ -8924,6 +9881,8 @@ class $$MessagesTableTableManager
             bool mailboxId,
             bool messageBodiesRefs,
             bool attachmentsRefs,
+            bool translatedEmailCacheRefs,
+            bool messageLanguagesRefs,
           })
         > {
   $$MessagesTableTableManager(_$AppDatabase db, $MessagesTable table)
@@ -9083,12 +10042,16 @@ class $$MessagesTableTableManager
                 mailboxId = false,
                 messageBodiesRefs = false,
                 attachmentsRefs = false,
+                translatedEmailCacheRefs = false,
+                messageLanguagesRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
                     if (messageBodiesRefs) db.messageBodies,
                     if (attachmentsRefs) db.attachments,
+                    if (translatedEmailCacheRefs) db.translatedEmailCache,
+                    if (messageLanguagesRefs) db.messageLanguages,
                   ],
                   addJoins:
                       <
@@ -9179,6 +10142,48 @@ class $$MessagesTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (translatedEmailCacheRefs)
+                        await $_getPrefetchedData<
+                          MessageRow,
+                          $MessagesTable,
+                          TranslatedEmailCacheRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$MessagesTableReferences
+                              ._translatedEmailCacheRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$MessagesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).translatedEmailCacheRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.messageId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (messageLanguagesRefs)
+                        await $_getPrefetchedData<
+                          MessageRow,
+                          $MessagesTable,
+                          MessageLanguageRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$MessagesTableReferences
+                              ._messageLanguagesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$MessagesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).messageLanguagesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.messageId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -9204,6 +10209,8 @@ typedef $$MessagesTableProcessedTableManager =
         bool mailboxId,
         bool messageBodiesRefs,
         bool attachmentsRefs,
+        bool translatedEmailCacheRefs,
+        bool messageLanguagesRefs,
       })
     >;
 typedef $$MessageBodiesTableCreateCompanionBuilder =
@@ -11279,6 +12286,694 @@ typedef $$PendingOperationsTableProcessedTableManager =
       PendingOperationRow,
       PrefetchHooks Function({bool accountId})
     >;
+typedef $$TranslatedEmailCacheTableCreateCompanionBuilder =
+    TranslatedEmailCacheCompanion Function({
+      Value<int> id,
+      required int messageId,
+      Value<String> sourceLanguage,
+      required String targetLanguage,
+      Value<String> translatedSubject,
+      Value<String> translatedHtml,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+    });
+typedef $$TranslatedEmailCacheTableUpdateCompanionBuilder =
+    TranslatedEmailCacheCompanion Function({
+      Value<int> id,
+      Value<int> messageId,
+      Value<String> sourceLanguage,
+      Value<String> targetLanguage,
+      Value<String> translatedSubject,
+      Value<String> translatedHtml,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+    });
+
+final class $$TranslatedEmailCacheTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $TranslatedEmailCacheTable,
+          TranslatedEmailCacheRow
+        > {
+  $$TranslatedEmailCacheTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $MessagesTable _messageIdTable(_$AppDatabase db) => db.messages
+      .createAlias('translated_email_cache__message_id__messages__id');
+
+  $$MessagesTableProcessedTableManager get messageId {
+    final $_column = $_itemColumn<int>('message_id')!;
+
+    final manager = $$MessagesTableTableManager(
+      $_db,
+      $_db.messages,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_messageIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$TranslatedEmailCacheTableFilterComposer
+    extends Composer<_$AppDatabase, $TranslatedEmailCacheTable> {
+  $$TranslatedEmailCacheTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sourceLanguage => $composableBuilder(
+    column: $table.sourceLanguage,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get targetLanguage => $composableBuilder(
+    column: $table.targetLanguage,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get translatedSubject => $composableBuilder(
+    column: $table.translatedSubject,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get translatedHtml => $composableBuilder(
+    column: $table.translatedHtml,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$MessagesTableFilterComposer get messageId {
+    final $$MessagesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableFilterComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TranslatedEmailCacheTableOrderingComposer
+    extends Composer<_$AppDatabase, $TranslatedEmailCacheTable> {
+  $$TranslatedEmailCacheTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sourceLanguage => $composableBuilder(
+    column: $table.sourceLanguage,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get targetLanguage => $composableBuilder(
+    column: $table.targetLanguage,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get translatedSubject => $composableBuilder(
+    column: $table.translatedSubject,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get translatedHtml => $composableBuilder(
+    column: $table.translatedHtml,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$MessagesTableOrderingComposer get messageId {
+    final $$MessagesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableOrderingComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TranslatedEmailCacheTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TranslatedEmailCacheTable> {
+  $$TranslatedEmailCacheTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get sourceLanguage => $composableBuilder(
+    column: $table.sourceLanguage,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get targetLanguage => $composableBuilder(
+    column: $table.targetLanguage,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get translatedSubject => $composableBuilder(
+    column: $table.translatedSubject,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get translatedHtml => $composableBuilder(
+    column: $table.translatedHtml,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$MessagesTableAnnotationComposer get messageId {
+    final $$MessagesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$TranslatedEmailCacheTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TranslatedEmailCacheTable,
+          TranslatedEmailCacheRow,
+          $$TranslatedEmailCacheTableFilterComposer,
+          $$TranslatedEmailCacheTableOrderingComposer,
+          $$TranslatedEmailCacheTableAnnotationComposer,
+          $$TranslatedEmailCacheTableCreateCompanionBuilder,
+          $$TranslatedEmailCacheTableUpdateCompanionBuilder,
+          (TranslatedEmailCacheRow, $$TranslatedEmailCacheTableReferences),
+          TranslatedEmailCacheRow,
+          PrefetchHooks Function({bool messageId})
+        > {
+  $$TranslatedEmailCacheTableTableManager(
+    _$AppDatabase db,
+    $TranslatedEmailCacheTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TranslatedEmailCacheTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TranslatedEmailCacheTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$TranslatedEmailCacheTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int> messageId = const Value.absent(),
+                Value<String> sourceLanguage = const Value.absent(),
+                Value<String> targetLanguage = const Value.absent(),
+                Value<String> translatedSubject = const Value.absent(),
+                Value<String> translatedHtml = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+              }) => TranslatedEmailCacheCompanion(
+                id: id,
+                messageId: messageId,
+                sourceLanguage: sourceLanguage,
+                targetLanguage: targetLanguage,
+                translatedSubject: translatedSubject,
+                translatedHtml: translatedHtml,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required int messageId,
+                Value<String> sourceLanguage = const Value.absent(),
+                required String targetLanguage,
+                Value<String> translatedSubject = const Value.absent(),
+                Value<String> translatedHtml = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+              }) => TranslatedEmailCacheCompanion.insert(
+                id: id,
+                messageId: messageId,
+                sourceLanguage: sourceLanguage,
+                targetLanguage: targetLanguage,
+                translatedSubject: translatedSubject,
+                translatedHtml: translatedHtml,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<
+                    $TranslatedEmailCacheTable,
+                    TranslatedEmailCacheRow
+                  >(table),
+                  $$TranslatedEmailCacheTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({messageId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (messageId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.messageId,
+                                referencedTable:
+                                    $$TranslatedEmailCacheTableReferences
+                                        ._messageIdTable(db),
+                                referencedColumn:
+                                    $$TranslatedEmailCacheTableReferences
+                                        ._messageIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$TranslatedEmailCacheTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TranslatedEmailCacheTable,
+      TranslatedEmailCacheRow,
+      $$TranslatedEmailCacheTableFilterComposer,
+      $$TranslatedEmailCacheTableOrderingComposer,
+      $$TranslatedEmailCacheTableAnnotationComposer,
+      $$TranslatedEmailCacheTableCreateCompanionBuilder,
+      $$TranslatedEmailCacheTableUpdateCompanionBuilder,
+      (TranslatedEmailCacheRow, $$TranslatedEmailCacheTableReferences),
+      TranslatedEmailCacheRow,
+      PrefetchHooks Function({bool messageId})
+    >;
+typedef $$MessageLanguagesTableCreateCompanionBuilder =
+    MessageLanguagesCompanion Function({
+      Value<int> messageId,
+      required String language,
+      Value<DateTime> detectedAt,
+    });
+typedef $$MessageLanguagesTableUpdateCompanionBuilder =
+    MessageLanguagesCompanion Function({
+      Value<int> messageId,
+      Value<String> language,
+      Value<DateTime> detectedAt,
+    });
+
+final class $$MessageLanguagesTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $MessageLanguagesTable,
+          MessageLanguageRow
+        > {
+  $$MessageLanguagesTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $MessagesTable _messageIdTable(_$AppDatabase db) =>
+      db.messages.createAlias('message_languages__message_id__messages__id');
+
+  $$MessagesTableProcessedTableManager get messageId {
+    final $_column = $_itemColumn<int>('message_id')!;
+
+    final manager = $$MessagesTableTableManager(
+      $_db,
+      $_db.messages,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_messageIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$MessageLanguagesTableFilterComposer
+    extends Composer<_$AppDatabase, $MessageLanguagesTable> {
+  $$MessageLanguagesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get language => $composableBuilder(
+    column: $table.language,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get detectedAt => $composableBuilder(
+    column: $table.detectedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$MessagesTableFilterComposer get messageId {
+    final $$MessagesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableFilterComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MessageLanguagesTableOrderingComposer
+    extends Composer<_$AppDatabase, $MessageLanguagesTable> {
+  $$MessageLanguagesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get language => $composableBuilder(
+    column: $table.language,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get detectedAt => $composableBuilder(
+    column: $table.detectedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$MessagesTableOrderingComposer get messageId {
+    final $$MessagesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableOrderingComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MessageLanguagesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MessageLanguagesTable> {
+  $$MessageLanguagesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get language =>
+      $composableBuilder(column: $table.language, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get detectedAt => $composableBuilder(
+    column: $table.detectedAt,
+    builder: (column) => column,
+  );
+
+  $$MessagesTableAnnotationComposer get messageId {
+    final $$MessagesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.messageId,
+      referencedTable: $db.messages,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MessagesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.messages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MessageLanguagesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $MessageLanguagesTable,
+          MessageLanguageRow,
+          $$MessageLanguagesTableFilterComposer,
+          $$MessageLanguagesTableOrderingComposer,
+          $$MessageLanguagesTableAnnotationComposer,
+          $$MessageLanguagesTableCreateCompanionBuilder,
+          $$MessageLanguagesTableUpdateCompanionBuilder,
+          (MessageLanguageRow, $$MessageLanguagesTableReferences),
+          MessageLanguageRow,
+          PrefetchHooks Function({bool messageId})
+        > {
+  $$MessageLanguagesTableTableManager(
+    _$AppDatabase db,
+    $MessageLanguagesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MessageLanguagesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MessageLanguagesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MessageLanguagesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> messageId = const Value.absent(),
+                Value<String> language = const Value.absent(),
+                Value<DateTime> detectedAt = const Value.absent(),
+              }) => MessageLanguagesCompanion(
+                messageId: messageId,
+                language: language,
+                detectedAt: detectedAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> messageId = const Value.absent(),
+                required String language,
+                Value<DateTime> detectedAt = const Value.absent(),
+              }) => MessageLanguagesCompanion.insert(
+                messageId: messageId,
+                language: language,
+                detectedAt: detectedAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$MessageLanguagesTable, MessageLanguageRow>(
+                    table,
+                  ),
+                  $$MessageLanguagesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({messageId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (messageId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.messageId,
+                                referencedTable:
+                                    $$MessageLanguagesTableReferences
+                                        ._messageIdTable(db),
+                                referencedColumn:
+                                    $$MessageLanguagesTableReferences
+                                        ._messageIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$MessageLanguagesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $MessageLanguagesTable,
+      MessageLanguageRow,
+      $$MessageLanguagesTableFilterComposer,
+      $$MessageLanguagesTableOrderingComposer,
+      $$MessageLanguagesTableAnnotationComposer,
+      $$MessageLanguagesTableCreateCompanionBuilder,
+      $$MessageLanguagesTableUpdateCompanionBuilder,
+      (MessageLanguageRow, $$MessageLanguagesTableReferences),
+      MessageLanguageRow,
+      PrefetchHooks Function({bool messageId})
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -11301,4 +12996,8 @@ class $AppDatabaseManager {
       $$ContactsTableTableManager(_db, _db.contacts);
   $$PendingOperationsTableTableManager get pendingOperations =>
       $$PendingOperationsTableTableManager(_db, _db.pendingOperations);
+  $$TranslatedEmailCacheTableTableManager get translatedEmailCache =>
+      $$TranslatedEmailCacheTableTableManager(_db, _db.translatedEmailCache);
+  $$MessageLanguagesTableTableManager get messageLanguages =>
+      $$MessageLanguagesTableTableManager(_db, _db.messageLanguages);
 }
