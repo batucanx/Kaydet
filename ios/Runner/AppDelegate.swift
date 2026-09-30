@@ -156,6 +156,16 @@ import workmanager_apple
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
+    // Uygulama ÖN PLANDAYSA ayrı bir motor/isolate açılmaz: ana isolate zaten
+    // canlı. Ayrı isolate'in veritabanına yazdığını ana isolate'in Drift
+    // akışları görmediği için liste yenilenene kadar yeni ileti görünmüyordu.
+    // Push ana isolate'e iletilir; eşitlemeyi o yapar ve liste anında güncellenir.
+    if application.applicationState == .active, let channel = notificationChannel {
+      channel.invokeMethod("onRemotePush", arguments: ["accountId": userInfo["accountId"] ?? NSNull()])
+      completionHandler(.newData)
+      return
+    }
+
     let engine = FlutterEngine(name: "kaydet.push-background-sync")
     engine.run(withEntrypoint: "pushBackgroundSync")
     GeneratedPluginRegistrant.register(with: engine)

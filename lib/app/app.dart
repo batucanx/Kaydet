@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart'
@@ -41,11 +42,21 @@ class KaydetApp extends ConsumerWidget {
       builder: (context, child) {
         // Sistem yazı boyutu 1.6×'ın üzerine çıkarsa liste satırları taşar;
         // erişilebilirlik korunur ama düzen kırılmaz.
-        final scale = MediaQuery.textScalerOf(context).scale(1);
-        return MediaQuery.withClampedTextScaling(
+        final media = MediaQuery.of(context);
+        final scale = media.textScaler.scale(1);
+        // Yalnızca iOS'ta yazılar biraz büyütülür (bkz. `AppText.iosTextBoost`);
+        // Android'de çarpan uygulanmaz. Sınırlama çarpandan SONRA yapılır.
+        final clamped = MediaQuery.withClampedTextScaling(
           minScaleFactor: 0.85,
-          maxScaleFactor: scale > 1.6 ? 1.6 : 1.6,
+          maxScaleFactor: 1.6,
           child: child ?? const SizedBox.shrink(),
+        );
+        if (defaultTargetPlatform != TargetPlatform.iOS) return clamped;
+        return MediaQuery(
+          data: media.copyWith(
+            textScaler: TextScaler.linear(scale * AppText.iosTextBoost),
+          ),
+          child: clamped,
         );
       },
       home: const _RootGate(),

@@ -7,6 +7,7 @@ import '../core/result.dart';
 import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
 import '../data/repositories/sync_engine.dart';
+import '../data/services/notification_service.dart';
 import 'providers.dart';
 import 'push_service.dart';
 
@@ -57,6 +58,10 @@ class SyncController extends Notifier<SyncState> {
   Timer? _serverChangeDebounce;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
   Timer? _folderRefresh;
+  StreamSubscription<int?>? _remotePushes;
+
+  /// Bir tur sürerken uzak push geldi: tur bitince hemen yeniden eşitlenir.
+  bool _pushSyncPending = false;
   DateTime? _lastFolderSync;
   bool _foldersSyncing = false;
   bool _folderSyncPending = false;
@@ -151,6 +156,9 @@ class SyncController extends Notifier<SyncState> {
     _serverChangeDebounce = null;
     _connectivity?.cancel();
     _connectivity = null;
+    _remotePushes?.cancel();
+    _remotePushes = null;
+    _pushSyncPending = false;
   }
 
   /// İlk kurulum: klasörleri çek, gelen kutusunu eşitle, dinlemeye başla.
@@ -170,6 +178,36 @@ class SyncController extends Notifier<SyncState> {
     _startFolderPolling();
     _startMailPolling();
     _watchServerChanges();
+    _watchRemotePushes();
+  }
+
+  /// iOS'ta uygulama ön plandayken gelen uzak push (yeni ileti) anında
+  /// eşitlemeyi tetikler; IDLE/yoklamanın yakalamasını beklenmez.
+  void _watchRemotePushes() {
+    _remotePushes?.cancel();
+    _remotePushes = NotificationService.remotePushes.listen(_onRemotePush);
+  }
+
+  void _onRemotePush(int? accountId) {
+    final active = ref.read(accountIdProvider);
+    if (active == null || _disposed) return;
+    // Başka hesabın iletisi: tek bağlantı etkin hesaba ait, o hesap
+    // seçilince zaten eşitlenir (bkz. `bootstrap`).
+    if (accountId != null && accountId != active) return;
+    if (_running || _foldersSyncing) {
+      _pushSyncPending = true;
+      return;
+    }
+    _fireAndForget(_syncForRemotePush());
+  }
+
+  Future<void> _syncForRemotePush() async {
+    final mailbox = ref.read(currentMailboxProvider);
+    if (mailbox != null && mailbox.specialUse == SpecialUse.inbox) {
+      await syncCurrentFolder();
+    } else {
+      await syncAll();
+    }
   }
 
   void _watchConnectivity() {
@@ -526,7 +564,13 @@ class SyncController extends Notifier<SyncState> {
   }
 
   void _drainPendingFolderSync() {
-    if (_disposed || !_folderSyncPending || _running || _foldersSyncing || _paused) return;
+    if (_disposed || _running || _foldersSyncing || _paused) return;
+    if (_pushSyncPending) {
+      _pushSyncPending = false;
+      scheduleMicrotask(() => _fireAndForget(_syncForRemotePush()));
+      return;
+    }
+    if (!_folderSyncPending) return;
     _folderSyncPending = false;
     scheduleMicrotask(() => _fireAndForget(syncFolders(force: true)));
   }
@@ -611,15 +655,22 @@ class SyncController extends Notifier<SyncState> {
     _serverChangeDebounce = null;
     await _serverChanges?.cancel();
     _serverChanges = null;
+    await _remotePushes?.cancel();
+    _remotePushes = null;
     await ref.read(mailConnectionProvider).imap.stopIdle();
   }
 
   /// Uygulama öne geldiğinde yeniden eşitlenir.
   Future<void> resume() async {
     _paused = false;
+    // Arka planda başka bir isolate (push/periyodik görev) veritabanına yazmış
+    // olabilir; Drift akışları bunu kendiliğinden görmez, liste hemen tazelenir.
+    final db = ref.read(databaseProvider);
+    db.markTablesUpdated([db.messages, db.mailboxes]);
     _startFolderPolling();
     _startMailPolling();
     _watchServerChanges();
+    _watchRemotePushes();
     await syncCurrentFolder();
     await syncFolders(force: true);
   }

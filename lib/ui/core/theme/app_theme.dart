@@ -13,6 +13,10 @@ abstract final class AppText {
   /// Bütün ölçeği tek yerden ayarlamak için yalnızca bu sabit değiştirilir.
   static const double scale = 1.0;
 
+  /// Yalnızca iOS'ta uygulanan ek yazı çarpanı (Android'de etkisiz). Sistem
+  /// yazı ölçeğiyle çarpılır (bkz. `app.dart` -> `builder`).
+  static const double iosTextBoost = 1.08;
+
   // Satoshi'nin statik seti SemiBold (600) içermez (bkz. pubspec.yaml).
   // 600 ağırlığındaki roller bu yüzden tek değişken font dosyasından
   // `wght` eksenini açıkça talep eder — motorun kayıtlı ağırlıklar

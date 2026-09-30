@@ -64,6 +64,14 @@ class NotificationService {
       StreamController<String>.broadcast();
   static Stream<String> get apnsTokens => _apnsTokenController.stream;
 
+  /// Uygulama ÖN PLANDAYKEN gelen uzak push'lar (bkz. `AppDelegate.swift` ->
+  /// `didReceiveRemoteNotification`). Değer, push'un `accountId` alanıdır
+  /// (yoksa `null`). Ön planda eşitleme ayrı bir isolate yerine ana
+  /// isolate'te yapılır ki Drift akışları listeyi anında güncellesin.
+  static final StreamController<int?> _remotePushController =
+      StreamController<int?>.broadcast();
+  static Stream<int?> get remotePushes => _remotePushController.stream;
+
   // `NotificationService()` her çağrıda yeni bir örnek döner (bkz.
   // `notificationServiceProvider` ve `main.dart`daki ayrı örnek) ama
   // altındaki `FlutterLocalNotificationsPlugin` tek bir singleton'dır.
@@ -170,6 +178,12 @@ class NotificationService {
   static void _listenApnsToken() {
     if (!Platform.isIOS) return;
     _iosChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onRemotePush') {
+        final arguments = call.arguments;
+        final accountId = arguments is Map ? arguments['accountId'] : null;
+        _remotePushController.add(accountId is int ? accountId : null);
+        return;
+      }
       if (call.method != 'onApnsToken') return;
       final token = call.arguments as String?;
       if (token == null || token.isEmpty) return;
