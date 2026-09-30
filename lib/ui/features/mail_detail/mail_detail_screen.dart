@@ -37,6 +37,7 @@ import '../compose/compose_screen.dart' show ComposeMode;
 import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
 import 'translate_bar.dart';
+import 'webview_pool.dart';
 
 /// Okuma ekranında app bar yüksekliği (varsayılan 56): gövdeye daha çok yer.
 const double _compactAppBarHeight = 44;
@@ -134,11 +135,52 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     // kurulduğunda) Riverpod tarafından otomatik çalıştırılır (bkz.
     // `app/providers.dart`). Yalnızca okundu işaretinin zamanlayıcısı kalır.
     _scheduleMarkSeen();
+    _prefetchNeighbors();
+  }
+
+  /// Son gösterilen gövdenin HTML'i. Önceki/sonraki iletiye geçerken yeni gövde
+  /// bir-iki kare gecikirse WebView ağaçtan sökülüp yeniden yaratılmasın diye
+  /// (pahalı) yükleme sürerken de canlı tutulur (bkz. `_BodyView.keepHtml`).
+  String? _lastHtml;
+
+  Timer? _prefetchTimer;
+
+  /// Önceki/sonraki iletinin gövdesini ve satır akışlarını önceden ısıtır:
+  /// kullanıcı okla geçtiğinde veri hazırdır, gövde yerelde beklenmeden gelir.
+  /// Geçerli iletinin kendi indirmesi öne geçsin diye kısa bir gecikmeyle başlar;
+  /// hatalar sessizce yutulur (bu yalnızca bir hızlandırıcıdır).
+  void _prefetchNeighbors() {
+    _prefetchTimer?.cancel();
+    _prefetchTimer = Timer(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      final rows = ref.read(messageListProvider).value ?? const <MessageRow>[];
+      final index = rows.indexWhere((m) => m.id == _messageId);
+      if (index < 0) return;
+      for (final neighbor in [index + 1, index - 1]) {
+        if (neighbor < 0 || neighbor >= rows.length) continue;
+        unawaited(_warm(rows[neighbor].id));
+      }
+    });
+  }
+
+  Future<void> _warm(int id) async {
+    try {
+      await ref.read(mailRepositoryProvider).ensureBody(id);
+      if (!mounted) return;
+      await Future.wait([
+        ref.read(messageProvider(id).future),
+        ref.read(messageBodyProvider(id).future),
+        ref.read(attachmentsProvider(id).future),
+      ]);
+    } on Object catch (_) {
+      // Ağ/veritabanı hatası: ileti açılınca normal yoldan yeniden denenir.
+    }
   }
 
   @override
   void dispose() {
     _seenTimer?.cancel();
+    _prefetchTimer?.cancel();
     _headerMeasureTimer?.cancel();
     _scrollY.dispose();
     super.dispose();
@@ -171,6 +213,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       _scrollY.value = 0;
     });
     _scheduleMarkSeen();
+    _prefetchNeighbors();
   }
 
   @override
@@ -226,6 +269,9 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
         ? translation!.subject
         : originalSubject;
     final shownBody = _withTranslation(body, translation);
+    if (shownBody?.html case final html? when html.trim().isNotEmpty) {
+      _lastHtml = html;
+    }
 
     return _nativeScaffold(
       t: t,
@@ -286,7 +332,11 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
               body: shownBody,
               fetchStatus: bodyFetch,
               topInset: _headerHeight,
-              onScrollY: (y) => _scrollY.value = y,
+              keepHtml: _lastHtml,
+              // Başlık tamamen çıktıktan sonra değer değişmez: `ValueNotifier`
+              // aynı değeri yeniden bildirmediği için kaydırırken yeniden çizim yok.
+              onScrollY: (y) =>
+                  _scrollY.value = y.clamp(0.0, _currentHeaderHeight()),
               scrollBridge: _bodyScroll,
               onRetry: () => ref.invalidate(bodyFetchProvider(_messageId)),
               onMailto: (address) =>
@@ -1215,9 +1265,15 @@ class _BodyView extends StatelessWidget {
     required this.onRetry,
     required this.onMailto,
     this.topInset = 0,
+    this.keepHtml,
     this.onScrollY,
     this.scrollBridge,
   });
+
+  /// Yeni gövde henüz gelmediği kısa aralıkta WebView'ı ağaçtan sökmemek için
+  /// son gösterilen HTML (bkz. `_MailDetailScreenState._lastHtml`). WebView
+  /// yaratımı pahalıdır; bu aralıkta üstünde iskelet gösterilir.
+  final String? keepHtml;
 
   /// Gövdenin üstünde (başlığın altında kalmasın diye) boş bırakılacak
   /// yükseklik, kaydırma konumu bildirimi ve başlıktan sürükleme köprüsü.
@@ -1266,6 +1322,17 @@ class _BodyView extends StatelessWidget {
     }
 
     if (body == null && !fetchStatus.hasValue) {
+      final keep = keepHtml;
+      if (keep != null) {
+        return _HtmlWebView(
+          html: keep,
+          loading: true,
+          onMailto: onMailto,
+          topInset: topInset,
+          onScrollY: onScrollY,
+          bridge: scrollBridge,
+        );
+      }
       // Ekranı bloklayan tekil bir döner gösterge YERİNE: başlık/gönderen/
       // ekler zaten `message` satırından (yerelde, anında) geldiği için
       // yalnızca gövdenin oturacağı alanda hafif bir shimmer gösterilir —
@@ -1400,12 +1467,16 @@ class _HtmlWebView extends StatefulWidget {
   const _HtmlWebView({
     required this.html,
     required this.onMailto,
+    this.loading = false,
     this.topInset = 0,
     this.onScrollY,
     this.bridge,
   });
 
   final String html;
+
+  /// Yeni içerik bekleniyor: WebView canlı kalır ama üstünde iskelet durur.
+  final bool loading;
 
   /// Belgenin üstünde bırakılacak boşluk (CSS `--kd-top`; başlığın altında
   /// kalmasın diye), kaydırma konumu bildirimi ve sürükleme köprüsü.
@@ -1426,7 +1497,15 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
   };
 
-  late final WebViewController _controller;
+  /// Regex temizliğinden geçmiş gövdeler: `(ham html, koyu tema)` → `(temiz
+  /// html, e-posta koyu tema destekliyor mu)`. LRU (son kullanılan sona).
+  static final Map<(String, bool), (String, bool)> _preparedCache = {};
+  // Mevcut + önceki + sonraki ileti (× açık/koyu tema) yeter; büyük bültenlerde
+  // her giriş ham ve temiz HTML'i birlikte tuttuğundan daha fazlası RAM'i şişirir.
+  static const int _preparedCacheSize = 4;
+
+  late final MailWebViewHandle _handle;
+  WebViewController get _controller => _handle.controller;
   late final Widget _webView;
 
   // `_load()` art arda (ör. ilk `didChangeDependencies` hemen ardından
@@ -1476,46 +1555,29 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   }
 
   void _createWebView() {
-    // JS açık: çalışan tek betik `MailHtmlDocument`in nonce'lu render
-    // betiğidir; e-postanın kendi betikleri belgedeki CSP ile engellenir.
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..enableZoom(true)
-      ..setVerticalScrollBarEnabled(false)
-      ..setOverScrollMode(WebViewOverScrollMode.never)
-      ..addJavaScriptChannel(
-        MailHtmlDocument.layoutChannel,
-        onMessageReceived: _onLayoutMessage,
-      )
-      ..setNavigationDelegate(
-        NavigationDelegate(
-          onPageFinished: _onPageFinished,
-          onNavigationRequest: _onNavigationRequest,
-        ),
+    // Denetleyici havuzdan (önceden kurulmuş, ısıtılmış) devralınır; kurulumu
+    // ve yapılandırması `WebViewPool`da (JS kipi, kanallar, viewport ayarı).
+    _handle = WebViewPool.acquire()
+      ..attach(
+        onLayout: _onLayoutMessage,
+        onPageFinished: _onPageFinished,
+        onNavigationRequest: _onNavigationRequest,
       );
-    // Android WebView varsayılanında `useWideViewPort` kapalıdır ve bu
-    // durumda `<meta name="viewport">` tamamen yok sayılıp gövde sabit
-    // masaüstü genişliğinde (~980px) render edilir — açılışta yakınlaştırılmış
-    // görünüp kullanıcının elle uzaklaştırması gerekir. Açınca viewport meta
-    // etiketi (bkz. `MailHtmlDocument`) gerçekten uygulanır ve ileti telefon
-    // genişliğine sığdırılmış açılır. iOS'ta WKWebView viewport'u zaten
-    // doğru uygular; bu yüzden yalnızca Android'de gerekir.
-    final platform = _controller.platform;
-    if (platform is AndroidWebViewController) {
-      unawaited(platform.setUseWideViewPort(true));
-    }
-    // Yerel kaydırma konumu: başlık bununla birebir kayar. Android bu değeri
-    // fiziksel pikselle bildirir; mantıksal piksele çevrilir.
-    unawaited(
-      _controller.setOnScrollPositionChange((change) {
-        final scale = platform is AndroidWebViewController ? _pixelRatio : 1.0;
-        widget.onScrollY?.call(change.y / scale);
-      }),
-    );
+    // Yerel kaydırma konumu: Flutter başlığı bununla birebir kayar.
+    unawaited(_controller.setOnScrollPositionChange(_onScrollPosition));
     _webView = WebViewWidget(
       controller: _controller,
       gestureRecognizers: _gestures,
     );
+  }
+
+  /// Android kaydırma konumunu fiziksel pikselle bildirir; mantıksal piksele
+  /// çevrilir.
+  void _onScrollPosition(ScrollPositionChange change) {
+    final scale = _controller.platform is AndroidWebViewController
+        ? _pixelRatio
+        : 1.0;
+    widget.onScrollY?.call(change.y / scale);
   }
 
   @override
@@ -1549,6 +1611,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     _themeReload?.cancel();
     _readyFallback?.cancel();
     _cancelEntranceListener();
+    _handle.detach();
     super.dispose();
   }
 
@@ -1622,7 +1685,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     final tokens = _tokens!;
     final dark = tokens.isDark;
 
-    final (body, emailSupportsDark) = await Isolate.run(() {
+    final cacheKey = (html, dark);
+    final cached = _preparedCache.remove(cacheKey);
+    final (body, emailSupportsDark) = cached ?? await Isolate.run(() {
       // Kaynağın kendi viewport etiketi kaldırılır ki `MailHtmlDocument`in
       // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
       // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
@@ -1642,6 +1707,12 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
         TextExtraction.supportsDarkScheme(noConflictingViewport),
       );
     });
+    // Son kullanılan başa yazılır (LRU): aynı iletiye önceki/sonraki ile geri
+    // dönüldüğünde regex temizliği ve isolate açılışı yeniden yapılmaz.
+    _preparedCache[cacheKey] = (body, emailSupportsDark);
+    while (_preparedCache.length > _preparedCacheSize) {
+      _preparedCache.remove(_preparedCache.keys.first);
+    }
     final script = await MailHtmlDocument.renderScript;
 
     // Ekran bu arada kapanmış ya da yeni bir `_load()` başlamış olabilir —
@@ -1677,7 +1748,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 
   void _markReady() {
     _readyFallback?.cancel();
-    if (!_ready && mounted) setState(() => _ready = true);
+    if (!_ready && mounted) {
+      setState(() => _ready = true);
+    }
   }
 
   /// Emniyet ağı: render betiği bildirim yapamazsa (beklenmez) iskelet sonsuza
@@ -1773,7 +1846,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
             fit: StackFit.expand,
             children: [...previous, ?current],
           ),
-          child: _ready
+          child: _ready && !widget.loading
               ? const SizedBox.shrink()
               : ColoredBox(
                   color: t.readingBg,

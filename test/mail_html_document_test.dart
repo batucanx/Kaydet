@@ -75,8 +75,21 @@ void main() {
       );
       expect(
         html,
-        contains('<body><kd-root><p id="x">Selam</p></kd-root></body>'),
+        contains('<kd-root><p id="x">Selam</p></kd-root></body>'),
       );
+    });
+
+    test("başlık Flutter'da: gövdenin üstünde --kd-top boşluk öğesi durur", () {
+      final html = doc();
+      expect(html, contains('<div id="kd-top"'));
+      expect(html, contains('height:var(--kd-top,0px) !important'));
+      expect(html, isNot(contains('kd-header')));
+    });
+
+    test("yalnızca iki nonce'lu betik bulunur", () {
+      final html = doc();
+      final nonce = RegExp(r"nonce-([^']+)").firstMatch(html)!.group(1)!;
+      expect('<script nonce="$nonce">'.allMatches(html), hasLength(2));
     });
 
     test(

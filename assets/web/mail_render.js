@@ -196,6 +196,10 @@
   function read(el) {
     var info = { el: el, skip: true };
     if (!(el instanceof HTMLElement)) return info;
+    // Koyu dönüşüm kapalıyken yapılacak tek iş metin taşıyan öğelerin küçük yazısını
+    // yükseltmektir: kendi metni olmayan öğeler (tablo/tr/div sarmalayıcıları —
+    // tablolu bültenlerin çoğunluğu) için `getComputedStyle` hiç çağrılmaz.
+    if (!cfg.transform && !hasOwnText(el)) return info;
     var cs = getComputedStyle(el);
     if (cs.display === 'none') return info;
     info.skip = false;
@@ -259,9 +263,18 @@
     return eff;
   }
 
+  // E-posta gövdesinin kökü (`<kd-root>`): yazı tabanı, renk dönüşümü ve
+  // akışkanlaştırma yalnızca bunun içine uygulanır (üstteki `#kd-top` boşluğuna
+  // dokunulmaz).
+  function contentScope() {
+    return doc.getElementsByTagName('kd-root')[0] || doc.body;
+  }
+
   function enhance() {
     var body = doc.body;
-    var list = [root, body].concat(Array.prototype.slice.call(body.getElementsByTagName('*')));
+    var scope = contentScope();
+    var list = [root, body].concat(scope === body ? [] : [scope],
+      Array.prototype.slice.call(scope.getElementsByTagName('*')));
     var infos = new Array(list.length), i;
     for (i = 0; i < list.length; i++) infos[i] = read(list[i]);
 
@@ -276,7 +289,7 @@
 
   // ── Akışkanlaştırma ───────────────────────────────────────────────────
 
-  var FLUID_PROPS = ['width', 'max-width', 'min-width', 'box-sizing', 'margin-left'];
+  var FLUID_PROPS = ['width', 'max-width', 'min-width', 'box-sizing', 'margin-left', 'white-space'];
   var BLOCKY = /^(block|table|flex|grid|list-item|inline-block|inline-table|flow-root)$/;
   var patched = [];
   var fluidWidth = -1;
@@ -308,22 +321,31 @@
     if (!body || !vw || vw === fluidWidth) return;
     fluidWidth = vw;
     revertFluid();
-    if (root.scrollWidth <= vw + 1) return; // taşma yok: e-postanın kendi düzeni çalışıyor
+    // Taşma kontrolü `body` üzerinden: `html` ve `body` ikisi de `overflow-x:hidden`
+    // olduğundan `body` kendi kaydırma kabıdır; taşan içeriği `root.scrollWidth`
+    // GÖRMEZ (hep `clientWidth` döner) ve akışkanlaştırma/sığdırma hiç çalışmazdı.
+    if (body.scrollWidth <= vw + 1) return; // taşma yok: e-postanın kendi düzeni çalışıyor
 
     var bs = getComputedStyle(body);
     var avail = body.clientWidth - (parseFloat(bs.paddingLeft) || 0) - (parseFloat(bs.paddingRight) || 0);
 
-    var all = body.getElementsByTagName('*'), plans = [], cells = [], i, w, cs, rect;
+    var all = contentScope().getElementsByTagName('*'), plans = [], cells = [], i, w, cs, rect;
     for (i = 0; i < all.length; i++) {
       var el = all[i], tag = el.tagName;
       rect = el.getBoundingClientRect();
       w = rect.width;
       if (tag === 'TD' || tag === 'TH') {
         if (w >= 60 && /\S{4}/.test(el.textContent || '')) cells.push([el, w]);
-        // Mobil CSS'te `display:block; width:100%` yapılan hücre, padding yüzünden
-        // (content-box) kutusundan taşar; genişliği değil ölçü modelini düzeltiriz.
-        if (w > avail + 1 && getComputedStyle(el).display === 'block') {
-          plans.push([el, [['box-sizing', 'border-box'], ['max-width', '100%']]]);
+        if (w > avail + 1) {
+          cs = getComputedStyle(el);
+          var cellDecls = [];
+          // Mobil CSS'te `display:block; width:100%` yapılan hücre, padding yüzünden
+          // (content-box) kutusundan taşar; genişliği değil ölçü modelini düzeltiriz.
+          if (cs.display === 'block') cellDecls.push(['box-sizing', 'border-box'], ['max-width', '100%']);
+          // `nowrap` hücre satırı asla kırmaz ve tabloyu ekrandan geniş tutar; yalnızca
+          // gerçekten taşıyorsa sarılabilir yapılır (kırılamayan kelime yine sığdırmaya kalır).
+          if (cs.whiteSpace === 'nowrap') cellDecls.push(['white-space', 'normal']);
+          if (cellDecls.length) plans.push([el, cellDecls]);
         }
         continue;
       }
@@ -347,6 +369,7 @@
         decls.push(['width', '100%'], ['max-width', Math.round(w) + 'px'], ['min-width', '0']);
         if (!isTable) decls.push(['box-sizing', 'border-box']);
       }
+      if (overWidth && cs.whiteSpace === 'nowrap') decls.push(['white-space', 'normal']);
       if (overRight && (parseFloat(cs.marginLeft) || 0) > 0) {
         decls.push(['margin-left', '0px']);
       }
@@ -389,6 +412,8 @@
     var body = doc.body;
     if (!shrinkWrap) shrinkWrap = doc.getElementsByTagName('kd-root')[0];
     if (!body || !shrinkWrap) return;
+    // Taşma yok ve daha önce küçültülmemiş: stil okumasına/ölçmeye gerek yok.
+    if (shrinkScale === 1 && body.scrollWidth <= body.clientWidth + 1) return;
     if (shrinkScale !== 1) {
       put(shrinkWrap, 'transform', 'none');
       put(shrinkWrap, 'width', 'auto');
@@ -498,8 +523,16 @@
 
   var reported = false;
 
+  // "İçerik yerleşti" bildirimi (iskeleti kaldırır) düzen OTURANA kadar tutulur
+  // (bkz. `settle`). Aksi hâlde ilk yerleşim gösterilir, sonra görseller/yazı
+  // tipleri yüklenince ekrana sığdırma ölçeği yeniden hesaplanır ve yazılar
+  // gözle görülür biçimde "bir miktar küçülüp yeniden çizilir".
+  var revealed = false, revealTimer = 0;
+  var REVEAL_MAX_MS = 400;
+
   function report() {
     reportTimer = 0;
+    if (!revealed) return;
     // Yerel kaydırma: boy yalnızca ilk kez bildirilir (yerleşim okuması ve
     // kanal trafiği sonrasında yok).
     if (cfg.once && reported) return;
@@ -514,6 +547,19 @@
     lastWidth = w;
     channel.postMessage(JSON.stringify({ doc: cfg.doc, h: h, w: w }));
     reported = true;
+    if (cfg.once) stopObserving();
+  }
+
+  // Yerel kaydırmada boy yalnızca bir kez bildirilir; sonrasında yerleşim
+  // gözlemcileri ve görsel/yazı tipi dinleyicileri boşuna çalışmasın.
+  var layoutObserver = null;
+  function stopObserving() {
+    clearTimeout(reportTimer);
+    reportTimer = 0;
+    if (layoutObserver) { layoutObserver.disconnect(); layoutObserver = null; }
+    doc.removeEventListener('load', scheduleReport, true);
+    doc.removeEventListener('error', scheduleReport, true);
+    if (window.visualViewport) window.visualViewport.removeEventListener('resize', scheduleReport);
   }
 
   // Geriye sayan (trailing) debounce: her yeni tetikleyici sayacı sıfırlar,
@@ -532,7 +578,10 @@
 
   function observeLayout() {
     var wrap = doc.getElementsByTagName('kd-root')[0];
-    if (wrap && window.ResizeObserver) new ResizeObserver(scheduleReport).observe(wrap);
+    if (wrap && window.ResizeObserver) {
+      layoutObserver = new ResizeObserver(scheduleReport);
+      layoutObserver.observe(wrap);
+    }
     // Görsel/yazı tipi yüklemeleri: `load`/`error` kabarcıklanmaz, yakalama
     // aşamasında dinlenir (boyut vermeyen görseller yüklenince yerleşim değişir).
     doc.addEventListener('load', scheduleReport, true);
@@ -542,31 +591,50 @@
     report();
   }
 
+
   // ── Başlatma ──────────────────────────────────────────────────────────
 
   function guarded(fn) {
     try { fn(); } catch (e) { root.setAttribute('data-kd-error', String(e && e.message || e)); }
   }
 
+  // Erken (DOMContentLoaded) iş: yalnızca gözlemciler ve görünüm birimleri. Düzeni
+  // DEĞİŞTİREN her şey (`settle`) içeriğin gösterileceği tek ana bırakılır.
   function start() {
     guarded(pinViewportUnits);
-    guarded(applyFluid);
-    guarded(applyShrinkToFit);
-    guarded(enhance);
     guarded(observeLayout);
     root.setAttribute('data-kd-ms', String(Math.round(performance.now() - startedAt)));
   }
 
-  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', start);
-  else start();
+  // Düzeni son hâline getirir ve ANCAK SONRA içeriği gösterir (iskelet bu
+  // bildirimle kalkar). Tek geçiş: akışkanlaştırma → ekrana sığdırma → yazı/renk
+  // düzeltmesi; her biri yalnızca gerektiğinde iş yapar (taşma yoksa ölçekleme yok,
+  // kendi metni olmayan öğelere bakılmaz). `load` (görseller dahil) en geç
+  // `REVEAL_MAX_MS` beklenir: yavaş bir görsel iskeleti sonsuza dek tutmasın.
+  // Gösterilmeden önce yapılır; çünkü yazı boyutu ya da koyu tema rengi
+  // gösterimden SONRA değişirse kullanıcı "küçülüp yeniden çizilme" görür.
+  var enhanced = false;
+
+  function settle() {
+    clearTimeout(revealTimer);
+    guarded(applyFluid);
+    guarded(applyShrinkToFit);
+    if (!enhanced) { enhanced = true; guarded(enhance); }
+    revealed = true;
+    guarded(report);
+  }
+
+  function startAndArm() {
+    start();
+    revealTimer = setTimeout(settle, REVEAL_MAX_MS);
+  }
+
+  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', startAndArm);
+  else startAndArm();
 
   // WebView'ın gerçek genişliği ilk yerleşimde henüz oturmamış olabilir; genişlik
   // değişince (ya da yükleme bitince) akışkanlaştırma o genişliğe göre yeniden kurulur.
-  window.addEventListener('load', function () {
-    guarded(applyFluid);
-    guarded(applyShrinkToFit);
-    guarded(report);
-  });
+  window.addEventListener('load', settle);
   var frame = 0;
   window.addEventListener('resize', function () {
     scheduleReport();
