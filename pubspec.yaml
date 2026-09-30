@@ -47,14 +47,12 @@ dependencies:
   # Yardımcılar
   shared_preferences: ^2.5.5
   intl: ^0.20.2
-  collection: ^1.19.1
   synchronized: ^3.4.0
   html: ^0.15.7
   image_picker: ^1.2.3
   image: ^4.10.1
   cached_network_image: ^4.0.0
   flutter_quill: ^11.5.1
-  flutter_quill_delta_from_html: ^1.5.3
   webview_flutter: ^4.14.1
   webview_flutter_android: ^4.14.1
   url_launcher: ^6.3.2
