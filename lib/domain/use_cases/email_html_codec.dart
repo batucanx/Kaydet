@@ -53,7 +53,19 @@ abstract final class ComposeDeltaSanitizer {
         continue;
       }
       final data = op.data;
-      if (data is! String) continue;
+      if (data is! String) {
+        if (data is Map && data.containsKey('image')) {
+          final src = data['image'];
+          if (src is String && src.trim().isNotEmpty) {
+            final attrs = sanitizeAttributes(op.attributes);
+            if (op.attributes?['width'] != null) {
+              attrs['width'] = op.attributes!['width'];
+            }
+            result.insert({'image': src.trim()}, attrs.isEmpty ? null : attrs);
+          }
+        }
+        continue;
+      }
       final attributes = sanitizeAttributes(op.attributes);
       result.insert(data, attributes.isEmpty ? null : attributes);
     }
@@ -169,10 +181,19 @@ const Map<int, int> _headerPx = {1: 34, 2: 30, 3: 24, 4: 20, 5: 18, 6: 16};
 const int _indentPx = 32;
 
 final class _Run {
-  const _Run(this.text, this.attrs);
+  const _Run(
+    this.text,
+    this.attrs, {
+    this.imageSource,
+    this.imageWidth,
+  });
 
   final String text;
   final Map<String, Object?> attrs;
+  final String? imageSource;
+  final int? imageWidth;
+
+  bool get isImage => imageSource != null && imageSource!.isNotEmpty;
 }
 
 final class _Line {
@@ -220,7 +241,24 @@ final class _Encoder {
     var current = _Line();
     for (final op in _delta.toList()) {
       final data = op.data;
-      if (data is! String) continue; // Gömülü nesne (görsel vb.) taşınamaz.
+      if (data is! String) {
+        if (data is Map && data.containsKey('image')) {
+          final src = data['image'];
+          if (src is String && src.trim().isNotEmpty) {
+            int? width;
+            final widthAttr = op.attributes?['width'];
+            if (widthAttr is int) {
+              width = widthAttr;
+            } else if (widthAttr is String) {
+              width = int.tryParse(widthAttr);
+            }
+            current.runs.add(
+              _Run('', const {}, imageSource: src.trim(), imageWidth: width),
+            );
+          }
+        }
+        continue;
+      }
       final inline = <String, Object?>{};
       final block = <String, Object?>{};
       for (final entry
@@ -359,6 +397,19 @@ final class _Encoder {
     final nbsp = _nbspFlags(full);
     var offset = 0;
     for (final run in runs) {
+      if (run.isImage) {
+        final src = _attr(run.imageSource!);
+        final widthAttr =
+            run.imageWidth != null ? ' width="${run.imageWidth}"' : '';
+        final maxWidth =
+            run.imageWidth != null
+                ? 'max-width:${run.imageWidth}px;'
+                : 'max-width:100%;';
+        _out.write(
+          '<img src="$src"$widthAttr style="$maxWidth;height:auto;display:inline-block;border:0;outline:none;text-decoration:none;" alt="İmza Görseli" />',
+        );
+        continue;
+      }
       _out.write(_wrap(run, _escape(run.text, nbsp, offset)));
       offset += run.text.length;
     }
@@ -548,10 +599,14 @@ final class _Ctx {
 }
 
 final class _DecodedRun {
-  _DecodedRun(this.text, this.attrs);
+  _DecodedRun(this.text, this.attrs, {this.imageSource, this.imageWidth});
 
   String text;
   final Map<String, Object> attrs;
+  final String? imageSource;
+  final int? imageWidth;
+
+  bool get isImage => imageSource != null && imageSource!.isNotEmpty;
 }
 
 final class _DecodedLine {
@@ -574,7 +629,6 @@ final class _Decoder {
     'link',
     'template',
     'noscript',
-    'img',
     'hr',
   };
 
@@ -598,6 +652,15 @@ final class _Decoder {
     final delta = Delta();
     for (final line in _lines) {
       for (final run in line.runs) {
+        if (run.isImage) {
+          final attrs = <String, dynamic>{...run.attrs};
+          if (run.imageWidth != null) attrs['width'] = run.imageWidth;
+          delta.insert(
+            {'image': run.imageSource!},
+            attrs.isEmpty ? null : attrs,
+          );
+          continue;
+        }
         // Kodlayıcı, korunması gereken boşlukları `&nbsp;` ile yazar.
         delta.insert(
           run.text.replaceAll(' ', ' '),
@@ -623,6 +686,23 @@ final class _Decoder {
     if (_skipTags.contains(tag)) return;
     if (tag == 'br') {
       _lineBreak(ctx);
+      return;
+    }
+    if (tag == 'img') {
+      final src = node.attributes['src']?.trim();
+      if (src != null && src.isNotEmpty) {
+        final widthStr = node.attributes['width']?.trim();
+        final width = widthStr != null ? int.tryParse(widthStr) : null;
+        final line = _current ??= _DecodedLine(_blockAttrs(ctx));
+        line.runs.add(
+          _DecodedRun(
+            '',
+            _inlineAttrs(ctx),
+            imageSource: src,
+            imageWidth: width,
+          ),
+        );
+      }
       return;
     }
 
@@ -906,6 +986,7 @@ final class _Decoder {
     // Satır sonundaki (çöken) boşluk görünmez; kırp.
     while (line.runs.isNotEmpty) {
       final last = line.runs.last;
+      if (last.isImage) break;
       last.text = last.text.replaceFirst(RegExp(r' +$'), '');
       if (last.text.isNotEmpty) break;
       line.runs.removeLast();

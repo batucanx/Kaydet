@@ -78,7 +78,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -196,6 +196,29 @@ class AppDatabase extends _$AppDatabase {
       // kaydedilmiş diller silinir, ileti bir sonraki açılışta yeniden algılanır.
       if (from < 15 && from >= 14) {
         await customStatement('DELETE FROM message_languages');
+      }
+      // v15 → v16: Görsel imza desteği — yerel/uzak görsel alanları.
+      if (from < 16) {
+        final existingColumns =
+            await customSelect('PRAGMA table_info("signatures")').get();
+        final columnNames =
+            existingColumns.map((row) => row.data['name'] as String).toSet();
+
+        if (!columnNames.contains('image_type')) {
+          await m.addColumn(signatures, signatures.imageType);
+        }
+        if (!columnNames.contains('local_image_path')) {
+          await m.addColumn(signatures, signatures.localImagePath);
+        }
+        if (!columnNames.contains('remote_image_url')) {
+          await m.addColumn(signatures, signatures.remoteImageUrl);
+        }
+        if (!columnNames.contains('image_width')) {
+          await m.addColumn(signatures, signatures.imageWidth);
+        }
+        if (!columnNames.contains('image_position')) {
+          await m.addColumn(signatures, signatures.imagePosition);
+        }
       }
     },
     beforeOpen: (details) async {

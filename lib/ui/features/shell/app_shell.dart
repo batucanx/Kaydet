@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -267,9 +268,42 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
     final pending = ref.watch(pendingOperationCountProvider).value ?? 0;
     final activeTab = ref.watch(activeTabProvider);
 
-    return Drawer(
+    // Ray zemini (açık temada üst çubuk mavisi) güvenli alanların altına da
+    // uzanır: aksi hâlde durum çubuğu ve gezinme çubuğu bölgesinde ray
+    // kesilir, saat/ikonlar açık zeminde okunmaz hâle gelirdi.
+    final railBg = t.isDark ? t.surfaceDeep : t.appBarBg;
+    final padding = MediaQuery.paddingOf(context);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        // Durum çubuğu ray/üst çubuk zemininde: her iki temada açık ikonlar.
+        statusBarIconBrightness: Brightness.light,
+        statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: t.surfaceDeep,
+        systemNavigationBarDividerColor: Colors.transparent,
+        systemNavigationBarIconBrightness: t.isDark
+            ? Brightness.light
+            : Brightness.dark,
+      ),
+      child: Drawer(
       backgroundColor: t.surfaceDeep,
-      child: SafeArea(
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 76,
+            child: ColoredBox(color: railBg),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            top: 0,
+            height: padding.top,
+            child: ColoredBox(color: railBg),
+          ),
+          SafeArea(
         child: Column(
           children: [
             Expanded(
@@ -322,6 +356,9 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
               ),
           ],
         ),
+      ),
+        ],
+      ),
       ),
     );
   }

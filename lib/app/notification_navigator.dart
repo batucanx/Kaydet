@@ -3,12 +3,14 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/services/notification_service.dart';
+import '../domain/models/mail_models.dart';
 import '../ui/core/navigation/kaydet_route.dart';
 import '../ui/features/compose/compose_launcher.dart';
 import '../ui/features/compose/compose_screen.dart' show ComposeMode;
 import '../ui/features/mail_detail/mail_detail_screen.dart';
 import 'navigation.dart';
 import 'providers.dart';
+import 'sync_controller.dart';
 
 /// Bildirime dokunulunca ilgili iletiye gider; "Yanıtla"ya dokunulunca o
 /// iletinin yanıt ekranını açar.
@@ -21,16 +23,25 @@ import 'providers.dart';
 class NotificationNavigator {
   NotificationNavigator._(this._ref) {
     _sub = NotificationService.taps.listen(_handle);
+    _remoteSub = NotificationService.mailTaps.listen(
+      (_) => unawaited(_handleRemoteTap()),
+    );
   }
 
   final Ref _ref;
   late final StreamSubscription<NotificationTap> _sub;
+  late final StreamSubscription<void> _remoteSub;
 
-  void _dispose() => _sub.cancel();
+  void _dispose() {
+    _sub.cancel();
+    _remoteSub.cancel();
+  }
 
   /// Uygulama bir bildirime dokunularak açıldıysa (soğuk başlangıç) aynı
   /// hedefe gider. İlk kare çizildikten sonra çağrılmalı.
   Future<void> handleColdStart() async {
+    // iOS uzak (APNs) bildirimi: yük yerel eklentiye değil AppDelegate'e düşer.
+    await _handleRemoteTap();
     final details =
         await _ref.read(notificationServiceProvider).appLaunchDetails();
     if (details?.didNotificationLaunchApp != true) return;
@@ -38,6 +49,40 @@ class NotificationNavigator {
       details!.notificationResponse,
     );
     if (tap != null) await _handle(tap);
+  }
+
+  /// iOS'ta uzak bildirime dokunulunca hesap + IMAP uid'sinden iletiyi bulur
+  /// ve açar. İleti henüz yerelde yoksa (push eşitlemeden önce geldi) gelen
+  /// kutusu eşitlenip kısa süre yeniden denenir.
+  Future<void> _handleRemoteTap() async {
+    final target =
+        await _ref.read(notificationServiceProvider).takePendingMailOpen();
+    if (target == null) return;
+
+    final db = _ref.read(databaseProvider);
+    final accountId = target.accountId ?? _ref.read(accountIdProvider);
+    if (accountId == null) return;
+    if (accountId != _ref.read(accountIdProvider)) {
+      await _ref.read(accountRepositoryProvider).switchAccount(accountId);
+    }
+
+    for (var attempt = 0; attempt < 4; attempt++) {
+      final inbox = await db.mailboxBySpecialUse(accountId, SpecialUse.inbox);
+      if (inbox != null) {
+        final message = await db.messageByUid(inbox.id, target.uid);
+        if (message != null) {
+          await _handle(NotificationTap(message.id, NotificationTapKind.open));
+          return;
+        }
+        if (_ref.read(accountIdProvider) == accountId) {
+          _ref
+              .read(selectedFolderRawProvider.notifier)
+              .select(SelectedFolder.mailbox(inbox.id));
+          await _ref.read(syncControllerProvider.notifier).syncCurrentFolder();
+        }
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 1500));
+    }
   }
 
   Future<void> _handle(NotificationTap tap) async {

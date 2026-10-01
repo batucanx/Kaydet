@@ -17,8 +17,12 @@ class SignaturesSettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final account = ref.watch(activeAccountProvider).value;
-    final signatures =
-        ref.watch(signaturesProvider).value ?? const <SignatureRow>[];
+    final all = ref.watch(signaturesProvider).value ?? const <SignatureRow>[];
+    // Varsayılan imza her zaman en üstte.
+    final signatures = [
+      ...all.where((s) => s.isDefault),
+      ...all.where((s) => !s.isDefault),
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -59,7 +63,12 @@ class SignaturesSettingsScreen extends ConsumerWidget {
                 for (final signature in signatures)
                   _SignatureListTile(
                     signature: signature,
-                    onTap: () => _editSignature(context, ref, signature),
+                    onTap: () => showNewSignatureSheet(
+                      context,
+                      ref,
+                      accountId: signature.accountId,
+                      existingSignature: signature,
+                    ),
                     onSetDefault: () => ref
                         .read(accountRepositoryProvider)
                         .setDefaultSignature(signature.accountId, signature.id),
@@ -70,77 +79,9 @@ class SignaturesSettingsScreen extends ConsumerWidget {
       ),
     );
   }
-
-  Future<void> _editSignature(
-    BuildContext context,
-    WidgetRef ref,
-    SignatureRow signature,
-  ) async {
-    final t = context.tokens;
-    final nameController = TextEditingController(text: signature.name);
-    final bodyController = TextEditingController(text: signature.body);
-
-    final result = await showDialog<_SignatureDialogResult>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            const Expanded(child: Text('İmzayı düzenle')),
-            IconButton(
-              icon: Icon(LucideIcons.trash2, size: 20, color: t.danger),
-              tooltip: 'Sil',
-              onPressed: () =>
-                  Navigator.of(context).pop(_SignatureDialogResult.delete),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(controller: nameController, autofocus: true),
-              const SizedBox(height: Space.lg),
-              TextField(controller: bodyController, maxLines: 6, minLines: 3),
-            ],
-          ),
-        ),
-        actionsAlignment: MainAxisAlignment.center,
-        actions: [
-          DialogActions(
-            cancelLabel: 'Vazgeç',
-            onCancel: () => Navigator.of(context).pop(),
-            confirmLabel: 'Kaydet',
-            onConfirm: () =>
-                Navigator.of(context).pop(_SignatureDialogResult.save),
-          ),
-        ],
-      ),
-    );
-
-    switch (result) {
-      case _SignatureDialogResult.save:
-        final name = nameController.text.trim();
-        if (name.isEmpty) return;
-        await ref
-            .read(accountRepositoryProvider)
-            .updateSignatureContent(
-              signatureId: signature.id,
-              name: name,
-              body: bodyController.text,
-            );
-      case _SignatureDialogResult.delete:
-        await ref.read(accountRepositoryProvider).deleteSignature(signature.id);
-      case null:
-        return;
-    }
-  }
 }
 
-/// [SignaturesSettingsScreen._editSignature] diyaloğunun sonucu.
-enum _SignatureDialogResult { save, delete }
-
-/// İmza listesindeki tek satır: ad + gövdenin ilk satırı önizleme olarak,
+/// İmza listesindeki tek satır: ad + görsel rozeti / gövdenin ilk satırı önizleme olarak,
 /// sağda varsayılan rozeti (veya varsayılan yapma yıldızı) ve düzenleme oku.
 class _SignatureListTile extends StatelessWidget {
   const _SignatureListTile({
@@ -156,16 +97,62 @@ class _SignatureListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final hasImage = signature.imageType != 'none';
     final preview = signature.body.trim();
 
+    String subtitleText;
+    if (preview.isNotEmpty) {
+      subtitleText = preview.split('\n').first;
+    } else if (hasImage) {
+      subtitleText = signature.imageType == 'remote'
+          ? 'Uzak Görsel İmza'
+          : 'Görsel İmza';
+    } else {
+      subtitleText = 'Boş imza';
+    }
+
     return SettingsTile(
-      icon: LucideIcons.penLine,
+      icon: hasImage ? LucideIcons.image : LucideIcons.penLine,
       title: signature.name,
-      subtitle: preview.isEmpty ? 'Boş' : preview.split('\n').first,
+      subtitle: subtitleText,
       onTap: onTap,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (hasImage) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Space.xs,
+                vertical: 2,
+              ),
+              margin: const EdgeInsets.only(right: Space.xs),
+              decoration: BoxDecoration(
+                color: t.surfaceDeep,
+                borderRadius: BorderRadius.circular(Radii.xs),
+                border: Border.all(color: t.border),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    signature.imageType == 'remote'
+                        ? LucideIcons.globe
+                        : LucideIcons.image,
+                    size: 11,
+                    color: t.textSecondary,
+                  ),
+                  const SizedBox(width: 3),
+                  Text(
+                    signature.imageType == 'remote' ? 'URL' : 'Görsel',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          fontSize: 10,
+                          color: t.textSecondary,
+                        ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           if (signature.isDefault)
             Container(
               padding: const EdgeInsets.symmetric(

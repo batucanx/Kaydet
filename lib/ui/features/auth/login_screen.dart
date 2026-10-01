@@ -27,7 +27,8 @@ class LoginScreen extends ConsumerStatefulWidget {
   ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends ConsumerState<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen>
+    with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
   final _password = TextEditingController();
@@ -44,6 +45,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   AppFailure? _failure;
   bool _hostsTouched = false;
 
+  /// Giriş animasyonu (~0.9 sn): logo küçükten oturur, ardından form yukarı
+  /// doğru belirir. Yalnızca opacity/transform kullanılır.
+  late final AnimationController _intro = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  );
+  late final Animation<double> _logoFade = CurvedAnimation(
+    parent: _intro,
+    curve: const Interval(0.1, 0.4, curve: Curves.easeOut),
+  );
+  late final Animation<double> _logoScale = TweenSequence<double>([
+    TweenSequenceItem(
+      tween: Tween(begin: 0.75, end: 0.92).chain(CurveTween(curve: Curves.easeOut)),
+      weight: 35,
+    ),
+    TweenSequenceItem(
+      tween: Tween(begin: 0.92, end: 1.02).chain(CurveTween(curve: Curves.easeInOut)),
+      weight: 25,
+    ),
+    TweenSequenceItem(
+      tween: Tween(begin: 1.02, end: 1.0).chain(CurveTween(curve: Curves.easeOut)),
+      weight: 15,
+    ),
+    TweenSequenceItem(tween: ConstantTween(1.0), weight: 25),
+  ]).animate(_intro);
+  late final Animation<double> _logoLift = CurvedAnimation(
+    parent: _intro,
+    curve: const Interval(0, 0.83, curve: Motion.standard),
+  );
+  late final Animation<double> _formReveal = CurvedAnimation(
+    parent: _intro,
+    curve: const Interval(0.12, 0.5, curve: Motion.standard),
+  );
+  bool _introStarted = false;
+
   @override
   void initState() {
     super.initState();
@@ -51,7 +87,21 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Yalnızca bir kez başlar (yeniden build/tema değişimi tekrar oynatmaz).
+    if (_introStarted) return;
+    _introStarted = true;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _intro.value = 1;
+    } else {
+      _intro.forward();
+    }
+  }
+
+  @override
   void dispose() {
+    _intro.dispose();
     _email.removeListener(_autofillHosts);
     _email.dispose();
     _password.dispose();
@@ -151,22 +201,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 child: Center(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxWidth: 460),
-                    child: TweenAnimationBuilder<double>(
-                      tween: Tween(begin: reduceMotion ? 1 : 0, end: 1),
-                      duration: reduceMotion ? Motion.instant : Motion.slow,
-                      curve: Motion.standard,
-                      builder: (context, value, child) => Opacity(
-                        opacity: value,
-                        child: Transform.translate(
-                          offset: Offset(0, (1 - value) * Space.md),
-                          child: child,
-                        ),
-                      ),
-                      child: Column(
+                    child: Column(
                         children: [
                           if (widget.isAddingAccount)
                             const SizedBox(height: Space.sm),
-                          ClipRRect(
+                          _IntroLogo(
+                            fade: _logoFade,
+                            scale: _logoScale,
+                            lift: _logoLift,
+                            child: ClipRRect(
                             borderRadius: BorderRadius.circular(Radii.lg),
                             child: Image.asset(
                               'assets/icon/app_logo.png',
@@ -176,8 +219,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               semanticLabel: 'Kaydet e-posta uygulaması logosu',
                             ),
                           ),
+                          ),
                           const SizedBox(height: Space.lg),
-                          Text(
+                          _IntroReveal(
+                            animation: _formReveal,
+                            child: Text(
                             'Mail Hesabınıza Giriş Yapın',
                             textAlign: TextAlign.center,
                             style: text.titleLarge?.copyWith(
@@ -187,8 +233,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               fontVariations: AppText.semibold,
                             ),
                           ),
+                          ),
                           SizedBox(height: compact ? Space.xl : Space.xxxl),
-                          Form(
+                          _IntroReveal(
+                            animation: _formReveal,
+                            child: Form(
                             key: _formKey,
                             child: Container(
                               padding: const EdgeInsets.all(Space.xl),
@@ -386,16 +435,69 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                               ),
                             ),
                           ),
+                          ),
                           if (widget.isAddingAccount)
                             const SizedBox(height: Space.lg),
                         ],
                       ),
-                    ),
                   ),
                 ),
               ),
             );
           },
+        ),
+      ),
+    );
+  }
+}
+
+/// Giriş animasyonunda logo: küçükten büyüyerek oturur (opacity + transform).
+class _IntroLogo extends StatelessWidget {
+  const _IntroLogo({
+    required this.fade,
+    required this.scale,
+    required this.lift,
+    required this.child,
+  });
+
+  final Animation<double> fade;
+  final Animation<double> scale;
+  final Animation<double> lift;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: fade,
+      child: AnimatedBuilder(
+        animation: Listenable.merge([scale, lift]),
+        child: child,
+        builder: (context, child) => Transform.translate(
+          offset: Offset(0, (1 - lift.value) * Space.md),
+          child: Transform.scale(scale: scale.value, child: child),
+        ),
+      ),
+    );
+  }
+}
+
+/// Giriş animasyonunda form: opacity 0→1 ve aşağıdan yukarı kayma.
+class _IntroReveal extends StatelessWidget {
+  const _IntroReveal({required this.animation, required this.child});
+
+  final Animation<double> animation;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: animation,
+      child: AnimatedBuilder(
+        animation: animation,
+        child: child,
+        builder: (context, child) => Transform.translate(
+          offset: Offset(0, (1 - animation.value) * Space.xl),
+          child: child,
         ),
       ),
     );

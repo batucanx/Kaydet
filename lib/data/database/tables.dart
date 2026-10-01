@@ -252,6 +252,22 @@ class Signatures extends Table {
   /// Hesap başına en fazla bir tane olabilir — bkz. kısmi tekil indeks
   /// `idx_signatures_default` (`AppDatabase._createIndexes`).
   BoolColumn get isDefault => boolean().withDefault(const Constant(false))();
+
+  /// Görsel kaynağı: 'none' | 'local' | 'remote'
+  TextColumn get imageType => text().withDefault(const Constant('none'))();
+
+  /// Galeriden seçilen yerel görselin uygulama içindeki saklama yolu.
+  TextColumn get localImagePath => text().nullable()();
+
+  /// Uzak görsel URL'si (ör. https://www.hasem.net/imza_silme/murat.png).
+  TextColumn get remoteImageUrl => text().nullable()();
+
+  /// Görselin görüntüleme genişliği (px). Varsayılan 200.
+  IntColumn get imageWidth => integer().withDefault(const Constant(200))();
+
+  /// Görselin metne göre konumu: 'top' (metnin üstünde) | 'bottom' (metnin altında).
+  TextColumn get imagePosition =>
+      text().withDefault(const Constant('bottom'))();
 }
 
 /// Öğrenilen kişiler — CardDAV değil, tamamen yerel: bir adrese ileti

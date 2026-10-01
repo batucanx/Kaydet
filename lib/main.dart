@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -40,14 +42,8 @@ Future<void> main() async {
   final settingsStore = await AppSettingsStore.create();
   final quickTemplatesStore = await QuickTemplatesStore.create();
 
-  // Arka plan görevleri başlatılamasa bile uygulama açılmalı.
-  try {
-    await BackgroundSync.initialize();
-    await BackgroundSync.schedule(settingsStore.read().syncFrequency);
-  } on Object catch (error, stack) {
-    debugPrint('Arka plan senkronizasyonu kurulamadı: $error\n$stack');
-  }
-
+  // Bildirim kanalı işleyicisi (APNs token'ı) motor hazır olur olmaz kurulu
+  // olmalı; bu yüzden `runApp`ten önce beklenir.
   try {
     await NotificationService().initialize(
       onBackgroundResponse: notificationBackgroundHandler,
@@ -55,18 +51,6 @@ Future<void> main() async {
   } on Object catch (error) {
     debugPrint('Bildirimler kurulamadı: $error');
   }
-
-  // Anlık bildirim servisinin seçenekleri ve servis ↔ arayüz mesaj kanalı.
-  // Servisin kendisi burada başlatılmaz: `PushController` ayarlara göre
-  // açar/kapatır.
-  try {
-    PushService.initialize();
-  } on Object catch (error) {
-    debugPrint('Anlık bildirim servisi kurulamadı: $error');
-  }
-
-  // Mail WebView havuzunu arka planda kurar (mail açılışı hızlansın).
-  WebViewPool.schedule();
 
   runApp(
     ProviderScope(
@@ -77,6 +61,32 @@ Future<void> main() async {
       child: const _Bootstrap(),
     ),
   );
+
+  // Aşağıdakiler ilk kareyi geciktirmesin diye `runApp`ten SONRA kurulur
+  // (iOS'ta soğuk açılışta beyaz açılış ekranı bu kareyi bekler).
+  unawaited(_initAfterFirstFrame(settingsStore));
+}
+
+Future<void> _initAfterFirstFrame(AppSettingsStore settingsStore) async {
+  // Anlık bildirim servisinin seçenekleri ve servis ↔ arayüz mesaj kanalı.
+  // Servisin kendisi burada başlatılmaz: `PushController` ayarlara göre
+  // açar/kapatır.
+  try {
+    PushService.initialize();
+  } on Object catch (error) {
+    debugPrint('Anlık bildirim servisi kurulamadı: $error');
+  }
+
+  // Arka plan görevleri başlatılamasa bile uygulama açılmalı.
+  try {
+    await BackgroundSync.initialize();
+    await BackgroundSync.schedule(settingsStore.read().syncFrequency);
+  } on Object catch (error, stack) {
+    debugPrint('Arka plan senkronizasyonu kurulamadı: $error\n$stack');
+  }
+
+  // Mail WebView havuzunu arka planda kurar (mail açılışı hızlansın).
+  WebViewPool.schedule();
 }
 
 /// Eşitleme denetleyicisini uygulama ömrü boyunca canlı tutar.

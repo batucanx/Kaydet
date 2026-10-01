@@ -13,6 +13,10 @@ import workmanager_apple
   /// hâlâ `nil` olabilir. Token burada saklanır, kanal kurulunca iletilir.
   private var pendingApnsToken: String?
 
+  /// Dokunulan uzak bildirimin `accountId`/`uid` bilgisi; Dart çekene kadar
+  /// (bkz. `takePendingMailOpen`) saklanır.
+  private var pendingMailOpen: [String: Any]?
+
   /// Arka plan push'uyla (bkz. `didReceiveRemoteNotification`) tetiklenen
   /// headless motorlar — güçlü referans tutulmazsa ARC senkron bitmeden
   /// serbest bırakır.
@@ -59,6 +63,14 @@ import workmanager_apple
     // / remote_push_sync.dart: token olmadan hiçbir hesap sunucuya kaydolmaz).
     application.registerForRemoteNotifications()
 
+    // Bildirim merkezinin delegesi AÇIKÇA atanmalı (flutter_local_notifications
+    // README'si de ister) ve başlatma tamamlanmadan ÖNCE: aksi halde aşağıdaki
+    // `willPresent`/`didReceive` hiç çağrılmaz — ön plandaki push'ta liste
+    // tetiklenmez, bildirime dokunmak iletiyi değil yalnızca uygulamayı açar.
+    // Soğuk başlangıçta dokunuş yanıtı da ancak delege bu noktada kuruluysa
+    // teslim edilir.
+    UNUserNotificationCenter.current().delegate = self
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
@@ -80,8 +92,11 @@ import workmanager_apple
     // Flutter'a itilmez; Flutter hazir olunca CEKER — bu yuzden motorun bu
     // noktada hazir olmasi gerekmez.
     shareChannel = ShareChannel(messenger: shareRegistrar.messenger())
-    channel.setMethodCallHandler { call, result in
+    channel.setMethodCallHandler { [weak self] call, result in
       switch call.method {
+      case "takePendingMailOpen":
+        result(self?.pendingMailOpen)
+        self?.pendingMailOpen = nil
       case "setBadgeCount":
         guard
           let arguments = call.arguments as? [String: Any],
@@ -201,5 +216,58 @@ import workmanager_apple
       NSLog("Push background sync timed out")
       finish(.failed)
     }
+  }
+
+  /// Ön planda gelen uzak bildirimleri (APNs) ana motora `onRemotePush` olarak iletir.
+  /// iOS, ön planda gelen alert içerikli bildirimlerde `didReceiveRemoteNotification`
+  /// yerine `UNUserNotificationCenterDelegate.willPresent`'i çağırır.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    let request = notification.request
+    // Yerel bildirimleri (flutter_local_notifications) eklenti yönetir.
+    guard request.trigger is UNPushNotificationTrigger else {
+      super.userNotificationCenter(center, willPresent: notification, withCompletionHandler: completionHandler)
+      return
+    }
+    let userInfo = request.content.userInfo
+    notificationChannel?.invokeMethod(
+      "onRemotePush",
+      arguments: ["accountId": userInfo["accountId"] ?? NSNull()]
+    )
+    // Eklenti yerel olmayan bildirimde tamamlayıcıyı çağırmaz; çağrılmazsa
+    // iOS ön planda bildirimi hiç göstermez. Burada çağrılır.
+    completionHandler([.banner, .list, .sound, .badge])
+  }
+
+  /// Kullanıcı bir uzak (APNs) bildirime dokununca ilgili iletiyi açmak için
+  /// hesap + IMAP uid'si saklanır. flutter_local_notifications yalnızca kendi
+  /// yerel bildirimlerinin yükünü tanır; APNs bildirimlerinde yük boştur.
+  ///
+  /// Dart tarafı ÇEKER (`takePendingMailOpen`): soğuk başlangıçta kanal
+  /// işleyicisi henüz kurulu olmayabilir. Uygulama canlıysa ayrıca
+  /// `onMailTap` ile uyarılır.
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let request = response.notification.request
+    // Yerel bildirimleri (flutter_local_notifications) eklenti yönetir.
+    guard request.trigger is UNPushNotificationTrigger else {
+      super.userNotificationCenter(center, didReceive: response, withCompletionHandler: completionHandler)
+      return
+    }
+    if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+      let uid = (request.content.userInfo["uid"] as? NSNumber)?.intValue
+    {
+      let accountId = (request.content.userInfo["accountId"] as? NSNumber)?.intValue
+      pendingMailOpen = ["accountId": accountId ?? NSNull(), "uid": uid]
+      notificationChannel?.invokeMethod("onMailTap", arguments: nil)
+    }
+    // Eklenti yerel olmayan bildirimde tamamlayıcıyı çağırmaz; burada çağrılır.
+    completionHandler()
   }
 }

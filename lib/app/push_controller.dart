@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -129,6 +130,10 @@ class PushController extends Notifier<void> {
   }
 
   Future<void> _applyDesiredState() async {
+    // Ön plan servisi (PushService / flutter_foreground_task) yalnızca Android içindir.
+    // iOS'ta anlık bildirim APNs ve foreground IMAP IDLE ile yönetilir.
+    if (!Platform.isAndroid) return;
+
     try {
       final accounts = ref.read(allAccountsProvider).value;
       if (accounts == null) return; // henüz yüklenmedi; akış gelince döner

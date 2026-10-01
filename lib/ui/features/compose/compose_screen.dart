@@ -29,8 +29,10 @@ import '../../../domain/use_cases/image_attachment_resize.dart';
 import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
+import '../../../domain/use_cases/signature_formatter.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../settings/new_signature_sheet.dart';
+import 'widgets/compose_image_embed_builder.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
@@ -351,6 +353,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (row != null) {
         // Yanıt/iletme, iletiyi alan hesaptan gönderilir.
         _fromAccountId = row.accountId;
+        await _prefetchDefaultSignature();
         final selfEmail = ref.read(accountByIdProvider(row.accountId))?.email;
         _applyReply(row, body, selfEmail);
       }
@@ -358,7 +361,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (widget.initialTo != null) _to.text = widget.initialTo!;
       if (widget.initialSubject != null) _subject.text = widget.initialSubject!;
       _attachments.addAll(widget.initialAttachmentPaths);
-      _setPlainBody(_initialNewBody());
+      await _prefetchDefaultSignature();
+      _initNewMessageBody();
     }
 
     if (!mounted) return;
@@ -379,12 +383,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
   }
 
-  /// Yeni iletinin ilk gövdesi: paylaşılan metin varsa başa, imza altına.
-  String _initialNewBody() {
+  /// Yeni iletinin ilk gövdesini ve varsayılan imzayı düzenleyiciye yükler.
+  ///
+  /// Paylaşılan metin varsa başa konur; varsayılan imza hem metin hem de görsel/HTML
+  /// öğelerini eksiksiz koruyacak biçimde doğrudan [_insertSignature] üzerinden eklenir.
+  /// Böylece otomatik eklenen imza ile araç çubuğundaki İmza düğmesinden eklenen
+  /// imza birebir aynı Delta/HTML hattını kullanır.
+  void _initNewMessageBody() {
     final shared = widget.initialBody?.trim() ?? '';
-    final signature = _defaultSignatureBody;
-    if (shared.isEmpty) return signature;
-    return signature.isEmpty ? shared : '$shared\n\n$signature';
+    if (shared.isNotEmpty) {
+      _setPlainBody(shared);
+      _quill.updateSelection(
+        TextSelection.collapsed(
+          offset: math.max(0, _quill.document.length - 1),
+        ),
+        ChangeSource.local,
+      );
+    } else {
+      _setPlainBody('');
+    }
+    final defaultSig = _defaultSignatureRow;
+    if (defaultSig != null) {
+      _insertSignature(defaultSig);
+    }
   }
 
   /// Kaydedilmiş gövdeyi düzenleyiciye yükler.
@@ -426,7 +447,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final from = EmailAddress(email: row.fromEmail, name: row.fromName);
     final to = EmailAddress.decodeList(row.toAddrJson);
     final cc = EmailAddress.decodeList(row.ccJson);
-    final signature = _defaultSignatureBody;
+    final sigRow = _defaultSignatureRow;
+    final sigDelta =
+        sigRow != null ? SignatureFormatter.toDelta(sigRow) : Delta();
 
     final quotedSource =
         body?.plainText ??
@@ -435,13 +458,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         '\n\n${formatDetailDate(row.dateUtc)} tarihinde '
         '${from.display} <${from.email}> yazdı:\n';
 
+    void setReplyBody(String quotePrefix, String quoteText) {
+      final docDelta = Delta();
+      if (sigDelta.isNotEmpty) {
+        for (final op in sigDelta.toList()) {
+          docDelta.push(op);
+        }
+      }
+      docDelta.insert('$quotePrefix$quoteText\n');
+      _quill.document = Document.fromDelta(docDelta);
+    }
+
     switch (widget.mode) {
       case ComposeMode.reply:
         _to.text = from.formatted;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
-        _setPlainBody(
-          '$signature$quoteHeader${TextExtraction.quote(quotedSource)}',
-        );
+        setReplyBody(quoteHeader, TextExtraction.quote(quotedSource));
 
       case ComposeMode.replyAll:
         // Kendi adresimiz alıcı listesinden çıkarılır.
@@ -457,24 +489,21 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _cc.text = others.map((a) => a.formatted).join(', ');
         _showCcBcc = others.isNotEmpty;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
-        _setPlainBody(
-          '$signature$quoteHeader${TextExtraction.quote(quotedSource)}',
-        );
+        setReplyBody(quoteHeader, TextExtraction.quote(quotedSource));
 
       case ComposeMode.forward:
         _subject.text = _prefixSubject(row.subject, 'İlet');
-        _setPlainBody(
-          '$signature\n\n'
-          '---------- İletilen ileti ----------\n'
+        setReplyBody(
+          '\n\n---------- İletilen ileti ----------\n'
           'Kimden: ${from.formatted}\n'
           'Tarih: ${formatDetailDate(row.dateUtc)}\n'
           'Konu: ${row.subject}\n'
-          'Kime: ${to.map((a) => a.formatted).join(', ')}\n\n'
-          '$quotedSource',
+          'Kime: ${to.map((a) => a.formatted).join(', ')}\n\n',
+          quotedSource,
         );
 
       case ComposeMode.newMessage:
-        _setPlainBody(signature);
+        break;
     }
 
     // Konuşma zinciri: bu başlıklar olmadan alıcının istemcisi yanıtı
@@ -507,7 +536,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// [EmailHtmlCodec.encode]); içerik boşsa `null` döner (düz taslak olarak
   /// kalır).
   String? get _bodyHtml {
-    if (_bodyPlainText.isEmpty) return null;
+    if (_quill.document.length <= 1 && _bodyPlainText.isEmpty) return null;
     return EmailHtmlCodec.encode(_quill.document.toDelta());
   }
 
@@ -520,16 +549,56 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _bodyDiffersFromSignature;
 
   bool get _bodyDiffersFromSignature {
-    final signature = _defaultSignatureBody;
-    return _bodyPlainText != signature.trim() && _bodyPlainText.isNotEmpty;
+    final signature = _defaultSignatureRow;
+    if (signature == null) return _bodyPlainText.isNotEmpty;
+    // Embed karakterlerini (\uFFFC) temizleyerek kullanıcının girdiği metne odaklan.
+    final cleanDocText = _bodyPlainText.replaceAll('\uFFFC', '').trim();
+    final sigText = signature.body.trim();
+    if (cleanDocText.isNotEmpty) {
+      return cleanDocText != sigText;
+    }
+    // Metin yok veya kullanıcı tarafından silinmiş.
+    // Belgede imza görseli dışında fazladan içerik veya görsel var mı?
+    final currentDelta = _quill.document.toDelta();
+    final imageSource = signature.imageType == 'local'
+        ? signature.localImagePath
+        : signature.remoteImageUrl;
+    final extraEmbeds = currentDelta.toList().where((op) {
+      if (op.data is Map) {
+        final img = (op.data as Map)['image'];
+        if (img != null && img == imageSource) return false;
+        return true;
+      }
+      return false;
+    });
+    return extraEmbeds.isNotEmpty;
   }
 
-  /// [_fromAccountId] için varsayılan imza — GENEL aktif hesabınkini değil,
-  /// bu iletinin gönderileceği hesabınkini kullanır (bkz. [_fromAccountId]).
-  String get _defaultSignatureBody {
+  /// [_fromAccountId] için varsayılan imza satırı.
+  SignatureRow? get _defaultSignatureRow {
     final accountId = _fromAccountId;
-    if (accountId == null) return '';
-    return ref.read(defaultSignatureForAccountProvider(accountId))?.body ?? '';
+    if (accountId == null) return null;
+    final fresh = _freshDefaultSignature;
+    if (fresh != null && fresh.accountId == accountId) return fresh;
+    return ref.read(defaultSignatureForAccountProvider(accountId));
+  }
+
+  SignatureRow? _freshDefaultSignature;
+
+  /// Varsayılan imzayı doğrudan veritabanından okur. `ref.read` ile okunan
+  /// akış sağlayıcısı dinleyicisiz kaldığında duraklatılır ve imza
+  /// ayarlarında yapılan değişiklikten önceki değeri döndürebilir.
+  Future<void> _prefetchDefaultSignature() async {
+    final accountId = _fromAccountId;
+    if (accountId == null) return;
+    final rows = await ref.read(databaseProvider).signaturesOf(accountId);
+    if (rows.isEmpty) {
+      _freshDefaultSignature = null;
+      return;
+    }
+    rows.sort((a, b) => a.id.compareTo(b.id));
+    _freshDefaultSignature =
+        rows.where((s) => s.isDefault).firstOrNull ?? rows.first;
   }
 
   Future<void> _persistDraft() async {
@@ -774,23 +843,49 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
   }
 
-  /// Seçili metnin (varsa) yerine, yoksa imleç konumuna metni ekler — sesli
-  /// yazmayla aynı yerleştirme deseni (bkz. `_startListening`).
-  void _insertSignature(String body) {
-    if (body.isEmpty) return;
-    // Aynı imza gövdede zaten varsa (otomatik eklenen varsayılan dahil) tekrar
-    // eklenmez.
-    if (_bodyPlainText.contains(body.trim())) return;
+  /// Seçili metnin (varsa) yerine, yoksa imleç konumuna imzayı (metin + görsel)
+  /// ekler — sesli yazmayla aynı yerleştirme deseni (bkz. `_startListening`).
+  void _insertSignature(SignatureRow signature) {
+    final sigDelta = SignatureFormatter.toDelta(signature);
+    if (sigDelta.isEmpty) return;
+
+    // Aynı imza gövdede zaten varsa (otomatik eklenen varsayılan dahil) tekrar eklenmez.
+    final currentDelta = _quill.document.toDelta();
+    final jsonStr = jsonEncode(currentDelta.toJson());
+    if (SignatureFormatter.isAlreadyInserted(jsonStr, signature) ||
+        (signature.body.trim().isNotEmpty &&
+            _bodyPlainText.contains(signature.body.trim()))) {
+      return;
+    }
+
     final selection = _quill.selection;
     final index = selection.isValid
         ? selection.start
-        : _quill.document.length - 1;
+        : math.max(0, _quill.document.length - 1);
     final length = selection.isValid ? selection.end - selection.start : 0;
-    _quill.replaceText(
-      index,
-      length,
-      body,
-      TextSelection.collapsed(offset: index + body.length),
+
+    final insertDelta = Delta();
+    if (index > 0 && !_quill.document.toPlainText().endsWith('\n\n')) {
+      insertDelta.insert('\n');
+    }
+    for (final op in sigDelta.toList()) {
+      insertDelta.push(op);
+    }
+
+    final docLength = _quill.document.length;
+    final targetIndex = index.clamp(0, docLength);
+    final validLength = length.clamp(0, docLength - targetIndex);
+
+    final composeDelta = Delta();
+    if (targetIndex > 0) composeDelta.retain(targetIndex);
+    if (validLength > 0) composeDelta.delete(validLength);
+    for (final op in insertDelta.toList()) {
+      composeDelta.push(op);
+    }
+    _quill.compose(
+      composeDelta,
+      TextSelection.collapsed(offset: targetIndex + insertDelta.length),
+      ChangeSource.local,
     );
   }
 
@@ -1360,6 +1455,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                           textCapitalization: TextCapitalization.sentences,
                           minHeight: 220,
                           customStyleBuilder: _composeCustomStyle,
+                          embedBuilders: [ComposeImageEmbedBuilder()],
                         ),
                       ),
                     ),
@@ -1379,7 +1475,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               onToggleFormat: () =>
                   setState(() => _showFormatBar = !_showFormatBar),
               onSignatureSelected: (signature) =>
-                  _insertSignature(signature.body),
+                  _insertSignature(signature),
               // Yeni imza, bu iletinin "Gönderen" hesabına eklenir; liste o
               // hesabın canlı akışından geldiği için hemen menüde görünür.
               onNewSignature: () {
@@ -2794,7 +2890,11 @@ class _SignatureMenuButton extends StatelessWidget {
           ),
         for (final signature in ordered)
           MenuItemButton(
-            leadingIcon: const Icon(LucideIcons.penLine),
+            leadingIcon: Icon(
+              signature.imageType != 'none'
+                  ? LucideIcons.image
+                  : LucideIcons.penLine,
+            ),
             onPressed: () => onSelected(signature),
             child: ConstrainedBox(
               constraints: const BoxConstraints(
@@ -2828,15 +2928,20 @@ class _SignatureMenuButton extends StatelessWidget {
                         ],
                       ],
                     ),
-                    if (signature.body.trim().isNotEmpty)
-                      Text(
-                        signature.body.trim(),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodySmall?.copyWith(
-                          color: t.textSecondary,
-                        ),
+                    Text(
+                      signature.body.trim().isNotEmpty
+                          ? signature.body.trim()
+                          : (signature.imageType == 'local'
+                              ? '📷 Yerel görsel imza'
+                              : (signature.imageType == 'remote'
+                                  ? '🌐 Uzak görsel imza'
+                                  : '')),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: t.textSecondary,
                       ),
+                    ),
                   ],
                 ),
               ),

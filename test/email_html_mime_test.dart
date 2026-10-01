@@ -129,4 +129,61 @@ void main() {
     final received = built.mime.decodeTextHtmlPart()!;
     expect(EmailHtmlCodec.decode(received).toJson(), delta.toJson());
   });
+
+  test('görsel içeren Delta HTML <img> olarak üretilir ve geri decode edilir', () {
+    final delta = Delta()
+      ..insert('İmza öncesi metin\n')
+      ..insert({'image': 'https://www.hasem.net/imza_silme/murat.png'}, {'width': 200})
+      ..insert('\n')
+      ..insert('Batuhan Can Aracı\n');
+    final html = EmailHtmlCodec.encode(delta);
+    expect(
+      html,
+      contains('<img src="https://www.hasem.net/imza_silme/murat.png" width="200"'),
+    );
+    expect(html, contains('İmza öncesi metin'));
+    expect(html, contains('Batuhan Can Aracı'));
+
+    final decoded = EmailHtmlCodec.decode(html);
+    final ops = decoded.toList();
+    expect(
+      ops.any(
+        (op) =>
+            op.data is Map &&
+            (op.data as Map)['image'] ==
+                'https://www.hasem.net/imza_silme/murat.png',
+      ),
+      isTrue,
+    );
+  });
+
+  test(
+    'yerel dosya yolu HTML içine sızmaz, MIME Content-ID ve inline attachment olur',
+    () {
+      final tempDir = Directory.systemTemp.createTempSync('sig_test_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final localImage = File('${tempDir.path}/imza_logo.png')
+        ..writeAsBytesSync([137, 80, 78, 71, 13, 10, 26, 10]); // png header
+
+      final html =
+          '<div>Metin</div><img src="${localImage.path}" width="200" />';
+      final built = build(html);
+      final source = built.source;
+
+      // 1. Cihaz yerel dosya yolu ASLA HTML içine veya MIME metnine sızmaz
+      expect(source, isNot(contains(localImage.path)));
+      expect(source, isNot(contains(tempDir.path)));
+
+      // 2. HTML'deki src cid: referansına dönüşür
+      expect(source, contains('<img src="cid:sig_'));
+
+      // 3. MIME parçası Content-ID ve inline disposition alır
+      expect(source, contains('Content-ID: <sig_'));
+      expect(source, contains('Content-Disposition: inline; filename="imza_logo.png"'));
+      expect(source, contains('Content-Type: image/png; name="imza_logo.png"'));
+
+      // 4. Inline görsel normal attachment sayılmaz
+      expect(built.mime.hasAttachments(), isFalse);
+    },
+  );
 }

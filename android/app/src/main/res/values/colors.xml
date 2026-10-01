@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Açılış (launch) ekranı zemini: uygulamanın açık tema zemini (tokens.dart bg). -->
+    <color name="launch_background">#FFFFFFFF</color>
+</resources>

@@ -25,9 +25,6 @@ class PushTaskHandler extends TaskHandler {
 
   final Map<int, _Watched> _watched = {};
 
-  /// Kullanıcının o an baktığı Gelen Kutusu (ana isolate bildirir).
-  int? _uiInboxId;
-
   bool _reconciling = false;
   bool _reconcileAgain = false;
   bool _destroyed = false;
@@ -86,8 +83,8 @@ class PushTaskHandler extends TaskHandler {
     if (data is! Map) return;
     switch (data[PushProtocol.typeKey]) {
       case PushProtocol.ui:
-        final inboxId = data[PushProtocol.inboxIdKey];
-        _uiInboxId = inboxId is int ? inboxId : null;
+        // Arayüz durumu artık bildirimi etkilemez; mesaj yok sayılır.
+        break;
       case PushProtocol.accounts:
         unawaited(_reconcile());
     }
@@ -164,12 +161,8 @@ class PushTaskHandler extends TaskHandler {
     final outcome = sync.outcome;
 
     if (outcome.newMessageIds.isNotEmpty && !outcome.initialDownload) {
-      final viewing = await _isViewingInbox(sync.inboxId);
-      await notifier.notifyNew(
-        accountId: sync.accountId,
-        outcome: outcome,
-        suppressMailboxId: viewing ? sync.inboxId : null,
-      );
+      // Kullanıcı listeye bakıyor olsa bile bildirilir.
+      await notifier.notifyNew(accountId: sync.accountId, outcome: outcome);
     }
 
     // Başka bir cihazdan okunan/silinen iletilerin bildirimini kaldır.
@@ -181,23 +174,6 @@ class PushTaskHandler extends TaskHandler {
       FlutterForegroundTask.sendDataToMain(
         PushProtocol.message(PushProtocol.dbChanged),
       );
-    }
-  }
-
-  /// Kullanıcı şu an bu Gelen Kutusu'nun listesine bakıyor mu?
-  ///
-  /// Ana isolate'in bildirdiği `_uiInboxId` tek başına yetmez: uygulama
-  /// kullanıcı bir Gelen Kutusu'ndayken kaydırılıp kapatılırsa servis eski
-  /// değeri sonsuza dek taşır ve o kutunun bildirimleri hiç çıkmazdı.
-  /// Uygulamanın gerçekten ön planda olduğu ayrıca doğrulanır.
-  Future<bool> _isViewingInbox(int inboxId) async {
-    if (_uiInboxId != inboxId) return false;
-    try {
-      return await FlutterForegroundTask.isAppOnForeground;
-    } on Object catch (_) {
-      // Doğrulanamıyorsa bildirim göster: fazladan bildirim, kaçırılan
-      // bildirimden iyidir.
-      return false;
     }
   }
 }

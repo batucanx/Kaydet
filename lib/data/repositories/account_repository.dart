@@ -356,33 +356,65 @@ class AccountRepository {
   /// Yeni imza oluşturur. Hesabın ilk imzasıysa otomatik varsayılan olur —
   /// aksi hâlde kullanıcı bir imza ekleyip onu hiç varsayılan yapmadan
   /// yazma ekranına girerse hiçbir imza otomatik eklenmez, bu şaşırtıcı olur.
-  Future<void> createSignature({
+  Future<int> createSignature({
     required int accountId,
     required String name,
     required String body,
+    String imageType = 'none',
+    String? localImagePath,
+    String? remoteImageUrl,
+    int imageWidth = 200,
+    String imagePosition = 'bottom',
+    bool? isDefault,
   }) async {
     final hasAny = (await _db.signaturesOf(accountId)).isNotEmpty;
-    await _db.insertSignature(
+    final makeDefault = isDefault ?? !hasAny;
+    final rowId = await _db.insertSignature(
       SignaturesCompanion.insert(
         accountId: accountId,
         name: name,
         body: Value(body),
-        isDefault: Value(!hasAny),
+        isDefault: Value(makeDefault),
+        imageType: Value(imageType),
+        localImagePath: Value(localImagePath),
+        remoteImageUrl: Value(remoteImageUrl),
+        imageWidth: Value(imageWidth),
+        imagePosition: Value(imagePosition),
       ),
     );
+    if (makeDefault && hasAny) {
+      await _db.setDefaultSignature(accountId, rowId);
+    }
+    return rowId;
   }
 
   Future<void> updateSignatureContent({
     required int signatureId,
     required String name,
     required String body,
-  }) => _db.updateSignatureRow(
-    signatureId,
-    SignaturesCompanion(name: Value(name), body: Value(body)),
-  );
+    String imageType = 'none',
+    String? localImagePath,
+    String? remoteImageUrl,
+    int imageWidth = 200,
+    String imagePosition = 'bottom',
+    bool? isDefault,
+  }) async {
+    final patch = SignaturesCompanion(
+      name: Value(name),
+      body: Value(body),
+      imageType: Value(imageType),
+      localImagePath: Value(localImagePath),
+      remoteImageUrl: Value(remoteImageUrl),
+      imageWidth: Value(imageWidth),
+      imagePosition: Value(imagePosition),
+      isDefault: isDefault != null ? Value(isDefault) : const Value.absent(),
+    );
+    await _db.updateSignatureRow(signatureId, patch);
+  }
 
-  Future<void> deleteSignature(int signatureId) =>
-      _db.deleteSignature(signatureId);
+  Future<void> deleteSignature(int signatureId) async {
+    await _db.deleteSignature(signatureId);
+  }
 
   Future<void> setDefaultSignature(int accountId, int signatureId) =>
       _db.setDefaultSignature(accountId, signatureId);

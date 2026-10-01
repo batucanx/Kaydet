@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ sistem açılış ekranında ikon görünmesin diye tamamen saydam
+     ikon. İçi boş bir vektör geçersiz sayılıp sistem uygulama ikonuna
+     düşebildiğinden, gerçek ama saydam bir yol çizilir. Logo animasyonu Flutter
+     tarafında oynar (bkz. LaunchSplash). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,0h288v288h-288z" />
+</vector>

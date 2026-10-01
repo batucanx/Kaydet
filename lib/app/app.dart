@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_quill/flutter_quill.dart'
     show FlutterQuillLocalizations;
@@ -9,6 +12,7 @@ import '../ui/core/theme/app_theme.dart';
 import '../ui/core/theme/tokens.dart';
 import '../ui/features/auth/login_screen.dart';
 import '../ui/features/shell/app_shell.dart';
+import '../ui/features/splash/launch_splash.dart';
 import 'navigation.dart';
 import 'providers.dart';
 
@@ -46,10 +50,30 @@ class KaydetApp extends ConsumerWidget {
         final scale = media.textScaler.scale(1);
         // Yalnızca iOS'ta yazılar biraz büyütülür (bkz. `AppText.iosTextBoost`);
         // Android'de çarpan uygulanmaz. Sınırlama çarpandan SONRA yapılır.
+        final tokens = context.tokens;
         final clamped = MediaQuery.withClampedTextScaling(
           minScaleFactor: 0.85,
           maxScaleFactor: 1.6,
-          child: child ?? const SizedBox.shrink(),
+          // Üst çubuğu olmayan ekranlar için varsayılan sistem çubuğu stili;
+          // `AppBar` ve yan menü kendi stillerini (daha derindeki bölge)
+          // verir ve bunun önüne geçer.
+          child: AnnotatedRegion<SystemUiOverlayStyle>(
+            value: SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness: tokens.isDark
+                  ? Brightness.light
+                  : Brightness.dark,
+              statusBarBrightness: tokens.isDark
+                  ? Brightness.dark
+                  : Brightness.light,
+              systemNavigationBarColor: tokens.bg,
+              systemNavigationBarDividerColor: Colors.transparent,
+              systemNavigationBarIconBrightness: tokens.isDark
+                  ? Brightness.light
+                  : Brightness.dark,
+            ),
+            child: child ?? const SizedBox.shrink(),
+          ),
         );
         if (defaultTargetPlatform != TargetPlatform.iOS) return clamped;
         return MediaQuery(
@@ -65,12 +89,41 @@ class KaydetApp extends ConsumerWidget {
 }
 
 /// Oturum kontrolü: hesap varsa uygulama, yoksa giriş ekranı.
-class _RootGate extends ConsumerWidget {
+///
+/// Soğuk açılışta hesap hazır olsa bile marka animasyonu (bkz. `LaunchSplash`)
+/// sonuna kadar oynar; hata varsa beklenmeden gösterilir.
+class _RootGate extends ConsumerStatefulWidget {
   const _RootGate();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_RootGate> createState() => _RootGateState();
+}
+
+class _RootGateState extends ConsumerState<_RootGate> {
+  static const Duration _splashDuration = Duration(milliseconds: 3200);
+
+  bool _splashDone = false;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer(_splashDuration, () {
+      if (mounted) setState(() => _splashDone = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final account = ref.watch(activeAccountProvider);
+    // Sistem animasyonları kapalıysa (erişilebilirlik) animasyon beklenmez.
+    final skipSplash = context.motion(_splashDuration) == Duration.zero;
 
     // Splash/Giriş/Ana uygulama arası eskiden anlık swap'tı — açılışta ve
     // son hesaptan çıkışta/ilk hesap eklemede "tak diye" hissediliyordu.
@@ -81,12 +134,22 @@ class _RootGate extends ConsumerWidget {
       switchInCurve: Motion.standard,
       switchOutCurve: Motion.standard,
       child: account.when(
-        loading: () => const _SplashScreen(key: ValueKey('root-splash')),
+        loading: () => LaunchSplash(
+          key: const ValueKey('root-splash'),
+          duration: _splashDuration,
+        ),
         error: (error, _) => _SplashScreen(
           key: const ValueKey('root-error'),
           error: '$error',
         ),
-        data: (row) => row == null
+        // Aynı `ValueKey` korunur: hesap animasyon bitmeden gelirse
+        // `LaunchSplash` yeniden kurulmaz, animasyon kesintisiz sürer.
+        data: (row) => !_splashDone && !skipSplash
+            ? LaunchSplash(
+                key: const ValueKey('root-splash'),
+                duration: _splashDuration,
+              )
+            : row == null
             ? const LoginScreen(key: ValueKey('root-login'))
             : const AppShell(key: ValueKey('root-shell')),
       ),

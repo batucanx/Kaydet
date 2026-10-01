@@ -72,6 +72,29 @@ class NotificationService {
       StreamController<int?>.broadcast();
   static Stream<int?> get remotePushes => _remotePushController.stream;
 
+  /// iOS'ta uzak (APNs) bildirime dokunulduğunda uyarır; hedef
+  /// [takePendingMailOpen] ile çekilir.
+  static final StreamController<void> _mailTapController =
+      StreamController<void>.broadcast();
+  static Stream<void> get mailTaps => _mailTapController.stream;
+
+  /// Dokunulan uzak bildirimin hesabı ve IMAP uid'si (yoksa `null`). Tek
+  /// seferliktir: okunca native tarafta silinir.
+  Future<({int? accountId, int uid})?> takePendingMailOpen() async {
+    if (!Platform.isIOS) return null;
+    try {
+      final reply = await _iosChannel.invokeMapMethod<String, Object?>(
+        'takePendingMailOpen',
+      );
+      final uid = reply?['uid'];
+      if (uid is! int) return null;
+      final accountId = reply?['accountId'];
+      return (accountId: accountId is int ? accountId : null, uid: uid);
+    } on PlatformException catch (_) {
+      return null;
+    }
+  }
+
   // `NotificationService()` her çağrıda yeni bir örnek döner (bkz.
   // `notificationServiceProvider` ve `main.dart`daki ayrı örnek) ama
   // altındaki `FlutterLocalNotificationsPlugin` tek bir singleton'dır.
@@ -182,6 +205,10 @@ class NotificationService {
         final arguments = call.arguments;
         final accountId = arguments is Map ? arguments['accountId'] : null;
         _remotePushController.add(accountId is int ? accountId : null);
+        return;
+      }
+      if (call.method == 'onMailTap') {
+        _mailTapController.add(null);
         return;
       }
       if (call.method != 'onApnsToken') return;

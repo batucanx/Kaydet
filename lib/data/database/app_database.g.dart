@@ -5035,8 +5035,77 @@ class $SignaturesTable extends Signatures
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _imageTypeMeta = const VerificationMeta(
+    'imageType',
+  );
   @override
-  List<GeneratedColumn> get $columns => [id, accountId, name, body, isDefault];
+  late final GeneratedColumn<String> imageType = GeneratedColumn<String>(
+    'image_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('none'),
+  );
+  static const VerificationMeta _localImagePathMeta = const VerificationMeta(
+    'localImagePath',
+  );
+  @override
+  late final GeneratedColumn<String> localImagePath = GeneratedColumn<String>(
+    'local_image_path',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteImageUrlMeta = const VerificationMeta(
+    'remoteImageUrl',
+  );
+  @override
+  late final GeneratedColumn<String> remoteImageUrl = GeneratedColumn<String>(
+    'remote_image_url',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _imageWidthMeta = const VerificationMeta(
+    'imageWidth',
+  );
+  @override
+  late final GeneratedColumn<int> imageWidth = GeneratedColumn<int>(
+    'image_width',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(200),
+  );
+  static const VerificationMeta _imagePositionMeta = const VerificationMeta(
+    'imagePosition',
+  );
+  @override
+  late final GeneratedColumn<String> imagePosition = GeneratedColumn<String>(
+    'image_position',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('bottom'),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    name,
+    body,
+    isDefault,
+    imageType,
+    localImagePath,
+    remoteImageUrl,
+    imageWidth,
+    imagePosition,
+  ];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -5080,6 +5149,45 @@ class $SignaturesTable extends Signatures
         isDefault.isAcceptableOrUnknown(data['is_default']!, _isDefaultMeta),
       );
     }
+    if (data.containsKey('image_type')) {
+      context.handle(
+        _imageTypeMeta,
+        imageType.isAcceptableOrUnknown(data['image_type']!, _imageTypeMeta),
+      );
+    }
+    if (data.containsKey('local_image_path')) {
+      context.handle(
+        _localImagePathMeta,
+        localImagePath.isAcceptableOrUnknown(
+          data['local_image_path']!,
+          _localImagePathMeta,
+        ),
+      );
+    }
+    if (data.containsKey('remote_image_url')) {
+      context.handle(
+        _remoteImageUrlMeta,
+        remoteImageUrl.isAcceptableOrUnknown(
+          data['remote_image_url']!,
+          _remoteImageUrlMeta,
+        ),
+      );
+    }
+    if (data.containsKey('image_width')) {
+      context.handle(
+        _imageWidthMeta,
+        imageWidth.isAcceptableOrUnknown(data['image_width']!, _imageWidthMeta),
+      );
+    }
+    if (data.containsKey('image_position')) {
+      context.handle(
+        _imagePositionMeta,
+        imagePosition.isAcceptableOrUnknown(
+          data['image_position']!,
+          _imagePositionMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -5109,6 +5217,26 @@ class $SignaturesTable extends Signatures
         DriftSqlType.bool,
         data['${effectivePrefix}is_default'],
       )!,
+      imageType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}image_type'],
+      )!,
+      localImagePath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}local_image_path'],
+      ),
+      remoteImageUrl: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_image_url'],
+      ),
+      imageWidth: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}image_width'],
+      )!,
+      imagePosition: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}image_position'],
+      )!,
     );
   }
 
@@ -5127,12 +5255,32 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
   /// Hesap başına en fazla bir tane olabilir — bkz. kısmi tekil indeks
   /// `idx_signatures_default` (`AppDatabase._createIndexes`).
   final bool isDefault;
+
+  /// Görsel kaynağı: 'none' | 'local' | 'remote'
+  final String imageType;
+
+  /// Galeriden seçilen yerel görselin uygulama içindeki saklama yolu.
+  final String? localImagePath;
+
+  /// Uzak görsel URL'si (ör. https://www.hasem.net/imza_silme/murat.png).
+  final String? remoteImageUrl;
+
+  /// Görselin görüntüleme genişliği (px). Varsayılan 200.
+  final int imageWidth;
+
+  /// Görselin metne göre konumu: 'top' (metnin üstünde) | 'bottom' (metnin altında).
+  final String imagePosition;
   const SignatureRow({
     required this.id,
     required this.accountId,
     required this.name,
     required this.body,
     required this.isDefault,
+    required this.imageType,
+    this.localImagePath,
+    this.remoteImageUrl,
+    required this.imageWidth,
+    required this.imagePosition,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -5142,6 +5290,15 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
     map['name'] = Variable<String>(name);
     map['body'] = Variable<String>(body);
     map['is_default'] = Variable<bool>(isDefault);
+    map['image_type'] = Variable<String>(imageType);
+    if (!nullToAbsent || localImagePath != null) {
+      map['local_image_path'] = Variable<String>(localImagePath);
+    }
+    if (!nullToAbsent || remoteImageUrl != null) {
+      map['remote_image_url'] = Variable<String>(remoteImageUrl);
+    }
+    map['image_width'] = Variable<int>(imageWidth);
+    map['image_position'] = Variable<String>(imagePosition);
     return map;
   }
 
@@ -5152,6 +5309,15 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
       name: Value(name),
       body: Value(body),
       isDefault: Value(isDefault),
+      imageType: Value(imageType),
+      localImagePath: localImagePath == null && nullToAbsent
+          ? const Value.absent()
+          : Value(localImagePath),
+      remoteImageUrl: remoteImageUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteImageUrl),
+      imageWidth: Value(imageWidth),
+      imagePosition: Value(imagePosition),
     );
   }
 
@@ -5166,6 +5332,11 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
       name: serializer.fromJson<String>(json['name']),
       body: serializer.fromJson<String>(json['body']),
       isDefault: serializer.fromJson<bool>(json['isDefault']),
+      imageType: serializer.fromJson<String>(json['imageType']),
+      localImagePath: serializer.fromJson<String?>(json['localImagePath']),
+      remoteImageUrl: serializer.fromJson<String?>(json['remoteImageUrl']),
+      imageWidth: serializer.fromJson<int>(json['imageWidth']),
+      imagePosition: serializer.fromJson<String>(json['imagePosition']),
     );
   }
   @override
@@ -5177,6 +5348,11 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
       'name': serializer.toJson<String>(name),
       'body': serializer.toJson<String>(body),
       'isDefault': serializer.toJson<bool>(isDefault),
+      'imageType': serializer.toJson<String>(imageType),
+      'localImagePath': serializer.toJson<String?>(localImagePath),
+      'remoteImageUrl': serializer.toJson<String?>(remoteImageUrl),
+      'imageWidth': serializer.toJson<int>(imageWidth),
+      'imagePosition': serializer.toJson<String>(imagePosition),
     };
   }
 
@@ -5186,12 +5362,26 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
     String? name,
     String? body,
     bool? isDefault,
+    String? imageType,
+    Value<String?> localImagePath = const Value.absent(),
+    Value<String?> remoteImageUrl = const Value.absent(),
+    int? imageWidth,
+    String? imagePosition,
   }) => SignatureRow(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
     name: name ?? this.name,
     body: body ?? this.body,
     isDefault: isDefault ?? this.isDefault,
+    imageType: imageType ?? this.imageType,
+    localImagePath: localImagePath.present
+        ? localImagePath.value
+        : this.localImagePath,
+    remoteImageUrl: remoteImageUrl.present
+        ? remoteImageUrl.value
+        : this.remoteImageUrl,
+    imageWidth: imageWidth ?? this.imageWidth,
+    imagePosition: imagePosition ?? this.imagePosition,
   );
   SignatureRow copyWithCompanion(SignaturesCompanion data) {
     return SignatureRow(
@@ -5200,6 +5390,19 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
       name: data.name.present ? data.name.value : this.name,
       body: data.body.present ? data.body.value : this.body,
       isDefault: data.isDefault.present ? data.isDefault.value : this.isDefault,
+      imageType: data.imageType.present ? data.imageType.value : this.imageType,
+      localImagePath: data.localImagePath.present
+          ? data.localImagePath.value
+          : this.localImagePath,
+      remoteImageUrl: data.remoteImageUrl.present
+          ? data.remoteImageUrl.value
+          : this.remoteImageUrl,
+      imageWidth: data.imageWidth.present
+          ? data.imageWidth.value
+          : this.imageWidth,
+      imagePosition: data.imagePosition.present
+          ? data.imagePosition.value
+          : this.imagePosition,
     );
   }
 
@@ -5210,13 +5413,29 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
           ..write('accountId: $accountId, ')
           ..write('name: $name, ')
           ..write('body: $body, ')
-          ..write('isDefault: $isDefault')
+          ..write('isDefault: $isDefault, ')
+          ..write('imageType: $imageType, ')
+          ..write('localImagePath: $localImagePath, ')
+          ..write('remoteImageUrl: $remoteImageUrl, ')
+          ..write('imageWidth: $imageWidth, ')
+          ..write('imagePosition: $imagePosition')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, accountId, name, body, isDefault);
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    name,
+    body,
+    isDefault,
+    imageType,
+    localImagePath,
+    remoteImageUrl,
+    imageWidth,
+    imagePosition,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5225,7 +5444,12 @@ class SignatureRow extends DataClass implements Insertable<SignatureRow> {
           other.accountId == this.accountId &&
           other.name == this.name &&
           other.body == this.body &&
-          other.isDefault == this.isDefault);
+          other.isDefault == this.isDefault &&
+          other.imageType == this.imageType &&
+          other.localImagePath == this.localImagePath &&
+          other.remoteImageUrl == this.remoteImageUrl &&
+          other.imageWidth == this.imageWidth &&
+          other.imagePosition == this.imagePosition);
 }
 
 class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
@@ -5234,12 +5458,22 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
   final Value<String> name;
   final Value<String> body;
   final Value<bool> isDefault;
+  final Value<String> imageType;
+  final Value<String?> localImagePath;
+  final Value<String?> remoteImageUrl;
+  final Value<int> imageWidth;
+  final Value<String> imagePosition;
   const SignaturesCompanion({
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
     this.name = const Value.absent(),
     this.body = const Value.absent(),
     this.isDefault = const Value.absent(),
+    this.imageType = const Value.absent(),
+    this.localImagePath = const Value.absent(),
+    this.remoteImageUrl = const Value.absent(),
+    this.imageWidth = const Value.absent(),
+    this.imagePosition = const Value.absent(),
   });
   SignaturesCompanion.insert({
     this.id = const Value.absent(),
@@ -5247,6 +5481,11 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
     required String name,
     this.body = const Value.absent(),
     this.isDefault = const Value.absent(),
+    this.imageType = const Value.absent(),
+    this.localImagePath = const Value.absent(),
+    this.remoteImageUrl = const Value.absent(),
+    this.imageWidth = const Value.absent(),
+    this.imagePosition = const Value.absent(),
   }) : accountId = Value(accountId),
        name = Value(name);
   static Insertable<SignatureRow> custom({
@@ -5255,6 +5494,11 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
     Expression<String>? name,
     Expression<String>? body,
     Expression<bool>? isDefault,
+    Expression<String>? imageType,
+    Expression<String>? localImagePath,
+    Expression<String>? remoteImageUrl,
+    Expression<int>? imageWidth,
+    Expression<String>? imagePosition,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -5262,6 +5506,11 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
       if (name != null) 'name': name,
       if (body != null) 'body': body,
       if (isDefault != null) 'is_default': isDefault,
+      if (imageType != null) 'image_type': imageType,
+      if (localImagePath != null) 'local_image_path': localImagePath,
+      if (remoteImageUrl != null) 'remote_image_url': remoteImageUrl,
+      if (imageWidth != null) 'image_width': imageWidth,
+      if (imagePosition != null) 'image_position': imagePosition,
     });
   }
 
@@ -5271,6 +5520,11 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
     Value<String>? name,
     Value<String>? body,
     Value<bool>? isDefault,
+    Value<String>? imageType,
+    Value<String?>? localImagePath,
+    Value<String?>? remoteImageUrl,
+    Value<int>? imageWidth,
+    Value<String>? imagePosition,
   }) {
     return SignaturesCompanion(
       id: id ?? this.id,
@@ -5278,6 +5532,11 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
       name: name ?? this.name,
       body: body ?? this.body,
       isDefault: isDefault ?? this.isDefault,
+      imageType: imageType ?? this.imageType,
+      localImagePath: localImagePath ?? this.localImagePath,
+      remoteImageUrl: remoteImageUrl ?? this.remoteImageUrl,
+      imageWidth: imageWidth ?? this.imageWidth,
+      imagePosition: imagePosition ?? this.imagePosition,
     );
   }
 
@@ -5299,6 +5558,21 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
     if (isDefault.present) {
       map['is_default'] = Variable<bool>(isDefault.value);
     }
+    if (imageType.present) {
+      map['image_type'] = Variable<String>(imageType.value);
+    }
+    if (localImagePath.present) {
+      map['local_image_path'] = Variable<String>(localImagePath.value);
+    }
+    if (remoteImageUrl.present) {
+      map['remote_image_url'] = Variable<String>(remoteImageUrl.value);
+    }
+    if (imageWidth.present) {
+      map['image_width'] = Variable<int>(imageWidth.value);
+    }
+    if (imagePosition.present) {
+      map['image_position'] = Variable<String>(imagePosition.value);
+    }
     return map;
   }
 
@@ -5309,7 +5583,12 @@ class SignaturesCompanion extends UpdateCompanion<SignatureRow> {
           ..write('accountId: $accountId, ')
           ..write('name: $name, ')
           ..write('body: $body, ')
-          ..write('isDefault: $isDefault')
+          ..write('isDefault: $isDefault, ')
+          ..write('imageType: $imageType, ')
+          ..write('localImagePath: $localImagePath, ')
+          ..write('remoteImageUrl: $remoteImageUrl, ')
+          ..write('imageWidth: $imageWidth, ')
+          ..write('imagePosition: $imagePosition')
           ..write(')'))
         .toString();
   }
@@ -11237,6 +11516,11 @@ typedef $$SignaturesTableCreateCompanionBuilder =
       required String name,
       Value<String> body,
       Value<bool> isDefault,
+      Value<String> imageType,
+      Value<String?> localImagePath,
+      Value<String?> remoteImageUrl,
+      Value<int> imageWidth,
+      Value<String> imagePosition,
     });
 typedef $$SignaturesTableUpdateCompanionBuilder =
     SignaturesCompanion Function({
@@ -11245,6 +11529,11 @@ typedef $$SignaturesTableUpdateCompanionBuilder =
       Value<String> name,
       Value<String> body,
       Value<bool> isDefault,
+      Value<String> imageType,
+      Value<String?> localImagePath,
+      Value<String?> remoteImageUrl,
+      Value<int> imageWidth,
+      Value<String> imagePosition,
     });
 
 final class $$SignaturesTableReferences
@@ -11295,6 +11584,31 @@ class $$SignaturesTableFilterComposer
 
   ColumnFilters<bool> get isDefault => $composableBuilder(
     column: $table.isDefault,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get imageType => $composableBuilder(
+    column: $table.imageType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get localImagePath => $composableBuilder(
+    column: $table.localImagePath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteImageUrl => $composableBuilder(
+    column: $table.remoteImageUrl,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get imageWidth => $composableBuilder(
+    column: $table.imageWidth,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get imagePosition => $composableBuilder(
+    column: $table.imagePosition,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11351,6 +11665,31 @@ class $$SignaturesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get imageType => $composableBuilder(
+    column: $table.imageType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get localImagePath => $composableBuilder(
+    column: $table.localImagePath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteImageUrl => $composableBuilder(
+    column: $table.remoteImageUrl,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get imageWidth => $composableBuilder(
+    column: $table.imageWidth,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get imagePosition => $composableBuilder(
+    column: $table.imagePosition,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$AccountsTableOrderingComposer get accountId {
     final $$AccountsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -11395,6 +11734,29 @@ class $$SignaturesTableAnnotationComposer
 
   GeneratedColumn<bool> get isDefault =>
       $composableBuilder(column: $table.isDefault, builder: (column) => column);
+
+  GeneratedColumn<String> get imageType =>
+      $composableBuilder(column: $table.imageType, builder: (column) => column);
+
+  GeneratedColumn<String> get localImagePath => $composableBuilder(
+    column: $table.localImagePath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get remoteImageUrl => $composableBuilder(
+    column: $table.remoteImageUrl,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get imageWidth => $composableBuilder(
+    column: $table.imageWidth,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get imagePosition => $composableBuilder(
+    column: $table.imagePosition,
+    builder: (column) => column,
+  );
 
   $$AccountsTableAnnotationComposer get accountId {
     final $$AccountsTableAnnotationComposer composer = $composerBuilder(
@@ -11453,12 +11815,22 @@ class $$SignaturesTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<String> body = const Value.absent(),
                 Value<bool> isDefault = const Value.absent(),
+                Value<String> imageType = const Value.absent(),
+                Value<String?> localImagePath = const Value.absent(),
+                Value<String?> remoteImageUrl = const Value.absent(),
+                Value<int> imageWidth = const Value.absent(),
+                Value<String> imagePosition = const Value.absent(),
               }) => SignaturesCompanion(
                 id: id,
                 accountId: accountId,
                 name: name,
                 body: body,
                 isDefault: isDefault,
+                imageType: imageType,
+                localImagePath: localImagePath,
+                remoteImageUrl: remoteImageUrl,
+                imageWidth: imageWidth,
+                imagePosition: imagePosition,
               ),
           createCompanionCallback:
               ({
@@ -11467,12 +11839,22 @@ class $$SignaturesTableTableManager
                 required String name,
                 Value<String> body = const Value.absent(),
                 Value<bool> isDefault = const Value.absent(),
+                Value<String> imageType = const Value.absent(),
+                Value<String?> localImagePath = const Value.absent(),
+                Value<String?> remoteImageUrl = const Value.absent(),
+                Value<int> imageWidth = const Value.absent(),
+                Value<String> imagePosition = const Value.absent(),
               }) => SignaturesCompanion.insert(
                 id: id,
                 accountId: accountId,
                 name: name,
                 body: body,
                 isDefault: isDefault,
+                imageType: imageType,
+                localImagePath: localImagePath,
+                remoteImageUrl: remoteImageUrl,
+                imageWidth: imageWidth,
+                imagePosition: imagePosition,
               ),
           withReferenceMapper: (p0) => p0
               .map(

@@ -6,6 +6,7 @@ import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
+import '../../domain/use_cases/html_inline_processor.dart';
 import 'attachment_files.dart';
 
 /// Gönderim sonucu.
@@ -341,37 +342,54 @@ abstract final class MimeBuilder {
       }
       builder.setHeader('X-Mailer', 'KAYDET');
 
-      final hasHtml = message.html != null && message.html!.trim().isNotEmpty;
+      String? processedHtml;
+      var inlines = const <InlineImageItem>[];
+      if (message.html != null && message.html!.trim().isNotEmpty) {
+        final result = HtmlInlineProcessor.process(message.html!);
+        processedHtml = result.html;
+        inlines = result.inlines;
+      }
+
+      final hasHtml = processedHtml != null && processedHtml.trim().isNotEmpty;
       final hasAttachments = attachmentFiles.isNotEmpty;
+      final hasInlines = inlines.isNotEmpty;
 
       // Düz metin + HTML ASLA kardeş (`multipart/mixed`) parçalar olarak
-      // gönderilmez: istemciler karışık parçaları art arda gösterir, yani
-      // alıcı önce düz metni sonra biçimli HTML'i (ya da tersini) görür ve
-      // hangisinin çizileceği istemciye göre değişir. Doğru yapı
-      // `multipart/alternative`dir: alıcının istemcisi biri seçer, HTML
-      // gösterebilen istemci biçimli olanı çizer (RFC 2046 §5.1.4 — en sadık
-      // biçim, yani HTML, SONA konur).
-      //
-      // Ekler varsa kök `multipart/mixed` olur ve alternatif çifti onun İLK
-      // çocuğu, ekler ise kardeşleridir.
-      if (hasAttachments) {
+      // gönderilmez. Ekler (attachmentFiles) VEYA satır içi görseller (inlines)
+      // varsa kök `multipart/mixed` olur, alternatif çifti onun İLK çocuğu,
+      // satır içi görseller Content-ID ile kardeşleri, normal ekler ise
+      // en sondaki kardeşleridir.
+      if (hasAttachments || hasInlines) {
         builder.setContentType(
           em.MediaType.fromSubtype(em.MediaSubtype.multipartMixed),
         );
         if (hasHtml) {
           builder.addMultipartAlternative(
             plainText: message.plainText,
-            htmlText: message.html!,
+            htmlText: processedHtml,
           );
         } else {
           builder.addTextPlain(message.plainText);
+        }
+
+        // Satır içi (CID) görseller
+        for (final inline in inlines) {
+          final part = builder.addBinary(
+            inline.bytes,
+            em.MediaType.guessFromFileName(inline.filename),
+            filename: inline.filename,
+          );
+          part.setHeader('Content-ID', '<${inline.cid}>');
+          part.contentDisposition = em.ContentDispositionHeader(
+            'inline; filename="${inline.filename}"',
+          );
         }
       } else if (hasHtml) {
         builder.setContentType(
           em.MediaType.fromSubtype(em.MediaSubtype.multipartAlternative),
         );
         builder.addTextPlain(message.plainText);
-        builder.addTextHtml(message.html!);
+        builder.addTextHtml(processedHtml);
       } else {
         builder.addTextPlain(message.plainText);
       }

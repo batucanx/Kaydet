@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -59,9 +60,13 @@ class SyncController extends Notifier<SyncState> {
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
   Timer? _folderRefresh;
   StreamSubscription<int?>? _remotePushes;
+  Timer? _pushDebounce;
 
   /// Bir tur sürerken uzak push geldi: tur bitince hemen yeniden eşitlenir.
   bool _pushSyncPending = false;
+
+  /// Eşitleme sürerken gelen sunucu olayı: tur bitince yeniden eşitlenir.
+  bool _serverChangePending = false;
   DateTime? _lastFolderSync;
   bool _foldersSyncing = false;
   bool _folderSyncPending = false;
@@ -70,9 +75,6 @@ class SyncController extends Notifier<SyncState> {
 
   /// Bu ana kadar gelen sunucu olayları yok sayılır (bkz. [_onServerChange]).
   DateTime _quietUntil = DateTime.fromMillisecondsSinceEpoch(0);
-
-  /// Bir eşitleme/ön-yükleme turu sürüyor mu?
-  bool get _isBusy => _running || _foldersSyncing || _prefetchingBodies;
 
   /// Kendi komutlarımızın (SELECT/FETCH/…) yanıtları da sunucu olayı üretebilir.
   /// Tur bittikten hemen sonra ulaşan gecikmiş olay bu kadar süre yok
@@ -158,7 +160,10 @@ class SyncController extends Notifier<SyncState> {
     _connectivity = null;
     _remotePushes?.cancel();
     _remotePushes = null;
+    _pushDebounce?.cancel();
+    _pushDebounce = null;
     _pushSyncPending = false;
+    _serverChangePending = false;
   }
 
   /// İlk kurulum: klasörleri çek, gelen kutusunu eşitle, dinlemeye başla.
@@ -173,12 +178,14 @@ class SyncController extends Notifier<SyncState> {
     _disposed = false;
 
     _watchConnectivity();
+    // İlk eşitleme sürerken (ya da çevrimdışı takılırsa) gelen push'lar
+    // kaçmasın diye dinleyici eşitlemeden ÖNCE kurulur.
+    _watchRemotePushes();
     await syncAll();
     _lastFolderSync = DateTime.now();
     _startFolderPolling();
     _startMailPolling();
     _watchServerChanges();
-    _watchRemotePushes();
   }
 
   /// iOS'ta uygulama ön plandayken gelen uzak push (yeni ileti) anında
@@ -194,11 +201,18 @@ class SyncController extends Notifier<SyncState> {
     // Başka hesabın iletisi: tek bağlantı etkin hesaba ait, o hesap
     // seçilince zaten eşitlenir (bkz. `bootstrap`).
     if (accountId != null && accountId != active) return;
-    if (_running || _foldersSyncing) {
-      _pushSyncPending = true;
-      return;
-    }
-    _fireAndForget(_syncForRemotePush());
+    // Ön plandaki bir push iOS'ta hem `willPresent` hem
+    // `didReceiveRemoteNotification` üzerinden gelir; art arda gelenler tek
+    // eşitlemeye indirilir.
+    _pushDebounce?.cancel();
+    _pushDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (_disposed || _paused) return;
+      if (_running || _foldersSyncing) {
+        _pushSyncPending = true;
+        return;
+      }
+      _fireAndForget(_syncForRemotePush());
+    });
   }
 
   Future<void> _syncForRemotePush() async {
@@ -229,20 +243,32 @@ class SyncController extends Notifier<SyncState> {
         .listen((_) => _onServerChange());
   }
 
-  /// Sunucudan gelen "değişiklik var" olayı.
+  /// Sunucudan gelen "değişiklik var" olayı (IMAP IDLE bildirimi).
   ///
   /// FETCH/SELECT yanıtları da IMAP event stream'ine düşebilir. Bunlar kendi
   /// sync komutlarımızdan üretildiğinde yeni bir sync başlatmak döngüye yol
-  /// açar (bkz. `AccountWatcher._syncing`'deki aynı koruma); devam eden tur ve
-  /// periyodik emniyet sync'i bu aralıkta kaçabilecek gerçek değişiklikleri
-  /// zaten yakalar. Debounce art arda gelen olayları tek bir eşitlemeye
-  /// indirger.
+  /// açar (bkz. `AccountWatcher._syncing`'deki aynı koruma).
+  /// Devam eden tur varsa olay yutulmaz; [_serverChangePending] bayrağıyla
+  /// tur biter bitmez yürütülmek üzere sıraya alınır.
   void _onServerChange() {
-    if (_isBusy || DateTime.now().isBefore(_quietUntil)) return;
+    if (_disposed || _paused) return;
+    if (_running || _foldersSyncing) {
+      _serverChangePending = true;
+      return;
+    }
     _serverChangeDebounce?.cancel();
-    _serverChangeDebounce = Timer(const Duration(milliseconds: 350), () {
-      // Zamanlayıcı beklerken bir tur başlamış olabilir.
-      if (_isBusy || DateTime.now().isBefore(_quietUntil)) return;
+    final now = DateTime.now();
+    final quietRemaining = _quietUntil.difference(now);
+    final delay = quietRemaining > Duration.zero
+        ? quietRemaining + const Duration(milliseconds: 350)
+        : const Duration(milliseconds: 350);
+
+    _serverChangeDebounce = Timer(delay, () {
+      if (_disposed || _paused) return;
+      if (_running || _foldersSyncing) {
+        _serverChangePending = true;
+        return;
+      }
       _fireAndForget(syncCurrentFolder());
     });
   }
@@ -470,19 +496,12 @@ class SyncController extends Notifier<SyncState> {
   }
 
   /// Ön planda yeni ileti geldiğinde bildirim gösterir — yalnızca Gelen
-  /// Kutusu'nda ve kullanıcı o an tam da o klasörün listesine bakmıyorsa
-  /// (bkz. bellek: farklı klasördeyken/ekrandayken bildir kararı). Aksi
-  /// hâlde ileti zaten canlı olarak listede görünür, bildirim gereksiz
-  /// gürültü olur.
+  /// Kutusu için. Kullanıcı o an listeye bakıyor olsa bile (ileti canlı
+  /// düşse de) bildirim gösterilir.
   Future<void> _maybeNotify(MailboxRow mailbox, SyncOutcome outcome) async {
     if (mailbox.specialUse != SpecialUse.inbox) return;
     if (outcome.initialDownload || outcome.newMessageIds.isEmpty) return;
     if (!ref.read(settingsProvider).notificationsEnabled) return;
-
-    final viewingThisInbox =
-        ref.read(activeTabProvider) == 0 &&
-        ref.read(currentMailboxProvider)?.id == mailbox.id;
-    if (viewingThisInbox) return;
 
     final accountId = ref.read(accountIdProvider);
     if (accountId == null) return;
@@ -509,11 +528,18 @@ class SyncController extends Notifier<SyncState> {
     if (_disposed || _paused) return;
 
     final connection = ref.read(mailConnectionProvider);
-    if (!connection.isConnected || !connection.capabilities.supportsIdle) {
+    if (!connection.capabilities.supportsIdle) {
       return;
     }
     if (await _serviceWatches(ref.read(currentMailboxProvider))) return;
     if (_disposed || _paused) return;
+
+    if (!connection.isConnected) {
+      _serverChangePending = true;
+      _drainPendingFolderSync();
+      return;
+    }
+
     final started = await connection.imap.startIdle();
     if (_disposed || _paused || started is Err<void>) return;
     _idleRefresh?.cancel();
@@ -565,6 +591,11 @@ class SyncController extends Notifier<SyncState> {
 
   void _drainPendingFolderSync() {
     if (_disposed || _running || _foldersSyncing || _paused) return;
+    if (_serverChangePending) {
+      _serverChangePending = false;
+      scheduleMicrotask(() => _fireAndForget(syncCurrentFolder()));
+      return;
+    }
     if (_pushSyncPending) {
       _pushSyncPending = false;
       scheduleMicrotask(() => _fireAndForget(_syncForRemotePush()));
@@ -599,7 +630,50 @@ class SyncController extends Notifier<SyncState> {
     // periyodik sync açıp gereksiz IMAP trafiği üretmeyelim.
     if (await _serviceWatches(ref.read(currentMailboxProvider))) return;
 
+    // Kullanıcı Gelen Kutusu dışındaki bir klasördeyse IDLE/yoklama yalnızca
+    // o klasörü izler; Gelen Kutusu'na düşen yeni ileti push gelmezse
+    // klasörden çıkılana kadar görünmezdi. Önce Gelen Kutusu eşitlenir, sonra
+    // bağlantı (ve IDLE) görüntülenen klasöre geri döner.
+    await _syncInboxWhileElsewhere();
+
     await syncCurrentFolder();
+  }
+
+  /// Görüntülenen klasör Gelen Kutusu değilse onu da eşitler ve yeni ileti
+  /// bildirimini üretir. Tek IMAP bağlantısı sırayla kullanıldığı için
+  /// çağıran, ardından görüntülenen klasörü yeniden eşitlemelidir (böylece
+  /// seçili klasör ve IDLE geri döner).
+  Future<void> _syncInboxWhileElsewhere() async {
+    final accountId = ref.read(accountIdProvider);
+    final current = ref.read(currentMailboxProvider);
+    if (accountId == null || current == null) return;
+    if (current.specialUse == SpecialUse.inbox) return;
+    if (_disposed || _paused || _running || _foldersSyncing) return;
+
+    final inbox = await ref
+        .read(databaseProvider)
+        .mailboxBySpecialUse(accountId, SpecialUse.inbox);
+    if (inbox == null) return;
+    // Android'de ön plan servisi Gelen Kutusu'nu zaten izliyor.
+    if (await _serviceWatches(inbox)) return;
+    if (_disposed || _paused || _running || _foldersSyncing) return;
+    if (!_isCurrent(accountId)) return;
+
+    _running = true;
+    try {
+      final outcome = await ref
+          .read(syncEngineProvider)
+          .syncMailbox(accountId: accountId, mailbox: inbox);
+      if (!_isCurrent(accountId)) return;
+      if (outcome is Ok<SyncOutcome>) {
+        _fireAndForget(_maybeNotify(inbox, outcome.value));
+      }
+    } on Object catch (_) {
+      // Geçici hata: bir sonraki yoklamada yeniden denenir.
+    } finally {
+      _running = false;
+      _markQuiet();
+    }
   }
 
   /// Ön plan servisi (bkz. `PushService`) [mailbox]'u (Gelen Kutusu) zaten
@@ -609,6 +683,9 @@ class SyncController extends Notifier<SyncState> {
   /// eşzamanlı bağlantı sınırı boşuna tüketilmesin. Çekip yenileme, klasör
   /// değiştirme ve öne gelme gibi kullanıcı eylemleri bu korumadan etkilenmez.
   Future<bool> _serviceWatches(MailboxRow? mailbox) async {
+    // Ön plan servisi (PushService) yalnızca Android'e özgüdür.
+    // iOS'ta arayüz ön plandayken Gelen Kutusu'nu doğrudan kendisi (IMAP IDLE) izler.
+    if (!Platform.isAndroid) return false;
     if (mailbox == null || mailbox.specialUse != SpecialUse.inbox) {
       return false;
     }
@@ -637,6 +714,7 @@ class SyncController extends Notifier<SyncState> {
         _markQuiet();
         if (!_disposed) {
           await _restartIdle();
+          _drainPendingFolderSync();
         }
       }
     }());
@@ -653,10 +731,13 @@ class SyncController extends Notifier<SyncState> {
     _folderRefresh = null;
     _serverChangeDebounce?.cancel();
     _serverChangeDebounce = null;
+    _serverChangePending = false;
     await _serverChanges?.cancel();
     _serverChanges = null;
     await _remotePushes?.cancel();
     _remotePushes = null;
+    _pushDebounce?.cancel();
+    _pushDebounce = null;
     await ref.read(mailConnectionProvider).imap.stopIdle();
   }
 
