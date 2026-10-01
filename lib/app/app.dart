@@ -100,7 +100,7 @@ class _RootGate extends ConsumerStatefulWidget {
 }
 
 class _RootGateState extends ConsumerState<_RootGate> {
-  static const Duration _splashDuration = Duration(milliseconds: 3200);
+  static const Duration _splashDuration = Duration(milliseconds: 1500);
 
   bool _splashDone = false;
   Timer? _timer;
