@@ -125,8 +125,9 @@ Future<bool> confirmDelete(
 ) async {
   if (messageIds.isEmpty) return false;
 
-  final mailbox = ref.read(currentMailboxProvider);
-  final isDrafts = mailbox?.specialUse == SpecialUse.drafts;
+  // Tüm Hesaplar görünümünde de birleşik klasörün türü geçerlidir.
+  final use = ref.read(currentSpecialUseProvider);
+  final isDrafts = use == SpecialUse.drafts;
   // Taslaklar sunucuya hiç gitmemiştir (bkz. `MailRepository.moveToMailbox`):
   // Taslaklar klasöründe silme, Çöp Kutusu'na taşınacak bir sunucu kaydı
   // olmadığı için doğrudan ve kalıcıdır. `FolderMapping.deleteIsPermanent`
@@ -134,8 +135,7 @@ Future<bool> confirmDelete(
   // kullanıcı bir taslağı tek dokunuşla, hiç onay istenmeden geri dönüşsüz
   // kaybeder.
   final isPermanent =
-      isDrafts ||
-      (mailbox != null && FolderMapping.deleteIsPermanent(mailbox.specialUse));
+      isDrafts || (use != null && FolderMapping.deleteIsPermanent(use));
   final askFirst = ref.read(settingsProvider).confirmBeforeDelete;
 
   if (isPermanent && askFirst) {
@@ -219,17 +219,38 @@ void showMailActionFailure(OverlayState overlay, MailActionFailure event) {
   KaydetNotice.show(overlay, message: message);
 }
 
+/// Menünün, seçili iletiler tek bir hesaba indirgenemediğinde (Tüm Hesaplar
+/// görünümünde farklı hesaplardan çoklu seçim) gösterdiği tek, pasif öğe:
+/// klasör ve etiketler hesaba özgüdür, karışık bir seçime uygulanamaz.
+List<Widget> _mixedAccountsMenu() => const [
+  MenuItemButton(
+    onPressed: null,
+    child: Text('Farklı hesaplardan iletiler seçili'),
+  ),
+];
+
 /// "Taşı" popup'ının menü öğeleri — bkz. bellek: kısa seçim listeleri tam
 /// ekranı kaplayan bir alttan panel yerine anında açılan bir popup'ta.
+///
+/// [accountId] verilirse o hesabın klasörleri listelenir (Tüm Hesaplar
+/// görünümünde iletinin KENDİ hesabı); verilmezse etkin hesabınkiler.
+/// [excludeMailboxId] listeden çıkarılacak (iletinin zaten içinde olduğu)
+/// klasördür; verilmezse görüntülenen klasör. [mixedAccounts] `true` ise seçim
+/// birden çok hesaba yayılıyor demektir ve yalnızca pasif bir bilgi öğesi döner.
 List<Widget> folderMenuItems(
   WidgetRef ref,
-  ValueChanged<MailboxRow> onSelected,
-) {
-  final accountId = ref.watch(accountIdProvider);
-  final tree = accountId == null
+  ValueChanged<MailboxRow> onSelected, {
+  int? accountId,
+  int? excludeMailboxId,
+  bool mixedAccounts = false,
+}) {
+  if (mixedAccounts) return _mixedAccountsMenu();
+  final targetAccountId = accountId ?? ref.watch(accountIdProvider);
+  final tree = targetAccountId == null
       ? const <FolderTreeNode>[]
-      : ref.watch(folderTreeForAccountProvider(accountId));
-  final currentMailboxId = ref.watch(currentMailboxProvider)?.id;
+      : ref.watch(folderTreeForAccountProvider(targetAccountId));
+  final currentMailboxId =
+      excludeMailboxId ?? ref.watch(currentMailboxProvider)?.id;
   return [
     for (final node in tree)
       if (node.mailbox.id != currentMailboxId)
@@ -247,14 +268,21 @@ List<Widget> folderMenuItems(
   ];
 }
 
-/// "Etiket" popup'ının menü öğeleri.
+/// "Etiket" popup'ının menü öğeleri. [accountId]/[mixedAccounts] için bkz.
+/// [folderMenuItems].
 List<Widget> labelMenuItems(
   BuildContext context,
   WidgetRef ref,
-  ValueChanged<String> onSelected,
-) {
+  ValueChanged<String> onSelected, {
+  int? accountId,
+  bool mixedAccounts = false,
+}) {
+  if (mixedAccounts) return _mixedAccountsMenu();
   final t = context.tokens;
-  final labels = ref.read(labelsProvider).value ?? const <LabelRow>[];
+  final labels = accountId == null
+      ? ref.read(labelsProvider).value ?? const <LabelRow>[]
+      : ref.watch(labelsForAccountProvider(accountId)).value ??
+            const <LabelRow>[];
   if (labels.isEmpty) {
     return const [
       MenuItemButton(onPressed: null, child: Text('Henüz etiket yok')),

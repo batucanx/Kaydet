@@ -320,22 +320,38 @@ final folderTreeForAccountProvider = Provider.family<List<FolderTreeNode>, int>(
   },
 );
 
-/// Seçili klasör. `null` = sanal "Sabitlenenler" klasörü.
+/// Seçili klasör: tek bir hesabın klasörü, sanal "Sabitlenenler" ya da
+/// "Tüm Hesaplar" görünümünde tüm hesapların aynı türdeki klasörlerinin
+/// birleşimi ([SelectedFolder.unified]).
 class SelectedFolder {
-  const SelectedFolder.mailbox(this.mailboxId) : isFlaggedView = false;
-  const SelectedFolder.flagged() : mailboxId = null, isFlaggedView = true;
+  const SelectedFolder.mailbox(this.mailboxId)
+    : isFlaggedView = false,
+      unifiedUse = null;
+  const SelectedFolder.flagged()
+    : mailboxId = null,
+      isFlaggedView = true,
+      unifiedUse = null;
+  const SelectedFolder.unified(SpecialUse this.unifiedUse)
+    : mailboxId = null,
+      isFlaggedView = false;
 
   final int? mailboxId;
   final bool isFlaggedView;
+
+  /// Doluysa "Tüm Hesaplar" modundayız ve bu, birleştirilen klasör türüdür.
+  final SpecialUse? unifiedUse;
+
+  bool get isUnified => unifiedUse != null;
 
   @override
   bool operator ==(Object other) =>
       other is SelectedFolder &&
       other.mailboxId == mailboxId &&
-      other.isFlaggedView == isFlaggedView;
+      other.isFlaggedView == isFlaggedView &&
+      other.unifiedUse == unifiedUse;
 
   @override
-  int get hashCode => Object.hash(mailboxId, isFlaggedView);
+  int get hashCode => Object.hash(mailboxId, isFlaggedView, unifiedUse);
 }
 
 /// Kullanıcının açıkça seçtiği klasör. `null` ise varsayılan uygulanır.
@@ -378,7 +394,8 @@ final selectedFolderProvider = Provider<SelectedFolder?>((ref) {
       .toList();
 
   if (chosen != null) {
-    if (chosen.isFlaggedView) return chosen;
+    // Tüm Hesaplar görünümü hiçbir tek hesaba bağlı değildir.
+    if (chosen.isFlaggedView || chosen.isUnified) return chosen;
     final stillExists =
         mailboxes?.any((m) => m.id == chosen.mailboxId) ?? false;
     if (stillExists) return chosen;
@@ -403,6 +420,66 @@ final currentMailboxProvider = Provider<MailboxRow?>((ref) {
     if (row.id == selected.mailboxId) return row;
   }
   return null;
+});
+
+// ------------------------------------------------------------ tüm hesaplar
+
+/// "Tüm Hesaplar" görünümünde, yan menüdeki sıraya göre listelenen birleşik
+/// klasör türleri. Özel (custom) klasörler hesaba özgüdür, birleştirilmez.
+const List<SpecialUse> unifiedFolderUses = [
+  SpecialUse.inbox,
+  SpecialUse.drafts,
+  SpecialUse.archive,
+  SpecialUse.sent,
+  SpecialUse.trash,
+  SpecialUse.junk,
+];
+
+/// Tüm Hesaplar modunda mıyız? Home düğmesine dokunmak bunu açar; bir hesap
+/// avatarına dokunmak (`SelectedFolderNotifier.reset`) kapatır. Etkin hesap
+/// (`accountIdProvider`) bu moddan bağımsız olarak değişmeden kalır — senkron,
+/// ayarlar ve yeni ileti gibi hesap-bağlı işler onu kullanmaya devam eder.
+final isAllAccountsProvider = Provider<bool>(
+  (ref) => ref.watch(selectedFolderProvider)?.isUnified ?? false,
+);
+
+/// Cihazdaki TÜM hesapların klasörleri.
+final allMailboxesProvider = StreamProvider<List<MailboxRow>>(
+  (ref) => ref.watch(databaseProvider).watchAllMailboxes(),
+);
+
+/// Her hesabın [use] türündeki klasörü — mevcut klasör eşleştirmesinin
+/// (`FolderMapping`, `MailboxRow.specialUse`) sonucu; burada yeni bir eşleme
+/// mantığı YOKTUR.
+final unifiedMailboxesProvider =
+    Provider.family<List<MailboxRow>, SpecialUse>((ref, use) {
+      final all = ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
+      return [
+        for (final box in all)
+          if (box.specialUse == use && box.isSelectable) box,
+      ];
+    });
+
+/// Tüm hesaplardaki [use] klasörlerinin okunmamış toplamı.
+final unifiedUnreadCountProvider = StreamProvider.family<int, SpecialUse>((
+  ref,
+  use,
+) {
+  final ids = ref
+      .watch(unifiedMailboxesProvider(use))
+      .map((m) => m.id)
+      .toList();
+  if (ids.isEmpty) return Stream.value(0);
+  return ref.watch(databaseProvider).watchUnreadCountIn(ids);
+});
+
+/// Görüntülenen klasörün türü: Tüm Hesaplar modunda birleşik türün kendisi,
+/// aksi hâlde seçili klasörün türü. Silme onayı, kaydırma eylemi gibi
+/// "hangi tür klasördeyim" bilmesi yeten yerler bunu kullanır.
+final currentSpecialUseProvider = Provider<SpecialUse?>((ref) {
+  final unified = ref.watch(selectedFolderProvider)?.unifiedUse;
+  if (unified != null) return unified;
+  return ref.watch(currentMailboxProvider)?.specialUse;
 });
 
 // -------------------------------------------------------------- filtre
@@ -528,6 +605,27 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
   final db = ref.watch(databaseProvider);
   final filter = ref.watch(messageFilterProvider);
 
+  // Tüm Hesaplar: her hesabın aynı türdeki klasörü tek akışta birleşir. Etkin
+  // hesaba bağlı değildir; klasör kümesi `unifiedMailboxesProvider`dan gelir.
+  if (folder != null && folder.isUnified) {
+    final use = folder.unifiedUse!;
+    final ids = ref
+        .watch(unifiedMailboxesProvider(use))
+        .map((m) => m.id)
+        .toList();
+    if (ids.isEmpty) return Stream.value(const <MessageRow>[]);
+    // Çöp Kutusu dahil hepsi tarihe göre karışık sıralanır: `id DESC`
+    // (kayıt ekleme sırası) hesap başına toplu eşitlenen iletileri hesap
+    // hesap öbekler ve hesapları birbirinden ayrılmış gösterir.
+    return db
+        .watchMessagesIn(
+          mailboxIds: ids,
+          limit: ref.watch(pageLimitProvider),
+          excludeDrafts: use == SpecialUse.inbox,
+        )
+        .map((rows) => filter.apply(_dedupeAcrossAccounts(rows)));
+  }
+
   if (accountId == null || folder == null) {
     // Hiç ileti YOK değil, klasör henüz BİLİNMİYOR (hesap değişiminde
     // `selectedFolderProvider` yeni hesabın klasörleri gelene kadar kısa
@@ -554,11 +652,35 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
           mailboxId: folder.mailboxId!,
           limit: ref.watch(pageLimitProvider),
           orderById: isTrash,
+          // Taslaklar yalnızca Taslaklar klasöründe görünür: sunucuda Gelen
+          // Kutusu'na `\Draft` bayrağıyla düşen iletiler ve Taslaklar klasörü
+          // bilinmediğinde Gelen Kutusu'na yazılan yerel taslaklar gizlenir.
+          excludeDrafts:
+              ref.watch(currentMailboxProvider)?.specialUse == SpecialUse.inbox,
         );
 
   return source.map(filter.apply);
 });
 
+/// Aynı ileti (aynı `Message-ID` başlığı) birden çok hesabın kutusuna
+/// düşmüşse (ör. iki adresine birden gönderilmiş ya da bir takma ad
+/// yönlendirmesi) Tüm Hesaplar listesinde yalnızca BİR kez gösterilir —
+/// listede önce gelen (sıralamaya göre en üstteki) kopya kalır. Aynı
+/// hesaptaki kopyalara dokunulmaz: tek hesap görünümüyle aynı davranır.
+List<MessageRow> _dedupeAcrossAccounts(List<MessageRow> rows) {
+  final firstAccountOf = <String, int>{};
+  final result = <MessageRow>[];
+  for (final row in rows) {
+    final header = row.messageIdHeader?.trim();
+    if (header == null || header.isEmpty) {
+      result.add(row);
+      continue;
+    }
+    final owner = firstAccountOf.putIfAbsent(header, () => row.accountId);
+    if (owner == row.accountId) result.add(row);
+  }
+  return result;
+}
 
 /// Liste ekranında gösterilecek tek bir öğe: tarih başlığı, ileti, boş
 /// durum ya da Sabitlenenler bölümünün kendisi.
@@ -581,6 +703,13 @@ class DateHeaderItem extends MailListItem {
 class MessageItem extends MailListItem {
   const MessageItem(this.message);
   final MessageRow message;
+}
+
+/// Klasör ilk kez eşitlenirken (yerel veri henüz eksik) gösterilen tek öğe:
+/// ortada dönen yükleme göstergesi. Böylece kullanıcı klasörü boş sanmaz ve
+/// iletiler parça parça dolmaz; indirme bitince liste tek seferde gelir.
+class FolderLoadingItem extends MailListItem {
+  const FolderLoadingItem();
 }
 
 /// Klasör/filtre sonucu boşsa gösterilecek tek öğe — [filterActive] hangi
@@ -626,20 +755,40 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   // `isSyncing` ikisi birden doğruyken bu "boş" henüz KESİNLEŞMEMİŞ sayılır
   // ve iskelet gösterilir; eşitleme bitince (mesaj bulunsa da bulunmasa da)
   // iskelet kalkar.
+  final unifiedUse = folder?.unifiedUse;
+  final unifiedMailboxIds = unifiedUse == null
+      ? const <int>{}
+      : ref
+            .watch(unifiedMailboxesProvider(unifiedUse))
+            .map((m) => m.id)
+            .toSet();
   final neverSyncedFolder = mailbox != null && mailbox.uidNext == null;
   final syncInFlight = ref.watch(
     syncControllerProvider.select((s) => s.isSyncing),
   );
-  final coldFolderStillLoading = neverSyncedFolder && syncInFlight;
+  // Eşitleme henüz BAŞLAMAMIŞ olsa da (`lastSyncAt` eşitleme başında yazılır)
+  // klasör "yükleniyor" sayılır; aksi hâlde klasöre girilip eşitleme
+  // başlayana kadarki aralıkta "Bu klasör boş" yanıp sönerdi. Çevrimdışı ya da
+  // hatalıysa sonsuz yüklemeye girmemek için boş durum gösterilir.
+  final syncUnavailable = ref.watch(
+    syncControllerProvider.select((s) => s.isOffline || s.lastError != null),
+  );
+  final coldFolderStillLoading =
+      neverSyncedFolder &&
+      (syncInFlight || (mailbox?.lastSyncAt == null && !syncUnavailable));
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
     // Sabitlenenler bölümü yalnızca Gelen Kutusu'nda gösterilir — diğer
     // klasörlere geçildiğinde ya da seçim modunda/bir filtre etkinken
     // kaybolmalı.
+    // Tüm Hesaplar Gelen Kutusu'nda da gösterilir (tüm hesapların
+    // sabitlenenleri birleşik; bkz. [pinnedMessagesProvider]).
     final showPinned =
         folder != null &&
         !folder.isFlaggedView &&
-        mailbox?.specialUse == SpecialUse.inbox &&
+        (folder.isUnified
+            ? folder.unifiedUse == SpecialUse.inbox
+            : mailbox?.specialUse == SpecialUse.inbox) &&
         !filterActive;
 
     final visible = showPinned
@@ -703,7 +852,13 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   // karşılar — yanlış klasörün (veya yanlış "boş") içeriğini göstermektense
   // kısa bir iskelet, doğru davranış.
   bool rowsMatchFolder(List<MessageRow> rows) {
-    if (rows.isEmpty || folder == null || accountId == null) return false;
+    if (rows.isEmpty || folder == null) return false;
+    if (folder.isUnified) {
+      // Tüm Hesaplar: satırlar bu türün herhangi bir hesaptaki klasöründen
+      // gelmeli (aksi hâlde tek hesabın önceki klasörünün bayat satırlarıdır).
+      return unifiedMailboxIds.contains(rows.first.mailboxId);
+    }
+    if (accountId == null) return false;
     final sample = rows.first;
     if (sample.accountId != accountId) return false;
     return folder.isFlaggedView
@@ -711,20 +866,18 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
         : sample.mailboxId == folder.mailboxId;
   }
 
+  // Soğuk klasörde (ilk indirme sürerken) gelen kısmi/bayat satırlar
+  // gösterilmez: indirme bitene kadar yalnızca yükleme göstergesi çıkar.
+  if (coldFolderStillLoading && !messages.hasError) {
+    return const AsyncData<List<MailListItem>>([FolderLoadingItem()]);
+  }
+
   return messages.map(
-    data: (d) {
-      if (coldFolderStillLoading && d.value.isEmpty) {
-        return AsyncLoading<List<MailListItem>>();
-      }
-      return AsyncData(buildItems(d.value));
-    },
+    data: (d) => AsyncData(buildItems(d.value)),
     error: (e) => AsyncError(e.error, e.stackTrace),
     loading: (l) {
       final previousRows = l.value;
       if (previousRows != null && rowsMatchFolder(previousRows)) {
-        if (coldFolderStillLoading && previousRows.isEmpty) {
-          return AsyncLoading<List<MailListItem>>(progress: l.progress);
-        }
         return AsyncData(buildItems(previousRows));
       }
       return AsyncLoading<List<MailListItem>>(progress: l.progress);
@@ -773,15 +926,32 @@ final flaggedCountForAccountProvider = StreamProvider.family<int, int>(
   (ref, accountId) => ref.watch(databaseProvider).watchFlaggedCount(accountId),
 );
 
-/// Etkin hesabın tüm sabitlenmiş iletileri — normal bir klasör
-/// görüntülenirken listenin üstünde gösterilir (bkz. `_PinnedSection`) ve
-/// aynı ileti kronolojik listede TEKRARLANMASIN diye oradan çıkarılır (bkz.
-/// `MailListScreen.build`). Tam liste ayrıca "Sabitlenenler" sanal
-/// klasöründe de görülebilir (bkz. [SelectedFolder.flagged]).
+/// Sabitlenmiş iletiler — normal bir klasör görüntülenirken listenin üstünde
+/// gösterilir (bkz. `_PinnedSection`) ve aynı ileti kronolojik listede
+/// TEKRARLANMASIN diye oradan çıkarılır (bkz. [mailListItemsProvider]). Tam
+/// liste ayrıca "Sabitlenenler" sanal klasöründe de görülebilir (bkz.
+/// [SelectedFolder.flagged]).
+///
+/// Tüm Hesaplar Gelen Kutusu'nda tüm hesapların sabitlenenleri birleşik
+/// gelir (aynı `Message-ID` bir kez); aksi hâlde yalnızca etkin hesabınki.
 final pinnedMessagesProvider = StreamProvider<List<MessageRow>>((ref) {
+  final db = ref.watch(databaseProvider);
+  final folder = ref.watch(selectedFolderProvider);
+
+  if (folder != null && folder.isUnified) {
+    final accountIds = {
+      for (final box in ref.watch(unifiedMailboxesProvider(folder.unifiedUse!)))
+        box.accountId,
+    }.toList();
+    if (accountIds.isEmpty) return Stream.value(const <MessageRow>[]);
+    return db
+        .watchFlaggedIn(accountIds: accountIds)
+        .map(_dedupeAcrossAccounts);
+  }
+
   final accountId = ref.watch(accountIdProvider);
   if (accountId == null) return Stream.value(const <MessageRow>[]);
-  return ref.watch(databaseProvider).watchFlagged(accountId: accountId);
+  return db.watchFlagged(accountId: accountId);
 });
 
 /// Gelen Kutusu'ndaki Sabitlenenler bölümünün açık/kapalı (expand/collapse) durumu.
@@ -857,6 +1027,7 @@ final isAtRootDestinationProvider = Provider<bool>((ref) {
   final selected = ref.watch(selectedFolderProvider);
   if (selected == null) return true; // klasörler henüz yüklenmedi
   if (selected.isFlaggedView) return false;
+  if (selected.isUnified) return selected.unifiedUse == SpecialUse.inbox;
   final mailbox = ref.watch(currentMailboxProvider);
   return mailbox == null || mailbox.specialUse == SpecialUse.inbox;
 });
@@ -868,6 +1039,13 @@ final labelsProvider = StreamProvider<List<LabelRow>>((ref) {
   if (accountId == null) return Stream.value(const <LabelRow>[]);
   return ref.watch(databaseProvider).watchLabels(accountId);
 });
+
+/// [labelsProvider] ile aynı sorgu, ama belirli bir hesaba göre — Tüm
+/// Hesaplar görünümünde bir iletinin etiket menüsü, etkin hesabınkini değil
+/// iletinin KENDİ hesabının etiketlerini listelemeli.
+final labelsForAccountProvider = StreamProvider.family<List<LabelRow>, int>(
+  (ref, accountId) => ref.watch(databaseProvider).watchLabels(accountId),
+);
 
 // --------------------------------------------------------------- imzalar
 

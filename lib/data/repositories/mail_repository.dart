@@ -130,6 +130,16 @@ class MailRepository {
     unawaited(processQueue(accountId));
   }
 
+  /// Birden çok hesabın iletilerini tek eylemle değiştiren işlemlerde (Tüm
+  /// Hesaplar görünümünde çoklu seçim) HER hesabın kuyruğu tetiklenir; yalnızca
+  /// ilk satırın hesabını tetiklemek diğer hesapların işlemini bir sonraki
+  /// eşitlemeye kadar sunucuya göndermezdi.
+  void _kickAccountsOf(Iterable<MessageRow> rows) {
+    for (final accountId in {for (final row in rows) row.accountId}) {
+      kickQueue(accountId);
+    }
+  }
+
   // ------------------------------------------------------------- okundu
 
   /// Okundu / okunmadı işaretler.
@@ -154,7 +164,7 @@ class MailRepository {
       );
     });
     if (seen) onMessagesHandled?.call(messageIds);
-    kickQueue(rows.first.accountId);
+    _kickAccountsOf(rows);
   }
 
   /// Sabitler / sabitlemeyi kaldırır (IMAP `\Flagged`).
@@ -173,7 +183,7 @@ class MailRepository {
         flagged ? PendingOpType.flag : PendingOpType.unflag,
       );
     });
-    kickQueue(rows.first.accountId);
+    _kickAccountsOf(rows);
   }
 
   // ------------------------------------------------------------- taşıma
@@ -197,16 +207,26 @@ class MailRepository {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return null;
 
-    final accountId = rows.first.accountId;
-    if (rows.any((row) => row.accountId != accountId)) return null;
-    final targetBox = await _db.mailboxBySpecialUse(accountId, target);
-    return _moveRowsToMailbox(
-      rows,
-      targetBox,
-      fallbackTarget: target,
-      action: action,
-      undoWindow: undoWindow,
-    );
+    // Tüm Hesaplar görünümünde seçim birden çok hesaba yayılabilir: her
+    // hesabın iletileri KENDİ hesabının hedef klasörüne taşınır (hedef klasör
+    // hesaba özgüdür), geri alma tek tutamakta birleşir.
+    final byAccount = <int, List<MessageRow>>{};
+    for (final row in rows) {
+      byAccount.putIfAbsent(row.accountId, () => []).add(row);
+    }
+    final handles = <MailActionHandle>[];
+    for (final entry in byAccount.entries) {
+      final targetBox = await _db.mailboxBySpecialUse(entry.key, target);
+      final handle = await _moveRowsToMailbox(
+        entry.value,
+        targetBox,
+        fallbackTarget: target,
+        action: action,
+        undoWindow: undoWindow,
+      );
+      if (handle != null) handles.add(handle);
+    }
+    return MailActionHandle.combine(handles);
   }
 
   /// Moves mail to an exact folder identity, including user-created folders.
@@ -387,7 +407,7 @@ class MailRepository {
       await _db.deleteMessages(rows.map((r) => r.id).toList());
     });
     onMessagesHandled?.call(rows.map((r) => r.id).toList());
-    kickQueue(rows.first.accountId);
+    _kickAccountsOf(rows);
   }
 
   /// Arşivler: iletiyi sunucuda gerçekten Arşiv klasörüne taşır. Swipe, seçim

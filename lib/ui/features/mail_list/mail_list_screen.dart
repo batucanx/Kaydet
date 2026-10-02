@@ -10,6 +10,7 @@ import '../../../app/sync_controller.dart';
 import '../../../core/result.dart' show AuthFailure;
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/use_cases/folder_mapping.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/actions/password_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
@@ -97,11 +98,18 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     final mailbox = ref.watch(currentMailboxProvider);
     final folder = ref.watch(selectedFolderProvider);
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
+    // Tüm Hesaplar: liste tek bir klasör değil, her hesabın aynı türdeki
+    // klasörlerinin birleşimidir (bkz. `SelectedFolder.unified`).
+    final unifiedUse = folder?.unifiedUse;
+    final folderUse = ref.watch(currentSpecialUseProvider);
+    final hasMoreOnServer = unifiedUse != null
+        ? ref
+              .watch(unifiedMailboxesProvider(unifiedUse))
+              .any((m) => m.hasMoreOnServer)
+        : mailbox?.hasMoreOnServer == true;
 
     final isSentLike =
-        mailbox != null &&
-        (mailbox.specialUse == SpecialUse.sent ||
-            mailbox.specialUse == SpecialUse.drafts);
+        folderUse == SpecialUse.sent || folderUse == SpecialUse.drafts;
 
     final scaffold = Scaffold(
       appBar: _buildAppBar(
@@ -115,8 +123,11 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             : const <int>[],
         title: folder?.isFlaggedView == true
             ? 'Sabitlenenler'
+            : unifiedUse != null
+            ? FolderMapping.displayName(unifiedUse, '')
             : (mailbox?.name ?? 'Kaydet'),
         account: activeAccount,
+        isAllAccounts: unifiedUse != null,
       ),
       body: Column(
         children: [
@@ -142,13 +153,15 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                   ? showUpdatePasswordDialog(context, ref)
                   : ref
                         .read(syncControllerProvider.notifier)
-                        .syncCurrentFolder(),
+                        .syncCurrentFolder(allAccounts: true),
             ),
           Expanded(
             child: RefreshIndicator(
               onRefresh: () async {
                 final sync = ref.read(syncControllerProvider.notifier);
-                await sync.syncCurrentFolder();
+                // Tüm Hesaplar'da kullanıcı çekip yenileyince her hesap
+                // eşitlenir; tek hesap görünümünde parametre etkisizdir.
+                await sync.syncCurrentFolder(allAccounts: true);
                 // Çekip yenileme klasör listesini de güncel tutar (web
                 // istemcisinde eklenen/silinen klasörler).
                 await sync.syncFolders(force: true);
@@ -187,6 +200,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                     accountId,
                     folder?.mailboxId,
                     folder?.isFlaggedView,
+                    unifiedUse,
                   )),
                   child: itemsAsync.when(
                     skipLoadingOnReload: true,
@@ -202,7 +216,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                       labels: labels,
                       isSentLike: isSentLike,
                       isLoadingMore: isLoadingMore,
-                      hasMore: hasMoreLocal && mailbox?.hasMoreOnServer == true,
+                      hasMore: hasMoreLocal && hasMoreOnServer,
+                      showAccount: unifiedUse != null,
                     ),
                   ),
                 ),
@@ -242,7 +257,16 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     required bool isSentLike,
     required bool isLoadingMore,
     required bool hasMore,
+    required bool showAccount,
   }) {
+    // Tüm Hesaplar'da her satırın hangi hesaba ait olduğu gösterilir.
+    final accountsById = showAccount
+        ? {
+            for (final a
+                in ref.watch(allAccountsProvider).value ?? const <AccountRow>[])
+              a.id: a,
+          }
+        : const <int, AccountRow>{};
     return ListView.builder(
       key: const PageStorageKey('mail-list'),
       controller: _scroll,
@@ -262,6 +286,10 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
         }
         return switch (items[index]) {
           PinnedSectionItem() => const _PinnedSection(),
+          FolderLoadingItem() => SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.6,
+            child: const _FolderLoading(),
+          ),
           EmptyListItem(:final filterActive) => SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.6,
             child: _emptyState(filterActive),
@@ -275,6 +303,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             message: message,
             labels: labels,
             isSentFolder: isSentLike,
+            account: accountsById[message.accountId],
             onTap: () => _onRowTap(message),
             onAvatarTap: () =>
                 ref.read(selectionProvider.notifier).toggle(message.id),
@@ -337,6 +366,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     required List<int> visibleIds,
     required String title,
     AccountRow? account,
+    bool isAllAccounts = false,
   }) {
     final t = context.tokens;
 
@@ -381,6 +411,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     return _InboxAppBar(
       title: title,
       account: account,
+      isAllAccounts: isAllAccounts,
       onMenuTap: () => Scaffold.of(context).openDrawer(),
       onSearchTap: () => context.pushScreen(const SearchScreen()),
       filterButton: const _FilterMenuButton(),
@@ -495,11 +526,16 @@ class _SwipeRow extends ConsumerStatefulWidget {
     required this.onAvatarTap,
     required this.onLongPress,
     this.useOwnFolder = false,
+    this.account,
   });
 
   final MessageRow message;
   final List<LabelRow> labels;
   final bool isSentFolder;
+
+  /// Tüm Hesaplar görünümünde iletinin ait olduğu hesap (satırda gösterilir);
+  /// tek hesap görünümünde `null`.
+  final AccountRow? account;
 
   /// Eylem, görüntülenen klasör yerine iletinin KENDİ klasörüne göre
   /// çözülür. Sabitlenenler bölümü hesabın tüm klasörlerinden ileti içerir
@@ -651,7 +687,8 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         (selection) => selection.contains(widget.message.id),
       ),
     );
-    final mailbox = ref.watch(currentMailboxProvider);
+    // Görüntülenen klasörün türü; Tüm Hesaplar'da birleşik klasörün türü.
+    final currentUse = ref.watch(currentSpecialUseProvider);
     // Ayar değişince satırlar canlı güncellenir.
     final rightSelected = ref.watch(
       settingsProvider.select((s) => s.swipeRight),
@@ -670,13 +707,13 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 
     final SpecialUse? folder;
     if (widget.useOwnFolder) {
-      final boxes = ref.watch(mailboxesProvider).value ?? const <MailboxRow>[];
+      final boxes = ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
       folder = boxes
           .where((b) => b.id == widget.message.mailboxId)
           .firstOrNull
           ?.specialUse;
     } else {
-      folder = mailbox?.specialUse;
+      folder = currentUse;
     }
     final rightEffective = _effectiveFor(rightSelected, folder);
     final leftEffective = _effectiveFor(leftSelected, folder);
@@ -726,6 +763,7 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         labels: widget.labels,
         isSelected: isSelected,
         isSentFolder: widget.isSentFolder,
+        account: widget.account,
         onTap: widget.onTap,
         onAvatarTap: widget.onAvatarTap,
         onLongPress: widget.onLongPress,
@@ -884,11 +922,21 @@ class _PinnedMailRow extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Tüm Hesaplar'da sabitli satır da hangi hesaba ait olduğunu gösterir.
+    final isUnified = ref.watch(isAllAccountsProvider);
+    final account = isUnified
+        ? ref
+              .watch(allAccountsProvider)
+              .value
+              ?.where((a) => a.id == message.accountId)
+              .firstOrNull
+        : null;
     return _SwipeRow(
       message: message,
       labels: labels,
       isSentFolder: false,
       useOwnFolder: true,
+      account: account,
       onTap: () {
         if (ref.read(selectionProvider).isNotEmpty) {
           ref.read(selectionProvider.notifier).toggle(message.id);
@@ -927,6 +975,13 @@ class _SelectionActionBar extends ConsumerWidget {
     final allSeen = selected.isNotEmpty && selected.every((m) => m.isSeen);
     final allFlagged =
         selected.isNotEmpty && selected.every((m) => m.isFlagged);
+    // Tüm Hesaplar'da seçim birden çok hesaba yayılabilir: klasör ve etiket
+    // hesaba özgü olduğundan "Taşı"/"Etiket" yalnızca tek hesaptan seçimde
+    // çalışır (arşivle/sil/okundu/sabitle her hesabı kendi içinde işler).
+    final selectionAccounts = {for (final m in selected) m.accountId};
+    final mixedAccounts = selectionAccounts.length > 1;
+    final selectionAccountId =
+        selectionAccounts.length == 1 ? selectionAccounts.single : null;
 
     void done() => ref.read(selectionProvider.notifier).clear();
 
@@ -987,7 +1042,7 @@ class _SelectionActionBar extends ConsumerWidget {
                     targetMailboxId: target.id,
                   );
                   done();
-                }),
+                }, accountId: selectionAccountId, mixedAccounts: mixedAccounts),
               ),
               _BarAction(
                 icon: LucideIcons.tag,
@@ -999,7 +1054,7 @@ class _SelectionActionBar extends ConsumerWidget {
                     add: true,
                   );
                   done();
-                }),
+                }, accountId: selectionAccountId, mixedAccounts: mixedAccounts),
               ),
             ],
           ),
@@ -1134,6 +1189,98 @@ class _LoadMoreControl extends StatelessWidget {
 /// az taşabilir) bir taşma hatasına yol açmadan, tembel biçimde çizilmesini
 /// sağlar; kaydırma `NeverScrollableScrollPhysics` ile devre dışı bırakılır,
 /// yükleniyor durumunda kaydırılacak gerçek içerik yoktur.
+/// İlk eşitleme sürerken üst çubuğun hemen altında, tam genişlikte ileri geri
+/// kayan ince şerit (mobil uygulamalardaki sayfa yükleme çubuğu gibi).
+class _FolderLoading extends StatefulWidget {
+  const _FolderLoading();
+
+  @override
+  State<_FolderLoading> createState() => _FolderLoadingState();
+}
+
+class _FolderLoadingState extends State<_FolderLoading>
+    with SingleTickerProviderStateMixin {
+  static const double _barHeight = 3;
+  static const double _thumbFraction = 0.32;
+
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    // Hızlı geçen yüklemelerde yanıp sönmesin diye şerit hafifçe belirerek girer.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: context.motion(Motion.base),
+      curve: Motion.standard,
+      builder: (context, opacity, child) =>
+          Opacity(opacity: opacity, child: child),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Semantics(
+          label: 'Yükleniyor',
+          child: ExcludeSemantics(
+            child: SizedBox(
+              height: _barHeight,
+              width: double.infinity,
+              child: ColoredBox(
+                color: t.divider,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final trackWidth = constraints.maxWidth;
+                    final thumbWidth = trackWidth * _thumbFraction;
+                    return AnimatedBuilder(
+                      animation: _controller,
+                      builder: (context, _) {
+                        final x =
+                            Curves.easeInOutCubic.transform(_controller.value) *
+                            (trackWidth - thumbWidth);
+                        return Stack(
+                          children: [
+                            Positioned(
+                              left: x,
+                              width: thumbWidth,
+                              top: 0,
+                              bottom: 0,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: t.accent,
+                                  borderRadius: BorderRadius.circular(
+                                    Radii.full,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ListSkeleton extends StatelessWidget {
   const _ListSkeleton();
 
@@ -1478,6 +1625,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
   const _InboxAppBar({
     required this.title,
     required this.account,
+    required this.isAllAccounts,
     required this.onMenuTap,
     required this.onSearchTap,
     required this.filterButton,
@@ -1485,6 +1633,10 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   final String title;
   final AccountRow? account;
+
+  /// Tüm Hesaplar görünümü: tek bir hesabın avatarı/e-postası yerine
+  /// Home simgesi ve "Tüm Hesaplar" yazar.
+  final bool isAllAccounts;
 
   /// Drawer'ı açan callback — avatar'a dokunulduğunda tetiklenir.
   final VoidCallback onMenuTap;
@@ -1537,7 +1689,25 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                         horizontal: Space.md,
                         vertical: Space.sm,
                       ),
-                      child: account != null
+                      child: isAllAccounts
+                          ? Container(
+                              width: _avatarSize,
+                              height: _avatarSize,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: t.onAccentFill.withValues(alpha: 0.22),
+                              ),
+                              child: Icon(
+                                LucideIcons.home,
+                                size: IconSize.lg,
+                                color:
+                                    theme.appBarTheme.iconTheme?.color ??
+                                    theme.appBarTheme.foregroundColor ??
+                                    t.onAccentFill,
+                              ),
+                            )
+                          : account != null
                           ? KaydetAvatar(
                               name: account.displayName,
                               email: account.email,
@@ -1575,9 +1745,9 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                             t.textPrimary,
                       ),
                     ),
-                    if (account != null)
+                    if (isAllAccounts || account != null)
                       Text(
-                        account.email,
+                        isAllAccounts ? 'Tüm Hesaplar' : account!.email,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: AppText.bodyMedium.copyWith(

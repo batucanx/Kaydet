@@ -73,6 +73,12 @@ class SyncController extends Notifier<SyncState> {
   bool _prefetchingBodies = false;
   bool _running = false;
 
+  /// Tüm Hesaplar görünümünde TÜM hesapların son eşitlenme zamanı. Arka plan
+  /// yoklaması yalnızca etkin hesabı eşitler; diğer hesaplar için bu süre
+  /// dolunca bir tam tur yapılır (bkz. [_syncUnified]).
+  DateTime? _lastUnifiedFullSync;
+  static const Duration _unifiedFullSyncGap = Duration(minutes: 2);
+
   /// Bu ana kadar gelen sunucu olayları yok sayılır (bkz. [_onServerChange]).
   DateTime _quietUntil = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -374,12 +380,22 @@ class SyncController extends Notifier<SyncState> {
   }
 
   /// Yalnızca görüntülenen klasörü eşitler (aşağı çekerek yenileme).
-  Future<void> syncCurrentFolder() async {
+  ///
+  /// Tüm Hesaplar görünümünde [allAccounts] `true` ise (kullanıcı eylemi:
+  /// klasör seçme, aşağı çekme) her hesabın ilgili klasörü eşitlenir; arka
+  /// plan yoklaması ve IDLE tetikleri yalnızca etkin hesabı eşitler (bkz.
+  /// [_syncUnified]).
+  Future<void> syncCurrentFolder({bool allAccounts = false}) async {
     final accountId = ref.read(accountIdProvider);
-    final mailbox = ref.read(currentMailboxProvider);
+    final unifiedUse = ref.read(selectedFolderProvider)?.unifiedUse;
     if (accountId == null || _running || _foldersSyncing) {
       return;
     }
+    if (unifiedUse != null) {
+      await _syncUnified(unifiedUse, allAccounts: allAccounts);
+      return;
+    }
+    final mailbox = ref.read(currentMailboxProvider);
     // Klasör, hesap geçişi sırasında henüz eski hesabınki olabilir.
     if (mailbox != null && mailbox.accountId != accountId) return;
 
@@ -426,12 +442,130 @@ class SyncController extends Notifier<SyncState> {
     }
   }
 
+  /// Tüm Hesaplar görünümünde [use] türündeki klasörleri eşitler.
+  ///
+  /// Tek IMAP bağlantısı hesaplar arasında sırayla kullanılır (bkz.
+  /// `MailConnection.exclusive`); etkin hesap EN SONA bırakılır ki tur
+  /// bittiğinde bağlantı (ve IDLE) yine etkin hesapta kalsın. Arka plan
+  /// turları yalnızca etkin hesabı eşitler — diğer hesapları her yoklamada
+  /// yeniden bağlamak pahalıdır; onlar için [_unifiedFullSyncGap] dolunca
+  /// (ya da [allAccounts] ile) tam tur yapılır. Etkin olmayan hesabın hatası
+  /// afişe çıkmaz (bkz. [_reportFailure]).
+  Future<void> _syncUnified(SpecialUse use, {required bool allAccounts}) async {
+    final activeId = ref.read(accountIdProvider);
+    if (activeId == null) return;
+
+    final now = DateTime.now();
+    final last = _lastUnifiedFullSync;
+    final full =
+        allAccounts || last == null || now.difference(last) > _unifiedFullSyncGap;
+    final accounts = ref.read(allAccountsProvider).value ?? const <AccountRow>[];
+    final orderedIds = full
+        ? [
+            for (final a in accounts)
+              if (a.id != activeId) a.id,
+            activeId,
+          ]
+        : [activeId];
+
+    _running = true;
+    state = state.copyWith(isSyncing: true, clearError: true);
+    try {
+      final engine = ref.read(syncEngineProvider);
+      final db = ref.read(databaseProvider);
+      final repository = ref.read(mailRepositoryProvider);
+      for (final id in orderedIds) {
+        if (_disposed || !_isCurrent(activeId)) return;
+        final box = await db.mailboxBySpecialUse(id, use);
+        if (box == null) continue;
+        final outcome = await engine.syncMailbox(accountId: id, mailbox: box);
+        if (!_isCurrent(activeId)) return;
+        if (outcome is Err<SyncOutcome>) {
+          _reportFailure(id, outcome.failure);
+          continue;
+        }
+        await repository.processQueue(id);
+        _fireAndForget(repository.trimMailbox(box.id));
+        if (id == activeId) {
+          _startBodyPrefetch(engine, id, box);
+          _fireAndForget(_maybeNotify(box, (outcome as Ok<SyncOutcome>).value));
+        }
+      }
+      if (full) _lastUnifiedFullSync = DateTime.now();
+      state = state.copyWith(
+        lastSyncAt: DateTime.now(),
+        hasMore: ref
+            .read(unifiedMailboxesProvider(use))
+            .any((m) => m.hasMoreOnServer),
+      );
+    } finally {
+      _running = false;
+      _markQuiet();
+      if (!_disposed) {
+        state = state.copyWith(isSyncing: false);
+        if (!_handOffIfSwitched(activeId)) {
+          await _restartIdle();
+          _drainPendingFolderSync();
+        }
+      }
+    }
+  }
+
+  /// Tüm Hesaplar görünümünde "daha fazla yükle": önce yerel sınır büyür,
+  /// yerel veri tükenmişse sunucuda daha eskisi olan her hesabın klasöründen
+  /// bir sonraki sayfa indirilir.
+  Future<void> _loadMoreUnified(SpecialUse use) async {
+    state = state.copyWith(isLoadingMore: true);
+    try {
+      final db = ref.read(databaseProvider);
+      final boxes = ref.read(unifiedMailboxesProvider(use));
+      final shown = ref.read(messageListProvider).value?.length ?? 0;
+      final limit = ref.read(pageLimitProvider);
+      if (shown >= limit) {
+        ref.read(pageLimitProvider.notifier).grow();
+        var total = 0;
+        for (final box in boxes) {
+          total += await db.countMessages(box.id);
+        }
+        if (limit + PageLimitNotifier.step <= total) return;
+      }
+
+      final remote = boxes.where((m) => m.hasMoreOnServer).toList();
+      if (remote.isEmpty) {
+        state = state.copyWith(hasMore: false);
+        return;
+      }
+
+      final engine = ref.read(syncEngineProvider);
+      var loaded = 0;
+      for (final box in remote) {
+        await db.raiseRetentionLimit(box.id);
+        final result = await engine.loadOlder(
+          accountId: box.accountId,
+          mailbox: box,
+        );
+        if (result is Ok<int>) {
+          loaded += result.value;
+        } else if (result is Err<int> &&
+            result.failure is! UidValidityChangedFailure) {
+          _reportFailure(box.accountId, result.failure);
+        }
+      }
+      ref.read(pageLimitProvider.notifier).grow();
+      state = state.copyWith(hasMore: loaded > 0);
+    } finally {
+      state = state.copyWith(isLoadingMore: false);
+    }
+  }
+
   /// Listenin sonuna gelindiğinde daha eski iletileri getirir.
   ///
   /// Önce yerel veritabanındaki gösterim sınırı büyütülür (anında sonuç),
   /// yerelde bitmişse sunucudan bir sonraki sayfa indirilir.
   Future<void> loadMore() async {
     if (state.isLoadingMore) return;
+    final unifiedUse = ref.read(selectedFolderProvider)?.unifiedUse;
+    if (unifiedUse != null) return _loadMoreUnified(unifiedUse);
     final accountId = ref.read(accountIdProvider);
     final mailbox = ref.read(currentMailboxProvider);
     if (accountId == null || mailbox == null) return;

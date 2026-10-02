@@ -1406,37 +1406,63 @@ class _BodyView extends StatelessWidget {
 
 /// Gövde metninin geleceği alanda hayalet ekran (shimmer) efekti.
 ///
-/// Değişen genişlikte birkaç "satır" üzerinde soldan sağa kayan bir
-/// parlaklık bandı (bkz. `ShimmerSurface`) — gerçek metin satırlarının
-/// taslağı gibi durur, tekil bir döner gösterge gibi dikkat çekip ekranı
-/// domine etmez.
+/// Değişen genişlikte "satırlar" üzerinde soldan sağa kayan bir parlaklık
+/// bandı (bkz. `ShimmerSurface`) — gerçek metin satırlarının taslağı gibi
+/// durur. Satır sayısı sabit değil: kullanılabilir yüksekliğe göre hesaplanır,
+/// böylece iskelet ekran boyutundan bağımsız olarak alanı doldurur.
 class _BodyShimmer extends StatelessWidget {
   const _BodyShimmer();
 
-  // Gerçek bir paragrafın satır sonlarını taklit eden değişen genişlikler.
+  // Gerçek bir paragrafın satır sonlarını taklit eden değişen genişlikler;
+  // her tur bir paragraftır ve altında ekstra boşluk bırakılır.
   static const _lineWidthFactors = [1.0, 0.94, 0.6, 1.0, 0.86, 0.42];
+  static const double _barHeight = 14;
+  static const EdgeInsets _padding = EdgeInsets.fromLTRB(
+    Space.lg,
+    Space.md,
+    Space.lg,
+    Space.xxl,
+  );
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        Space.lg,
-        Space.md,
-        Space.lg,
-        Space.xxl,
-      ),
-      child: ShimmerSurface(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (final factor in _lineWidthFactors)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Space.sm),
-                child: ShimmerBar(widthFactor: factor),
-              ),
-          ],
-        ),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final height = constraints.maxHeight.isFinite
+            ? constraints.maxHeight
+            : MediaQuery.sizeOf(context).height;
+        final available = height - _padding.vertical;
+
+        // Sığdığı kadar satır; her satır `_barHeight + Space.sm`, paragraf
+        // sonunda ek `Space.lg` boşluk.
+        final rows = <(double, double)>[]; // (genişlik oranı, alt boşluk)
+        var used = 0.0;
+        for (var i = 0; ; i++) {
+          final factor = _lineWidthFactors[i % _lineWidthFactors.length];
+          final endOfParagraph = i % _lineWidthFactors.length ==
+              _lineWidthFactors.length - 1;
+          final gap = endOfParagraph ? Space.lg : Space.sm;
+          if (used + _barHeight > available || rows.length >= 80) break;
+          rows.add((factor, gap));
+          used += _barHeight + gap;
+        }
+
+        return Padding(
+          padding: _padding,
+          child: ShimmerSurface(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (factor, gap) in rows)
+                  Padding(
+                    padding: EdgeInsets.only(bottom: gap),
+                    child: ShimmerBar(widthFactor: factor, height: _barHeight),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -1851,13 +1877,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
               : ColoredBox(
                   color: t.readingBg,
                   child: ClipRect(
-                    child: OverflowBox(
-                      alignment: Alignment.topCenter,
-                      maxHeight: double.infinity,
-                      child: Padding(
-                        padding: EdgeInsets.only(top: widget.topInset),
-                        child: const _BodyShimmer(),
-                      ),
+                    child: Padding(
+                      padding: EdgeInsets.only(top: widget.topInset),
+                      child: const _BodyShimmer(),
                     ),
                   ),
                 ),
@@ -2003,7 +2025,7 @@ class _MoreMenu extends ConsumerWidget {
               labelName: label,
               add: true,
             );
-          }),
+          }, accountId: message.accountId),
           child: const Text('Etiketle'),
         ),
         SubmenuButton(
@@ -2015,7 +2037,7 @@ class _MoreMenu extends ConsumerWidget {
               targetMailboxId: target.id,
             );
             if (context.mounted) Navigator.of(context).pop();
-          }),
+          }, accountId: message.accountId, excludeMailboxId: message.mailboxId),
           child: const Text('Klasöre taşı'),
         ),
         const Divider(height: 1),

@@ -69,7 +69,14 @@ class _AppShellState extends ConsumerState<AppShell>
   /// veri değiştirmez, zaten canlı akan yerel veriyi yeniden gösterir.
   void _popToInbox() {
     ref.read(activeTabProvider.notifier).select(0);
-    ref.read(selectedFolderRawProvider.notifier).reset();
+    // Tüm Hesaplar'dayken geri tuşu hesap görünümüne düşürmez: birleşik
+    // Gelen Kutusu'na döner.
+    final folderNotifier = ref.read(selectedFolderRawProvider.notifier);
+    if (ref.read(isAllAccountsProvider)) {
+      folderNotifier.select(const SelectedFolder.unified(SpecialUse.inbox));
+    } else {
+      folderNotifier.reset();
+    }
     ref.read(pageLimitProvider.notifier).reset();
     ref.read(selectionProvider.notifier).clear();
   }
@@ -159,6 +166,10 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
   // sonra halka tekrar `activeAccountId`i (DB'deki gerçeği) yansıtır.
   int? _pendingAccountId;
 
+  // `_pendingAccountId`nin Home (Tüm Hesaplar) karşılığı: dokunulduğu AN
+  // halka Home'a geçer, gerçek durum güncellemesi ertelenir.
+  bool _pendingHome = false;
+
   void _addAccount() {
     Navigator.of(context).pop();
     context.pushScreen(const LoginScreen(isAddingAccount: true));
@@ -188,7 +199,10 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
   /// yeniden kurup kare düşürüyordu (takılma hissi buradan geliyordu).
   void _selectAccountAndOpenInbox(int accountId) {
     // 1. Optimistic: halka DB/provider beklemeden anında yeni hesaba geçer.
-    setState(() => _pendingAccountId = accountId);
+    setState(() {
+      _pendingAccountId = accountId;
+      _pendingHome = false;
+    });
     // 2. Drawer hemen kapanmaya başlar.
     Navigator.of(context).pop();
 
@@ -212,6 +226,32 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
         return;
       }
       unawaited(_switchAccount(accountId));
+    });
+  }
+
+  /// Rayın en üstündeki Home: Tüm Hesaplar görünümünü açar — her hesabın
+  /// Gelen Kutusu tek listede birleşir. Etkin hesap DEĞİŞMEZ (senkron, ayarlar
+  /// ve yeni ileti onu kullanmaya devam eder); yalnızca görüntülenen klasör
+  /// birleşik Gelen Kutusu olur. Zamanlama `_selectAccountAndOpenInbox`
+  /// ile aynıdır (drawer kapanırken içerik yeniden kurulmaz).
+  void _selectAllAccounts() {
+    setState(() {
+      _pendingHome = true;
+      _pendingAccountId = null;
+    });
+    Navigator.of(context).pop();
+    Future.delayed(context.motion(Motion.fast), () {
+      if (!mounted) return;
+      ref.read(activeTabProvider.notifier).select(0);
+      ref
+          .read(selectedFolderRawProvider.notifier)
+          .select(const SelectedFolder.unified(SpecialUse.inbox));
+      ref.read(pageLimitProvider.notifier).reset();
+      ref.read(selectionProvider.notifier).clear();
+      setState(() => _pendingHome = false);
+      ref
+          .read(syncControllerProvider.notifier)
+          .syncCurrentFolder(allAccounts: true);
     });
   }
 
@@ -249,7 +289,9 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
       ref.read(selectedFolderRawProvider.notifier).select(folder);
       ref.read(pageLimitProvider.notifier).reset();
       ref.read(selectionProvider.notifier).clear();
-      ref.read(syncControllerProvider.notifier).syncCurrentFolder();
+      ref
+          .read(syncControllerProvider.notifier)
+          .syncCurrentFolder(allAccounts: true);
     });
   }
 
@@ -267,6 +309,10 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
     final activeAccount = ref.watch(activeAccountProvider).value;
     final pending = ref.watch(pendingOperationCountProvider).value ?? 0;
     final activeTab = ref.watch(activeTabProvider);
+    // Halka/panel: dokunma anındaki iyimser durum gerçek durumun önüne geçer.
+    final showAllAccounts =
+        _pendingHome ||
+        (ref.watch(isAllAccountsProvider) && _pendingAccountId == null);
 
     // Ray zemini (açık temada üst çubuk mavisi) güvenli alanların altına da
     // uzanır: aksi hâlde durum çubuğu ve gezinme çubuğu bölgesinde ray
@@ -314,6 +360,8 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
                     accounts: accounts,
                     activeAccountId: activeAccount?.id,
                     pendingAccountId: _pendingAccountId,
+                    isAllAccounts: showAllAccounts,
+                    onSelectAllAccounts: _selectAllAccounts,
                     onSelectAccount: _selectAccountAndOpenInbox,
                     onAddAccount: _addAccount,
                     activeTab: activeTab,
@@ -321,10 +369,10 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
                   ),
                   VerticalDivider(color: t.divider, width: 1),
                   Expanded(
-                    child: activeAccount == null
+                    child: !showAllAccounts && activeAccount == null
                         ? const SizedBox.shrink()
                         : _AccountFolderPanel(
-                            account: activeAccount,
+                            account: showAllAccounts ? null : activeAccount,
                             onChooseFolder: _choose,
                             onManageFolders: _manageFolders,
                           ),
@@ -376,6 +424,8 @@ class _SideRail extends StatelessWidget {
     required this.accounts,
     required this.activeAccountId,
     required this.pendingAccountId,
+    required this.isAllAccounts,
+    required this.onSelectAllAccounts,
     required this.onSelectAccount,
     required this.onAddAccount,
     required this.activeTab,
@@ -387,6 +437,11 @@ class _SideRail extends StatelessWidget {
   // Optimistik seçim — doluysa görsel aktif hesabı DB'nin önüne geçer
   // (bkz. `_FolderDrawerState._selectAccountAndOpenInbox`).
   final int? pendingAccountId;
+
+  /// Tüm Hesaplar görünümü etkin mi (iyimser durum dahil)? Doluysa hiçbir
+  /// hesap avatarı etkin görünmez, Home halkalıdır.
+  final bool isAllAccounts;
+  final VoidCallback onSelectAllAccounts;
   final ValueChanged<int> onSelectAccount;
   final VoidCallback onAddAccount;
   final int activeTab;
@@ -416,7 +471,9 @@ class _SideRail extends StatelessWidget {
     // görünür — kullanıcı hangi hesapta olduğunu ilk bakışta anlasın diye.
     // Yalnızca görüntü sırası değişir; `accounts`'un kendi kaynağı
     // (`allAccountsProvider`) ve hesap kimlikleri dokunulmaz.
-    final effectiveActiveId = pendingAccountId ?? activeAccountId;
+    final effectiveActiveId = isAllAccounts
+        ? null
+        : pendingAccountId ?? activeAccountId;
     final orderedAccounts = List<AccountRow>.of(accounts);
     final activeIndex = effectiveActiveId == null
         ? -1
@@ -440,6 +497,14 @@ class _SideRail extends StatelessWidget {
       leading: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Outlook'taki gibi en üstte: Tüm Hesaplar.
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: Space.xs),
+            child: _AllAccountsButton(
+              isActive: isAllAccounts,
+              onTap: onSelectAllAccounts,
+            ),
+          ),
           for (final account in orderedAccounts)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: Space.xs),
@@ -578,6 +643,69 @@ class _RailIconButton extends StatelessWidget {
   }
 }
 
+/// Rayın en üstündeki "Tüm Hesaplar" düğmesi (Home). Hesap avatarlarıyla aynı
+/// ölçü ve halka/ölçek animasyonu (bkz. [_AccountAvatarButton]); içinde hesap
+/// logosu yerine Home simgesi vardır.
+class _AllAccountsButton extends StatelessWidget {
+  const _AllAccountsButton({required this.isActive, required this.onTap});
+
+  final bool isActive;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final ringColor = t.isDark ? t.accent : t.onAccentFill;
+    final circleColor = t.isDark
+        ? t.accentSubtle
+        : t.onAccentFill.withValues(alpha: 0.22);
+    final iconColor = t.isDark ? t.accent : t.onAccentFill;
+    return Semantics(
+      button: true,
+      selected: isActive,
+      label: 'Tüm Hesaplar',
+      child: Tooltip(
+        message: 'Tüm Hesaplar',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(Radii.full),
+          child: AnimatedContainer(
+            duration: context.motion(Motion.fast),
+            curve: Motion.standard,
+            padding: const EdgeInsets.all(2),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isActive ? ringColor : Colors.transparent,
+                width: isActive ? 2.5 : 1.5,
+              ),
+            ),
+            child: AnimatedScale(
+              scale: isActive ? 1.0 : 0.95,
+              duration: context.motion(Motion.fast),
+              curve: Motion.standard,
+              child: Container(
+                width: Dimens.navRailAvatarSize,
+                height: Dimens.navRailAvatarSize,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: circleColor,
+                ),
+                child: Icon(
+                  LucideIcons.home,
+                  size: IconSize.lg,
+                  color: iconColor,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AccountAvatarButton extends StatelessWidget {
   const _AccountAvatarButton({
     required this.account,
@@ -694,7 +822,8 @@ class _AccountFolderPanel extends StatelessWidget {
     required this.onManageFolders,
   });
 
-  final AccountRow account;
+  /// `null` = Tüm Hesaplar görünümü (bkz. [_UnifiedFolderPanelContent]).
+  final AccountRow? account;
   final ValueChanged<SelectedFolder> onChooseFolder;
   final VoidCallback onManageFolders;
 
@@ -704,12 +833,89 @@ class _AccountFolderPanel extends StatelessWidget {
       duration: context.motion(Motion.base),
       switchInCurve: Motion.standard,
       switchOutCurve: Motion.standard,
-      child: _AccountFolderPanelContent(
-        key: ValueKey(account.id),
-        account: account,
-        onChooseFolder: onChooseFolder,
-        onManageFolders: onManageFolders,
-      ),
+      child: account == null
+          ? _UnifiedFolderPanelContent(
+              key: const ValueKey('all-accounts'),
+              onChooseFolder: onChooseFolder,
+            )
+          : _AccountFolderPanelContent(
+              key: ValueKey(account!.id),
+              account: account!,
+              onChooseFolder: onChooseFolder,
+              onManageFolders: onManageFolders,
+            ),
+    );
+  }
+}
+
+/// Tüm Hesaplar görünümünün paneli: başlık + her hesapta karşılığı olan
+/// birleşik klasörler (Gelen Kutusu, Taslaklar, Arşiv, …). Sayaçlar tüm
+/// hesapların toplamıdır; hesaba özgü özel klasörler, Sabitlenenler ve
+/// klasör yönetimi burada yoktur — onlar için bir hesap seçilir.
+class _UnifiedFolderPanelContent extends ConsumerWidget {
+  const _UnifiedFolderPanelContent({super.key, required this.onChooseFolder});
+
+  final ValueChanged<SelectedFolder> onChooseFolder;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = context.tokens;
+    final selected = ref.watch(selectedFolderProvider);
+    final accountCount = ref.watch(allAccountsProvider).value?.length ?? 0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            Space.lg,
+            Space.xl,
+            Space.lg,
+            Space.lg,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Tüm Hesaplar',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              if (accountCount > 0) ...[
+                const SizedBox(height: 2),
+                Text(
+                  '$accountCount hesap',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodyMedium?.copyWith(color: t.textTertiary),
+                ),
+              ],
+            ],
+          ),
+        ),
+        Divider(color: t.divider, height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: Space.sm),
+            children: [
+              for (final use in unifiedFolderUses)
+                // Gelen Kutusu her zaman görünür; diğerleri en az bir hesapta
+                // karşılığı varsa.
+                if (use == SpecialUse.inbox ||
+                    ref.watch(unifiedMailboxesProvider(use)).isNotEmpty)
+                  _FolderTile(
+                    icon: folderIcon(use),
+                    label: FolderMapping.displayName(use, ''),
+                    isSelected: selected?.unifiedUse == use,
+                    badge: use == SpecialUse.drafts
+                        ? null
+                        : ref.watch(unifiedUnreadCountProvider(use)).value,
+                    onTap: () => onChooseFolder(SelectedFolder.unified(use)),
+                  ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

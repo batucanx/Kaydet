@@ -26,6 +26,7 @@ class MailRow extends StatelessWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
+    this.account,
   });
 
   final MessageRow message;
@@ -35,6 +36,10 @@ class MailRow extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
+
+  /// İletinin ait olduğu hesap. Yalnızca Tüm Hesaplar görünümünde verilir;
+  /// doluysa satırın altında hesabın avatarı ve e-postası gösterilir.
+  final AccountRow? account;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -209,6 +214,10 @@ class MailRow extends StatelessWidget {
                         ],
                       ),
                     ],
+                    if (account != null) ...[
+                      const SizedBox(height: Space.xs),
+                      _accountLine(context, account!),
+                    ],
                     if (outbox != OutboxState.none &&
                         outbox != OutboxState.sent) ...[
                       const SizedBox(height: Space.xs),
@@ -222,6 +231,34 @@ class MailRow extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  /// Tüm Hesaplar görünümünde iletinin hangi hesaba düştüğünü gösterir:
+  /// küçük hesap avatarı + e-posta adresi.
+  Widget _accountLine(BuildContext context, AccountRow account) {
+    final t = context.tokens;
+    return Semantics(
+      label: 'Hesap: ${account.email}',
+      excludeSemantics: true,
+      child: Row(
+        children: [
+          KaydetAvatar(
+            name: account.displayName,
+            email: account.email,
+            size: 14,
+          ),
+          const SizedBox(width: Space.xs),
+          Expanded(
+            child: Text(
+              account.email,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.labelSmall.copyWith(color: t.textTertiary),
+            ),
+          ),
+        ],
       ),
     );
   }

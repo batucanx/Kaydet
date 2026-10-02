@@ -78,7 +78,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -220,6 +220,14 @@ class AppDatabase extends _$AppDatabase {
           await m.addColumn(signatures, signatures.imagePosition);
         }
       }
+      // v16 → v17: charset'i yanlış bildirilen iletilerin gövdesi eskiden `�`
+      // karakterleriyle önbelleğe yazılıyordu (bkz. `MailTextDecoder`).
+      // Sunucuda karşılığı olan bu gövdeler silinir ve `bodyFetchedAt`
+      // sıfırlanır: ileti açılınca ya da arka plan ön-yüklemesinde düzeltilmiş
+      // çözücüyle yeniden indirilir. Tek seferliktir.
+      if (from < 17) {
+        await _dropCorruptCachedBodies();
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -230,6 +238,31 @@ class AppDatabase extends _$AppDatabase {
       await _createFtsTable();
     },
   );
+
+  /// v16 → v17 göçü: bkz. `migration.onUpgrade` üzerindeki yorum. Yerel
+  /// taslak/giden kutusu gövdeleri tek kopya olduğu için (bkz.
+  /// [pruneOldBodies]) dokunulmaz.
+  Future<void> _dropCorruptCachedBodies() async {
+    await customStatement('''
+      DELETE FROM message_bodies
+      WHERE message_id IN (
+        SELECT id FROM messages
+        WHERE uid IS NOT NULL AND is_local_only = 0
+      )
+      AND (
+        instr(COALESCE(plain_text, ''), char(65533)) > 0
+        OR instr(COALESCE(html, ''), char(65533)) > 0
+      )
+    ''');
+    await customStatement('''
+      UPDATE messages
+      SET body_fetched_at = NULL
+      WHERE body_fetched_at IS NOT NULL
+        AND uid IS NOT NULL
+        AND is_local_only = 0
+        AND id NOT IN (SELECT message_id FROM message_bodies)
+    ''');
+  }
 
   Future<void> _createIndexes() async {
     // Liste sorgusunun tamamı bu indeksten okunur.
@@ -421,6 +454,15 @@ class AppDatabase extends _$AppDatabase {
               (m) => OrderingTerm(expression: m.name),
             ]))
           .watch();
+
+  /// Tüm hesapların klasörleri — "Tüm Hesaplar" görünümü, hangi klasörlerin
+  /// aynı özel kullanıma (gelen/taslak/…) denk geldiğini bununla bulur.
+  Stream<List<MailboxRow>> watchAllMailboxes() => (select(mailboxes)
+        ..orderBy([
+          (m) => OrderingTerm(expression: m.accountId),
+          (m) => OrderingTerm(expression: m.sortOrder),
+        ]))
+      .watch();
 
   Future<List<MailboxRow>> mailboxesOf(int accountId) =>
       (select(mailboxes)
@@ -643,6 +685,9 @@ class AppDatabase extends _$AppDatabase {
 
   /// Klasördeki iletiler.
   ///
+  /// [excludeDrafts] `true` olduğunda taslak iletiler hiç listelenmez — Gelen
+  /// Kutusu'nda taslak görünmemeli (bkz. `messageListProvider`).
+  ///
   /// [orderById] `true` olduğunda kayıt ekleme sırası (`id DESC`) kullanılır —
   /// Çöp Kutusu'nda son silinen (= en son eklenen) iletinin en üstte görünmesi
   /// için. Diğer klasörlerde varsayılan `dateUtc DESC` sırası korunur.
@@ -651,18 +696,43 @@ class AppDatabase extends _$AppDatabase {
     required int mailboxId,
     int limit = 100,
     bool orderById = false,
+    bool excludeDrafts = false,
   }) =>
       (select(messages)
             ..where(
               (m) =>
                   m.accountId.equals(accountId) &
                   m.mailboxId.equals(mailboxId) &
-                  m.isDeleted.equals(false),
+                  m.isDeleted.equals(false) &
+                  (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
             )
             ..orderBy([
               (m) => orderById
                   ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
                   : OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+            ])
+            ..limit(limit))
+          .watch();
+
+  /// Birden çok klasörün (genelde farklı hesapların aynı türdeki klasörleri)
+  /// birleşik iletileri — "Tüm Hesaplar" görünümü. [watchMessages] ile aynı
+  /// süzgeç; yalnızca klasör kümesi `mailboxIds`'tir. Sıralama her zaman tarihe
+  /// göre (hesaplar karışık, kronolojik).
+  Stream<List<MessageRow>> watchMessagesIn({
+    required List<int> mailboxIds,
+    int limit = 100,
+    bool excludeDrafts = false,
+  }) =>
+      (select(messages)
+            ..where(
+              (m) =>
+                  m.mailboxId.isIn(mailboxIds) &
+                  m.isDeleted.equals(false) &
+                  (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
+            )
+            ..orderBy([
+              (m) =>
+                  OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
             ])
             ..limit(limit))
           .watch();
@@ -676,6 +746,26 @@ class AppDatabase extends _$AppDatabase {
             ..where(
               (m) =>
                   m.accountId.equals(accountId) &
+                  m.isFlagged.equals(true) &
+                  m.isDeleted.equals(false),
+            )
+            ..orderBy([
+              (m) =>
+                  OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+            ])
+            ..limit(limit))
+          .watch();
+
+  /// Birden çok hesabın sabitlenmiş iletileri — "Tüm Hesaplar" Gelen Kutusu'nun
+  /// Sabitlenenler bölümü. [watchFlagged] ile aynı süzgeç ve sıralama.
+  Stream<List<MessageRow>> watchFlaggedIn({
+    required List<int> accountIds,
+    int limit = 200,
+  }) =>
+      (select(messages)
+            ..where(
+              (m) =>
+                  m.accountId.isIn(accountIds) &
                   m.isFlagged.equals(true) &
                   m.isDeleted.equals(false),
             )
@@ -758,6 +848,7 @@ class AppDatabase extends _$AppDatabase {
               ..where(
                 messages.mailboxId.equals(mailboxId) &
                     messages.isSeen.equals(false) &
+                    messages.isDraft.equals(false) &
                     messages.isDeleted.equals(false),
               ))
             .getSingle();
@@ -776,6 +867,22 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.mailboxId.equals(mailboxId) &
                 messages.isSeen.equals(false) &
+                    messages.isDraft.equals(false) &
+                messages.isDeleted.equals(false),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .watchSingle();
+  }
+
+  /// [watchUnreadCount]'ın birden çok klasörün toplamı için hâli.
+  Stream<int> watchUnreadCountIn(List<int> mailboxIds) {
+    final count = countAll();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.mailboxId.isIn(mailboxIds) &
+                messages.isSeen.equals(false) &
+                    messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
@@ -790,7 +897,8 @@ class AppDatabase extends _$AppDatabase {
     return (selectOnly(messages)
           ..addColumns([count])
           ..where(
-            messages.isSeen.equals(false) & messages.isDeleted.equals(false),
+            messages.isSeen.equals(false) &
+                    messages.isDraft.equals(false) & messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
         .watchSingle();
