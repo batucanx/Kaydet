@@ -2,7 +2,7 @@ import 'package:flutter_quill/quill_delta.dart';
 
 import '../../data/database/app_database.dart';
 
-/// İmzayı (metin + yerel/uzak görsel) Quill Delta veya HTML formatına dönüştüren yardımcı.
+/// İmzayı (metin + uzak görsel URL'si) Quill Delta veya HTML formatına dönüştüren yardımcı.
 abstract final class SignatureFormatter {
   /// Bir [SignatureRow]'dan Quill Delta belgesi üretir.
   static Delta toDelta(SignatureRow signature) {
@@ -13,11 +13,7 @@ abstract final class SignatureFormatter {
     final imagePosition = signature.imagePosition;
 
     String? imageSource;
-    if (imageType == 'local' &&
-        signature.localImagePath != null &&
-        signature.localImagePath!.trim().isNotEmpty) {
-      imageSource = signature.localImagePath!.trim();
-    } else if (imageType == 'remote' &&
+    if (imageType == 'remote' &&
         signature.remoteImageUrl != null &&
         signature.remoteImageUrl!.trim().isNotEmpty) {
       imageSource = signature.remoteImageUrl!.trim();
@@ -71,9 +67,7 @@ abstract final class SignatureFormatter {
           text.replaceAll('\r\n', r'\n').replaceAll('\n', r'\n');
       if (bodyText.contains(jsonEscaped)) return true;
     }
-    final imageSource = signature.imageType == 'local'
-        ? signature.localImagePath
-        : signature.remoteImageUrl;
+    final imageSource = signature.remoteImageUrl;
     if (imageSource != null &&
         imageSource.isNotEmpty &&
         bodyText.contains(imageSource)) {

@@ -1,9 +1,6 @@
-import 'dart:io';
-
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
@@ -13,7 +10,7 @@ import '../../core/theme/tokens.dart';
 
 /// Yeni imza oluşturma veya mevcut imzayı düzenleme alt sayfası.
 ///
-/// Metin, galeriden görsel (PNG/JPG/WebP) veya remote image URL desteği sunar.
+/// Metin ve görsel URL'si (yapıştırılan bağlantı) desteği sunar.
 /// Canlı önizleme, boyut ayarı (küçük/orta/büyük) ve konum ayarı (üst/alt) içerir.
 Future<void> showNewSignatureSheet(
   BuildContext context,
@@ -58,8 +55,7 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
   bool _nameError = false;
 
   // Görsel durumu
-  String _imageType = 'none'; // 'none', 'local', 'remote'
-  String? _localImagePath;
+  String _imageType = 'none'; // 'none', 'remote'
   String? _remoteImageUrl;
   int _imageWidth = 200; // Varsayılan orta boy (200px)
   String _imagePosition = 'bottom'; // 'top', 'bottom'
@@ -78,9 +74,12 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
     _urlController = TextEditingController(text: existing?.remoteImageUrl ?? '');
 
     if (existing != null) {
-      _imageType = existing.imageType;
-      _localImagePath = existing.localImagePath;
-      _remoteImageUrl = existing.remoteImageUrl;
+      // Eski sürümlerde galeriden eklenmiş ('local') görseller artık
+      // desteklenmiyor; yalnızca URL görseli korunur.
+      if (existing.imageType == 'remote') {
+        _imageType = 'remote';
+        _remoteImageUrl = existing.remoteImageUrl;
+      }
       _imageWidth = existing.imageWidth;
       _imagePosition = existing.imagePosition;
       _isDefault = existing.isDefault;
@@ -97,40 +96,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
   }
 
   bool get _isEditing => widget.existingSignature != null;
-
-  Future<void> _pickImageFromGallery() async {
-    try {
-      final picker = ImagePicker();
-      final pickedFile = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1600,
-        maxHeight: 1600,
-        imageQuality: 85,
-      );
-
-      if (pickedFile == null) return;
-
-      final savedPath = await SignatureImageService.processAndSaveLocalImage(
-        sourcePath: pickedFile.path,
-        accountId: widget.accountId,
-      );
-
-      if (!mounted) return;
-
-      setState(() {
-        _imageType = 'local';
-        _localImagePath = savedPath;
-        _remoteImageUrl = null;
-        _urlController.clear();
-        _urlValidationMessage = null;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Görsel seçilirken hata oluştu: $e')),
-      );
-    }
-  }
 
   Future<void> _applyRemoteUrl() async {
     final rawUrl = _urlController.text.trim();
@@ -157,7 +122,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
       if (validation.isValid) {
         _imageType = 'remote';
         _remoteImageUrl = rawUrl;
-        _localImagePath = null;
         _urlValidationMessage = null;
       } else {
         _urlValidationMessage = validation.error ?? 'Görsel indirilemedi veya formatı desteklenmiyor.';
@@ -168,7 +132,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
   void _removeImage() {
     setState(() {
       _imageType = 'none';
-      _localImagePath = null;
       _remoteImageUrl = null;
       _urlController.clear();
       _urlValidationMessage = null;
@@ -202,7 +165,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
           name: name,
           body: _bodyController.text,
           imageType: _imageType,
-          localImagePath: _localImagePath,
           remoteImageUrl: _remoteImageUrl,
           imageWidth: _imageWidth,
           imagePosition: _imagePosition,
@@ -221,7 +183,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
           body: _bodyController.text,
           isDefault: _isDefault,
           imageType: _imageType,
-          localImagePath: _localImagePath,
           remoteImageUrl: _remoteImageUrl,
           imageWidth: _imageWidth,
           imagePosition: _imagePosition,
@@ -491,45 +452,34 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                 border: Border.all(color: t.border),
               ),
               clipBehavior: Clip.antiAlias,
-              child: _imageType == 'local' && _localImagePath != null
-                  ? Image.file(
-                      File(_localImagePath!),
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, _, _) => Icon(
-                        LucideIcons.imageOff,
-                        color: t.textTertiary,
-                      ),
-                    )
-                  : CachedNetworkImage(
-                      imageUrl: _remoteImageUrl ?? '',
-                      fit: BoxFit.cover,
-                      placeholder: (_, _) => const Center(
-                        child: SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      ),
-                      errorWidget: (_, _, _) => Icon(
-                        LucideIcons.imageOff,
-                        color: t.textTertiary,
-                      ),
-                    ),
+              child: CachedNetworkImage(
+                imageUrl: _remoteImageUrl ?? '',
+                fit: BoxFit.cover,
+                placeholder: (_, _) => const Center(
+                  child: SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+                errorWidget: (_, _, _) => Icon(
+                  LucideIcons.imageOff,
+                  color: t.textTertiary,
+                ),
+              ),
             ),
             const SizedBox(width: Space.md),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    _imageType == 'local' ? 'Galeriden Görsel' : 'Uzak Görsel URL',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  const Text(
+                    'Uzak Görsel URL',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _imageType == 'local'
-                        ? 'Cihazdan optimize edilmiş görsel'
-                        : (_remoteImageUrl ?? ''),
+                    _remoteImageUrl ?? '',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(color: t.textTertiary, fontSize: 12),
@@ -557,45 +507,6 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  icon: const Icon(LucideIcons.image, size: 16),
-                  label: const Text('Galeriden Seç'),
-                  style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(Radii.sm),
-                    ),
-                  ),
-                  onPressed: _pickImageFromGallery,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: Space.sm),
-          Row(
-            children: [
-              Expanded(
-                child: Divider(color: t.divider),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: Space.sm),
-                child: Text(
-                  'VEYA URL İLE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: t.textTertiary,
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Divider(color: t.divider),
-              ),
-            ],
-          ),
-          const SizedBox(height: Space.sm),
           Row(
             children: [
               Expanded(
@@ -768,14 +679,7 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
 
     Widget? imageWidget;
     if (hasImage) {
-      if (_imageType == 'local' && _localImagePath != null) {
-        imageWidget = Image.file(
-          File(_localImagePath!),
-          width: _imageWidth.toDouble(),
-          fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => _brokenImagePlaceholder(context),
-        );
-      } else if (_imageType == 'remote' && _remoteImageUrl != null) {
+      if (_imageType == 'remote' && _remoteImageUrl != null) {
         imageWidget = CachedNetworkImage(
           imageUrl: _remoteImageUrl!,
           width: _imageWidth.toDouble(),

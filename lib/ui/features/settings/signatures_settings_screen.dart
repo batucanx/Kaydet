@@ -97,16 +97,14 @@ class _SignatureListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final hasImage = signature.imageType != 'none';
+    final hasImage = signature.imageType == 'remote';
     final preview = signature.body.trim();
 
     String subtitleText;
     if (preview.isNotEmpty) {
       subtitleText = preview.split('\n').first;
     } else if (hasImage) {
-      subtitleText = signature.imageType == 'remote'
-          ? 'Uzak Görsel İmza'
-          : 'Görsel İmza';
+      subtitleText = 'Uzak Görsel İmza';
     } else {
       subtitleText = 'Boş imza';
     }
@@ -135,15 +133,13 @@ class _SignatureListTile extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    signature.imageType == 'remote'
-                        ? LucideIcons.globe
-                        : LucideIcons.image,
+                    LucideIcons.globe,
                     size: 11,
                     color: t.textSecondary,
                   ),
                   const SizedBox(width: 3),
                   Text(
-                    signature.imageType == 'remote' ? 'URL' : 'Görsel',
+                    'URL',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                           fontSize: 10,
                           color: t.textSecondary,

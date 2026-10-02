@@ -560,9 +560,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // Metin yok veya kullanıcı tarafından silinmiş.
     // Belgede imza görseli dışında fazladan içerik veya görsel var mı?
     final currentDelta = _quill.document.toDelta();
-    final imageSource = signature.imageType == 'local'
-        ? signature.localImagePath
-        : signature.remoteImageUrl;
+    final imageSource = signature.remoteImageUrl;
     final extraEmbeds = currentDelta.toList().where((op) {
       if (op.data is Map) {
         final img = (op.data as Map)['image'];
@@ -2891,7 +2889,7 @@ class _SignatureMenuButton extends StatelessWidget {
         for (final signature in ordered)
           MenuItemButton(
             leadingIcon: Icon(
-              signature.imageType != 'none'
+              signature.imageType == 'remote'
                   ? LucideIcons.image
                   : LucideIcons.penLine,
             ),
@@ -2931,11 +2929,9 @@ class _SignatureMenuButton extends StatelessWidget {
                     Text(
                       signature.body.trim().isNotEmpty
                           ? signature.body.trim()
-                          : (signature.imageType == 'local'
-                              ? '📷 Yerel görsel imza'
-                              : (signature.imageType == 'remote'
-                                  ? '🌐 Uzak görsel imza'
-                                  : '')),
+                          : (signature.imageType == 'remote'
+                              ? '🌐 Uzak görsel imza'
+                              : ''),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: textTheme.bodySmall?.copyWith(

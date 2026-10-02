@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'attachment_files.dart';
+import 'mail_text_decoder.dart';
 import 'package:enough_mail/enough_mail.dart' as em;
 import 'package:synchronized/synchronized.dart';
 
@@ -539,10 +540,10 @@ class EnoughMailImapService implements ImapService {
     String? plain;
     String? html;
     try {
-      plain = message.decodeTextPlainPart();
+      plain = MailTextDecoder.plain(message);
     } catch (_) {}
     try {
-      html = message.decodeTextHtmlPart();
+      html = MailTextDecoder.html(message);
     } catch (_) {}
     if (plain == null && html == null) {
       try {
