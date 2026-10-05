@@ -36,7 +36,10 @@ void main() {
       expect(plainText, contains('Computer Engineer'));
     });
 
-    test('Local image signature converts to Delta with image embed', () {
+    test('Cihazdaki (galeri) görsel artık desteklenmez: yalnızca metin gömülür', () {
+      // Eski sürümlerde galeriden eklenen görseller kaldırıldı (bkz.
+      // `NewSignatureSheet.initState`); imza metni korunur, görsel yolu
+      // iletiye taşınmaz.
       const signature = SignatureRow(
         id: 2,
         accountId: 1,
@@ -50,23 +53,10 @@ void main() {
         imagePosition: 'bottom',
       );
 
-      final delta = SignatureFormatter.toDelta(signature);
-      expect(delta.isEmpty, isFalse);
+      final ops = SignatureFormatter.toDelta(signature).toList();
 
-      final ops = delta.toList();
-      final hasImageEmbed = ops.any(
-        (op) =>
-            op.data is Map &&
-            (op.data as Map)['image'] == 'C:/fake/path/signature.png',
-      );
-      expect(hasImageEmbed, isTrue);
-
-      final imageOp = ops.firstWhere(
-        (op) =>
-            op.data is Map &&
-            (op.data as Map)['image'] == 'C:/fake/path/signature.png',
-      );
-      expect(imageOp.attributes?['width'], 200);
+      expect(ops.any((op) => op.data is Map), isFalse);
+      expect(ops.first.data, 'İyi çalışmalar,');
     });
 
     test('Remote image URL signature formats properly with top position', () {

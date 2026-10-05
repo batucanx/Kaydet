@@ -143,9 +143,11 @@ void main() {
       ]);
     });
 
-    test('gömülü nesneler ve bilinmeyen öznitelikler atılır', () {
+    test('yalnızca görsel gömülü nesnesi korunur; diğer nesneler ve bilinmeyen öznitelikler atılır', () {
+      // Görsel gömme imza görseli özelliğiyle eklendi (bkz. `ComposeImageEmbedBuilder`).
       final delta = Delta()
         ..insert({'image': 'https://x/y.png'})
+        ..insert({'video': 'https://x/y.mp4'})
         ..insert('metin', {
           'bold': true,
           'font': 'Comic Sans',
@@ -156,6 +158,9 @@ void main() {
         ..insert('\n', {'code-block': true});
       final json = ComposeDeltaSanitizer.sanitize(delta).toJson();
       expect(json, [
+        {
+          'insert': {'image': 'https://x/y.png'},
+        },
         {
           'insert': 'metin',
           'attributes': {'bold': true},
@@ -669,14 +674,19 @@ void main() {
       ]);
     });
 
-    test('script/style/görsel/tehlikeli bağlantılar atılır', () {
+    test('script/style/tehlikeli bağlantılar atılır; görsel korunur', () {
       final delta = dec(
         '<style>b{color:red}</style><script>alert(1)</script>'
         '<div>a<img src="x.png"><a href="javascript:alert(1)">b</a>'
         '<a href="https://ok.com">c</a></div>',
       );
       expect(delta.toJson(), [
-        {'insert': 'ab'},
+        {'insert': 'a'},
+        // Görseller imza görseli özelliğiyle birlikte gömülü olarak korunur.
+        {
+          'insert': {'image': 'x.png'},
+        },
+        {'insert': 'b'},
         {
           'insert': 'c',
           'attributes': {'link': 'https://ok.com'},

@@ -1359,6 +1359,16 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteLabel(int id) =>
       (delete(labels)..where((l) => l.id.equals(id))).go();
 
+  Future<LabelRow?> labelById(int id) =>
+      (select(labels)..where((l) => l.id.equals(id))).getSingleOrNull();
+
+  Future<SignatureRow?> signatureById(int id) =>
+      (select(signatures)..where((s) => s.id.equals(id))).getSingleOrNull();
+
+  /// Etiket satırını günceller (ayar eşitlemesi: web'den gelen ad/renk değişikliği).
+  Future<void> updateLabelRow(int id, LabelsCompanion patch) =>
+      (update(labels)..where((l) => l.id.equals(id))).write(patch);
+
   // --------------------------------------------------------------- imzalar
 
   Stream<List<SignatureRow>> watchSignatures(int accountId) =>

@@ -12,6 +12,7 @@ import '../services/imap_service.dart';
 import '../services/secure_store.dart';
 import '../services/smtp_service.dart';
 import 'folder_repository.dart';
+import 'settings_sync_service.dart';
 import 'mail_connection.dart';
 
 /// Giriş ekranından gelen ham ayarlar.
@@ -54,11 +55,13 @@ class AccountRepository {
     required ImapService imapService,
     required SmtpService smtpService,
     required MailConnection connection,
+    SettingsSyncService? settingsSync,
   }) : _db = database,
        _secureStore = secureStore,
        _imap = imapService,
        _smtp = smtpService,
        _connection = connection,
+       _settingsSync = settingsSync,
        _folders = FolderRepository(database: database, connection: connection);
 
   final AppDatabase _db;
@@ -67,6 +70,9 @@ class AccountRepository {
   final SmtpService _smtp;
   final MailConnection _connection;
   final FolderRepository _folders;
+
+  /// Etiket/imza değişikliklerini web ile eşitler (bkz. `SettingsSyncService`).
+  final SettingsSyncService? _settingsSync;
 
   /// Çıkışta IMAP oturumunun kapanması için beklenen en uzun süre.
   static const Duration _disconnectTimeout = Duration(seconds: 5);
@@ -295,9 +301,14 @@ class AccountRepository {
         imapKeyword: Value(keyword),
       ),
     );
+    _settingsSync?.schedule(accountId);
   }
 
-  Future<void> deleteLabel(int labelId) => _db.deleteLabel(labelId);
+  Future<void> deleteLabel(int labelId) async {
+    final accountId = (await _db.labelById(labelId))?.accountId;
+    await _db.deleteLabel(labelId);
+    if (accountId != null) _settingsSync?.schedule(accountId);
+  }
 
   // Folder mutations live in FolderRepository. These forwarding methods keep
   // the existing repository API source-compatible for account-level callers.
@@ -383,6 +394,7 @@ class AccountRepository {
     if (makeDefault && hasAny) {
       await _db.setDefaultSignature(accountId, rowId);
     }
+    _settingsSync?.schedule(accountId);
     return rowId;
   }
 
@@ -406,14 +418,20 @@ class AccountRepository {
       isDefault: isDefault != null ? Value(isDefault) : const Value.absent(),
     );
     await _db.updateSignatureRow(signatureId, patch);
+    final accountId = (await _db.signatureById(signatureId))?.accountId;
+    if (accountId != null) _settingsSync?.schedule(accountId);
   }
 
   Future<void> deleteSignature(int signatureId) async {
+    final accountId = (await _db.signatureById(signatureId))?.accountId;
     await _db.deleteSignature(signatureId);
+    if (accountId != null) _settingsSync?.schedule(accountId);
   }
 
-  Future<void> setDefaultSignature(int accountId, int signatureId) =>
-      _db.setDefaultSignature(accountId, signatureId);
+  Future<void> setDefaultSignature(int accountId, int signatureId) async {
+    await _db.setDefaultSignature(accountId, signatureId);
+    _settingsSync?.schedule(accountId);
+  }
 
   /// Kişiyi elle ekler/günceller — otomatik yakalamayla aynı yol
   /// (bkz. `AppDatabase.upsertContact`), Kişiler sekmesinin "+" düğmesi

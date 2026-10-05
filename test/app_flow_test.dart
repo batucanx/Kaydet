@@ -48,7 +48,11 @@ void main() {
   late AppSettingsStore settingsStore;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({});
+    // Sağa kaydırmanın varsayılanı "Ayarla" (ilk kaydırmada eylem seçtirir);
+    // bu akış testleri doğrudan arşivleme davranışını sınar.
+    SharedPreferences.setMockInitialValues({
+      'kaydet.swipeRight': SwipeAction.archive.index,
+    });
     db = createTestDatabase();
     imap = FakeImapService();
     smtp = FakeSmtpService();
@@ -70,6 +74,13 @@ void main() {
     matching: find.textContaining(subject),
   );
 
+  /// Soğuk açılışta gösterilen marka animasyonunun (`LaunchSplash`, 1,5 sn)
+  /// bitmesini bekler; sonrasında giriş ya da liste ekranı görünür.
+  Future<void> passSplash(WidgetTester tester) async {
+    await tester.pump(const Duration(milliseconds: 1600));
+    await tester.pump(const Duration(milliseconds: 400));
+  }
+
   Future<void> pumpApp(
     WidgetTester tester, {
     Duration undoWindow = const Duration(milliseconds: 1),
@@ -89,6 +100,7 @@ void main() {
       ),
     );
     await tester.pump();
+    await passSplash(tester);
   }
 
   /// Hesabı doğrudan veritabanına yazar (giriş ekranını atlamak için).
@@ -162,7 +174,8 @@ void main() {
       await pumpApp(tester);
       await tester.pump();
 
-      expect(find.text('Kaydet'), findsWidgets);
+      // Marka artık yazı değil logo olarak gösteriliyor.
+      expect(find.byType(Image), findsWidgets);
       expect(find.text('Giriş yap'), findsOneWidget);
       expect(find.text('E-posta adresi'), findsOneWidget);
     });

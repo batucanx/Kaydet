@@ -11,6 +11,8 @@ import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
 import '../domain/use_cases/folder_mapping.dart';
 import '../data/repositories/account_repository.dart';
+import '../data/repositories/settings_sync_service.dart';
+import '../data/services/settings_sync_state_store.dart';
 import '../data/repositories/folder_repository.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
@@ -125,6 +127,22 @@ final mailActionFailuresProvider = StreamProvider<MailActionFailure>(
   (ref) => ref.watch(mailRepositoryProvider).actionFailures,
 );
 
+/// Ayar eşitlemesinin (etiket/imza) hesap başına kalıcı durumu.
+final settingsSyncStateStoreProvider = Provider<SettingsSyncStateStore>(
+  (ref) => const PrefsSettingsSyncStateStore(),
+);
+
+/// Etiketleri ve imzaları web istemcisiyle IMAP sunucusu üzerinden eşit tutar.
+final settingsSyncServiceProvider = Provider<SettingsSyncService>((ref) {
+  final service = SettingsSyncService(
+    database: ref.watch(databaseProvider),
+    connection: ref.watch(mailConnectionProvider),
+    state: ref.watch(settingsSyncStateStoreProvider),
+  );
+  ref.onDispose(service.dispose);
+  return service;
+});
+
 final accountRepositoryProvider = Provider<AccountRepository>(
   (ref) => AccountRepository(
     database: ref.watch(databaseProvider),
@@ -132,6 +150,7 @@ final accountRepositoryProvider = Provider<AccountRepository>(
     imapService: ref.watch(imapServiceProvider),
     smtpService: ref.watch(smtpServiceProvider),
     connection: ref.watch(mailConnectionProvider),
+    settingsSync: ref.watch(settingsSyncServiceProvider),
   ),
 );
 

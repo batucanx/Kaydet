@@ -61,14 +61,18 @@ void main() {
   });
 
   group('en fazla iki satır (RecipientChipPlanner)', () {
-    RecipientPlan twoLines(List<double> natural) => RecipientChipPlanner.plan(
-      naturalWidths: natural,
-      available: available,
-      spacing: spacing,
-      minShrunkWidth: min,
-      plusWidth: (_) => 30,
-      inputMinWidth: 96,
-    );
+    // Bu grup yalnızca SATIR/yer mantığını sınar; görünen çip üst sınırı
+    // (`maxVisible`, varsayılan 2) ayrı bir testte ele alınır.
+    RecipientPlan twoLines(List<double> natural, {int maxVisible = 99}) =>
+        RecipientChipPlanner.plan(
+          naturalWidths: natural,
+          available: available,
+          spacing: spacing,
+          minShrunkWidth: min,
+          plusWidth: (_) => 30,
+          inputMinWidth: 96,
+          maxVisible: maxVisible,
+        );
 
     test('az çip: hepsi görünür, gizlenen yok', () {
       final p = twoLines([100, 100]);
@@ -81,6 +85,12 @@ void main() {
       final p = twoLines(natural);
       expect(p.hidden, greaterThan(0));
       expect(p.maxWidths.length + p.hidden, natural.length);
+    });
+
+    test('varsayılan olarak en fazla iki çip görünür; yenisi en eskiyi gizler', () {
+      final p = twoLines([60, 60, 60, 60], maxVisible: 2);
+      expect(p.maxWidths.length, 2);
+      expect(p.hidden, 2);
     });
 
     test('yazma alanı için yer kalmıyorsa çip gizlenir', () {

@@ -960,7 +960,11 @@ final class _Decoder {
 
     final line = _current ??= _DecodedLine(_blockAttrs(ctx));
     final attrs = _inlineAttrs(ctx);
-    if (line.runs.isNotEmpty && _sameAttrs(line.runs.last.attrs, attrs)) {
+    // Görsel çalıştırmasına metin eklenmez: çıktıda görselin metni atıldığı için
+    // görselden hemen sonra gelen metin (`<img> Ad Soyad`) kaybolurdu.
+    if (line.runs.isNotEmpty &&
+        !line.runs.last.isImage &&
+        _sameAttrs(line.runs.last.attrs, attrs)) {
       line.runs.last.text += text;
     } else {
       line.runs.add(_DecodedRun(text, attrs));

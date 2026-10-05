@@ -96,6 +96,9 @@ void main() {
         child: const KaydetApp(),
       ),
     );
+    // Açılıştaki marka animasyonu (`LaunchSplash`, 1,5 sn) bitmeden arayüz yok.
+    await tester.pump(const Duration(milliseconds: 1600));
+    await tester.pump(const Duration(milliseconds: 400));
     await settle(tester);
     return id;
   }

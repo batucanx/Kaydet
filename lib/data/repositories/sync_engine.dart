@@ -9,6 +9,7 @@ import '../../core/result.dart';
 import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/use_cases/folder_mapping.dart';
+import '../../domain/use_cases/settings_document.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../../domain/use_cases/threading.dart';
 import '../database/app_database.dart';
@@ -102,7 +103,11 @@ class SyncEngine {
   Future<Result<List<MailboxRow>>> _syncMailboxes(int accountId) async {
     final listed = await _connection.imap.listMailboxes();
     if (listed is Err<List<RemoteMailbox>>) return Err(listed.failure);
-    final remote = (listed as Ok<List<RemoteMailbox>>).value;
+    // Gizli ayar klasörü (etiket/imza eşitlemesi) bir posta klasörü değildir:
+    // yan menüde görünmez, iletileri eşitlenmez.
+    final remote = (listed as Ok<List<RemoteMailbox>>).value
+        .where((box) => !isSettingsMailbox(box.path, box.delimiter))
+        .toList();
 
     // Her tür (Gelen Kutusu, İstenmeyen, …) bir hesapta tek klasöre ait
     // olmalı. Bazı sunucular aynı türe eşlenen birden çok klasör sunar

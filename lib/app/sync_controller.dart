@@ -356,6 +356,9 @@ class SyncController extends Notifier<SyncState> {
       // Kuyruktaki kullanıcı eylemleri ve giden kutusu.
       await ref.read(mailRepositoryProvider).processQueue(accountId);
 
+      // Etiket ve imzalar web ile eşitlenir (en çok 45 sn'de bir; arka planda).
+      _fireAndForget(ref.read(settingsSyncServiceProvider).sync(accountId));
+
       // Önizleme metinleri için gövdeleri arka planda indir.
       _startBodyPrefetch(engine, accountId, inbox.first);
 

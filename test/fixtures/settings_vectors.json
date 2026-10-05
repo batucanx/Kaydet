@@ -1,0 +1,191 @@
+[
+  {
+    "name": "first contact, nothing on the server: push what we have",
+    "base": null,
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": null,
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "first contact, nothing anywhere: nothing to write",
+    "base": null,
+    "local": { "labels": {}, "signatures": {} },
+    "remote": null,
+    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": false, "localChanged": false }
+  },
+  {
+    "name": "first contact: union of both sides",
+    "base": null,
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+    "expect": {
+      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 }, "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "first contact: the server wins a conflict",
+    "base": null,
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "nothing changed anywhere",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": false, "localChanged": false }
+  },
+  {
+    "name": "added here",
+    "base": { "labels": {}, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": {}, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "added there",
+    "base": { "labels": {}, "signatures": {} },
+    "local": { "labels": {}, "signatures": {} },
+    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "different labels added on both sides",
+    "base": { "labels": {}, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+    "expect": {
+      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 }, "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "same label added on both sides with different tones: the server's version stays",
+    "base": { "labels": {}, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "modified here",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "modified there",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 4 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 4 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "same field modified on both sides: the side that is pushing wins",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 5 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "different fields of one signature modified on both sides: both survive",
+    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
+    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false } } },
+    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": true } } },
+    "expect": { "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": true } } }, "pushNeeded": true, "localChanged": true }
+  },
+  {
+    "name": "deleted here",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": {}, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "deleted there",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": { "labels": {}, "signatures": {} },
+    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "deleted here but modified there: the modification wins",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": {}, "signatures": {} },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+  },
+  {
+    "name": "deleted there but modified here: the modification wins",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
+    "remote": { "labels": {}, "signatures": {} },
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "document lost on the server: never read as 'everything was deleted'",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "remote": null,
+    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+  },
+  {
+    "name": "fields this client does not know (image fields) survive its own edit",
+    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
+    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false } } },
+    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
+    "expect": {
+      "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "extra remote fields alone are not a local change",
+    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
+    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
+    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote" } } },
+    "expect": {
+      "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote" } } },
+      "pushNeeded": false,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "two default signatures after a merge: the one made default here stays",
+    "base": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
+    "local": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
+    "remote": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": true } } },
+    "expect": {
+      "merged": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "two default signatures that nobody here made default: the smallest key stays",
+    "base": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
+    "local": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
+    "remote": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": true } } },
+    "expect": {
+      "merged": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "labels and signatures merge independently",
+    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": { "S": { "name": "S", "body": "x", "isDefault": true } } },
+    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": { "S": { "name": "S", "body": "x", "isDefault": true } } },
+    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": { "S": { "name": "S", "body": "z", "isDefault": true } } },
+    "expect": {
+      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": { "S": { "name": "S", "body": "z", "isDefault": true } } },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  }
+]
