@@ -11,7 +11,11 @@ import '../data/database/app_database.dart';
 import '../domain/models/mail_models.dart';
 import '../domain/use_cases/folder_mapping.dart';
 import '../data/repositories/account_repository.dart';
+import '../data/repositories/blocked_sender_repository.dart';
+import '../data/repositories/sender_filter_sync.dart';
+import '../data/services/managesieve_service.dart';
 import '../data/repositories/settings_sync_service.dart';
+import '../data/services/quick_templates_store.dart';
 import '../data/services/settings_sync_state_store.dart';
 import '../data/repositories/folder_repository.dart';
 import '../data/repositories/mail_connection.dart';
@@ -132,13 +136,33 @@ final settingsSyncStateStoreProvider = Provider<SettingsSyncStateStore>(
   (ref) => const PrefsSettingsSyncStateStore(),
 );
 
+/// Engellenen göndericilerin iletilerini posta sunucusundaki Sieve filtresiyle de İstenmeyen'e ayırır
+/// (ManageSieve; desteklemeyen sunucuda sessizce devre dışı kalır).
+final senderFilterSyncProvider = Provider<SenderFilterSync>((ref) {
+  final sync = SenderFilterSync(
+    database: ref.watch(databaseProvider),
+    connection: ref.watch(mailConnectionProvider),
+    service: ManageSieveService(),
+  );
+  ref.onDispose(sync.dispose);
+  return sync;
+});
+
 /// Etiketleri ve imzaları web istemcisiyle IMAP sunucusu üzerinden eşit tutar.
 final settingsSyncServiceProvider = Provider<SettingsSyncService>((ref) {
   final service = SettingsSyncService(
     database: ref.watch(databaseProvider),
     connection: ref.watch(mailConnectionProvider),
     state: ref.watch(settingsSyncStateStoreProvider),
+    templates: ref.watch(quickTemplatesStoreProvider),
+    senderFilter: ref.watch(senderFilterSyncProvider),
+    onTemplatesChanged: () =>
+        ref.read(quickTemplatesProvider.notifier).refresh(),
   );
+  // Hazır şablonlar bu cihazda değişince (ekle/düzenle/sil) tüm hesapların ayar belgesi yenilenir.
+  ref.listen(quickTemplatesProvider, (previous, next) {
+    if (previous != null) service.scheduleAll();
+  });
   ref.onDispose(service.dispose);
   return service;
 });
@@ -151,6 +175,16 @@ final accountRepositoryProvider = Provider<AccountRepository>(
     smtpService: ref.watch(smtpServiceProvider),
     connection: ref.watch(mailConnectionProvider),
     settingsSync: ref.watch(settingsSyncServiceProvider),
+  ),
+);
+
+/// Engellenen kullanıcılar: engelle / engeli kaldır (bkz. `BlockedSenderRepository`).
+final blockedSenderRepositoryProvider = Provider<BlockedSenderRepository>(
+  (ref) => BlockedSenderRepository(
+    database: ref.watch(databaseProvider),
+    mail: ref.watch(mailRepositoryProvider),
+    settingsSync: ref.watch(settingsSyncServiceProvider),
+    senderFilter: ref.watch(senderFilterSyncProvider),
   ),
 );
 
@@ -794,7 +828,7 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   );
   final coldFolderStillLoading =
       neverSyncedFolder &&
-      (syncInFlight || (mailbox?.lastSyncAt == null && !syncUnavailable));
+      (syncInFlight || (mailbox.lastSyncAt == null && !syncUnavailable));
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
     // Sabitlenenler bölümü yalnızca Gelen Kutusu'nda gösterilir — diğer
@@ -1103,6 +1137,22 @@ final defaultSignatureForAccountProvider = Provider.family<SignatureRow?, int>((
   if (signatures == null || signatures.isEmpty) return null;
   return signatures.where((s) => s.isDefault).firstOrNull ?? signatures.first;
 });
+
+// ------------------------------------------------- engellenen kullanıcılar
+
+/// Etkin hesabın engellediği adresler, en yeni en üstte.
+final blockedSendersProvider = StreamProvider<List<BlockedSenderRow>>((ref) {
+  final accountId = ref.watch(accountIdProvider);
+  if (accountId == null) return Stream.value(const <BlockedSenderRow>[]);
+  return ref.watch(databaseProvider).watchBlockedSenders(accountId);
+});
+
+/// Verilen hesabın engellediği adresler (iletinin hesabı etkin hesaptan farklı olabilir).
+final blockedSendersOfAccountProvider =
+    StreamProvider.family<List<BlockedSenderRow>, int>(
+      (ref, accountId) =>
+          ref.watch(databaseProvider).watchBlockedSenders(accountId),
+    );
 
 // ---------------------------------------------------------------- kişiler
 

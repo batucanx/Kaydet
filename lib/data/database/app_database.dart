@@ -60,6 +60,7 @@ class AttachmentSearchResult {
     Labels,
     Signatures,
     Contacts,
+    BlockedSenders,
     PendingOperations,
     TranslatedEmailCache,
     MessageLanguages,
@@ -78,7 +79,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 19;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -227,6 +228,21 @@ class AppDatabase extends _$AppDatabase {
       // çözücüyle yeniden indirilir. Tek seferliktir.
       if (from < 17) {
         await _dropCorruptCachedBodies();
+      }
+      // v17 → v18: Taslaklar dışındaki klasörlerde sunucudan gelen `\Draft`
+      // bayrağı artık yok sayılıyor (bkz. `SyncEngine._storeEnvelopes`); daha
+      // önce taslak diye kaydedilmiş alınan iletiler düzeltilir. Yerel
+      // taslaklar (`uid` boş) dokunulmaz.
+      if (from < 18) {
+        await customStatement(
+          'UPDATE messages SET is_draft = 0 '
+          'WHERE is_draft = 1 AND uid IS NOT NULL AND mailbox_id NOT IN '
+          '(SELECT id FROM mailboxes WHERE special_use = 2)',
+        );
+      }
+      // v18 → v19: Engellenen kullanıcılar tablosu eklendi (yeni tablo; mevcut veri etkilenmez).
+      if (from < 19) {
+        await m.createTable(blockedSenders);
       }
     },
     beforeOpen: (details) async {
@@ -1415,6 +1431,90 @@ class AppDatabase extends _$AppDatabase {
               ),
             ]))
           .watch();
+
+  // ------------------------------------------------- engellenen kullanıcılar
+
+  /// Hesabın engellediği adresler, en yeni en üstte.
+  Stream<List<BlockedSenderRow>> watchBlockedSenders(int accountId) =>
+      (select(blockedSenders)
+            ..where((b) => b.accountId.equals(accountId))
+            ..orderBy([
+              (b) => OrderingTerm(expression: b.createdAt, mode: OrderingMode.desc),
+              (b) => OrderingTerm(expression: b.id, mode: OrderingMode.desc),
+            ]))
+          .watch();
+
+  Future<List<BlockedSenderRow>> blockedSendersOf(int accountId) =>
+      (select(blockedSenders)..where((b) => b.accountId.equals(accountId))).get();
+
+  Future<BlockedSenderRow?> blockedSenderById(int id) =>
+      (select(blockedSenders)..where((b) => b.id.equals(id))).getSingleOrNull();
+
+  /// Hesabın engellediği adresler (küçük harfli) — senkronizasyonun taraması için.
+  Future<Set<String>> blockedEmails(int accountId) async => {
+    for (final row in await blockedSendersOf(accountId)) row.email,
+  };
+
+  /// Adresi engeller; zaten engelliyse var olan satırı döndürür ([created] `false`).
+  Future<({BlockedSenderRow row, bool created})> insertBlockedSender({
+    required int accountId,
+    required String email,
+    String name = '',
+  }) => transaction(() async {
+    final normalized = email.trim().toLowerCase();
+    final existing =
+        await (select(blockedSenders)..where(
+              (b) => b.accountId.equals(accountId) & b.email.equals(normalized),
+            ))
+            .getSingleOrNull();
+    if (existing != null) return (row: existing, created: false);
+    final id = await into(blockedSenders).insert(
+      BlockedSendersCompanion.insert(
+        accountId: accountId,
+        email: normalized,
+        name: Value(name.trim()),
+      ),
+    );
+    return (row: (await blockedSenderById(id))!, created: true);
+  });
+
+  /// Ayar eşitlemesi: web'den gelen ad değişikliği.
+  Future<void> updateBlockedSenderName(int id, String name) =>
+      (update(blockedSenders)..where((b) => b.id.equals(id))).write(
+        BlockedSendersCompanion(name: Value(name.trim())),
+      );
+
+  Future<void> deleteBlockedSender(int id) =>
+      (delete(blockedSenders)..where((b) => b.id.equals(id))).go();
+
+  /// [mailboxId] klasöründeki, göndericisi [emails] içinde olan iletiler (büyük/küçük harfe duyarsız).
+  /// Yerel taslaklar ve sunucuda karşılığı olmayan satırlar dışarıda kalır.
+  Future<List<MessageRow>> messagesFromSenders({
+    required int mailboxId,
+    required Iterable<String> emails,
+    bool serverBackedOnly = true,
+  }) async {
+    final wanted = {for (final e in emails) e.trim().toLowerCase()};
+    if (wanted.isEmpty) return const [];
+    final out = <MessageRow>[];
+    // SQLite değişken sınırının çok altında kalmak için gruplanır.
+    final list = wanted.toList();
+    for (var i = 0; i < list.length; i += 200) {
+      final group = list.sublist(i, i + 200 > list.length ? list.length : i + 200);
+      out.addAll(
+        await (select(messages)..where(
+              (m) =>
+                  m.mailboxId.equals(mailboxId) &
+                  m.fromEmail.lower().isIn(group) &
+                  m.isDraft.equals(false) &
+                  m.isDeleted.equals(false) &
+                  (serverBackedOnly ? m.uid.isNotNull() : const Constant(true)),
+            ))
+            .get(),
+      );
+    }
+    return out;
+  }
 
   /// Arama ekranının "Hızlı Kişiler" şeridi için en son kullanılan kişiler.
   ///

@@ -64,7 +64,9 @@ class QuickTemplatesStore {
       return List.unmodifiable(_memoryTemplates);
     }
     final raw = prefs.getStringList(_key);
-    if (raw == null || raw.isEmpty) {
+    // Hiç kaydedilmemişse varsayılanlar; kullanıcı hepsini sildiyse BOŞ kalır (aksi hâlde silinen
+    // şablonlar geri gelir ve web ile eşitlenen silme geri alınırdı).
+    if (raw == null) {
       return List.of(builtInTemplates);
     }
     try {
@@ -88,6 +90,10 @@ class QuickTemplatesStore {
     }
     await _persist(current);
   }
+
+  /// Tüm şablon listesini değiştirir (web ile eşitleme sonucu).
+  Future<void> replaceAll(List<QuickTemplate> templates) =>
+      _persist(List.of(templates));
 
   /// Belirtilen şablonu siler.
   Future<void> delete(String id) async {
@@ -132,6 +138,9 @@ class QuickTemplatesNotifier extends Notifier<List<QuickTemplate>> {
     await ref.read(quickTemplatesStoreProvider).delete(id);
     state = ref.read(quickTemplatesStoreProvider).read();
   }
+
+  /// Depo dışarıdan (ayar eşitlemesi) değişti: durumu yeniden oku.
+  void refresh() => state = ref.read(quickTemplatesStoreProvider).read();
 
   Future<void> reset() async {
     await ref.read(quickTemplatesStoreProvider).resetToDefaults();

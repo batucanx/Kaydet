@@ -11,6 +11,7 @@ import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/data/services/settings_sync_state_store.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
 import 'package:kaydet/domain/use_cases/settings_document.dart';
+import 'package:kaydet/domain/use_cases/settings_merge.dart';
 
 import 'helpers/fake_services.dart';
 import 'helpers/test_db.dart';
@@ -123,6 +124,13 @@ class _Device {
 
   Future<List<String>> labels() async => [
     for (final l in await db.labelsOf(accountId)) '${l.name}:${l.toneIndex}',
+  ]..sort();
+
+  Future<void> block(String email, {String name = ''}) =>
+      db.insertBlockedSender(accountId: accountId, email: email, name: name);
+
+  Future<List<String>> blocked() async => [
+    for (final b in await db.blockedSendersOf(accountId)) '${b.email}:${b.name}',
   ]..sort();
 
   Future<List<String>> signatures() async => [
@@ -269,7 +277,7 @@ void main() {
     ));
     imap.store['INBOX.Kaydet-Settings'] = {};
     final future = jsonEncode({
-      'format': 'kaydet-settings', 'v': 2, 'rev': 40, 'updatedAt': 'x',
+      'format': 'kaydet-settings', 'v': 4, 'rev': 40, 'updatedAt': 'x',
       'writer': 'gelecek', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
     });
     await imap.appendMessage(
@@ -372,6 +380,33 @@ void main() {
     expect(await phone.signatures(), await web.signatures());
   });
 
+  test('hasRemoteChange: değişiklik yokken false, başka istemci yazınca true', () async {
+    final a = await _Device.create(imap);
+    final web = await _Device.create(imap, writer: 'web');
+    await a.addLabel('Is', 1);
+
+    expect(await a.service.hasRemoteChange(a.accountId), isTrue, reason: 'durum henüz bilinmiyor');
+    await a.sync(); // yazar
+    expect(await a.service.hasRemoteChange(a.accountId), isTrue, reason: 'yazımdan sonra durum yeniden öğrenilir');
+    await a.sync(); // değişiklik yok: durumu öğrenir
+    expect(await a.service.hasRemoteChange(a.accountId), isFalse);
+
+    await web.addLabel('Yeni', 2);
+    await web.sync();
+    expect(await a.service.hasRemoteChange(a.accountId), isTrue);
+    await a.sync();
+    expect(await a.service.hasRemoteChange(a.accountId), isFalse);
+    expect(await a.labels(), contains('Yeni:2'));
+  });
+
+  test('ayar klasörü abonelikten çıkarılır (webmail göstermesin), turlar başına tekrarlanmaz', () async {
+    final a = await _Device.create(imap);
+    await a.addLabel('Is', 1);
+    await a.sync();
+    await a.sync();
+    expect(imap.unsubscribed, ['INBOX.Kaydet-Settings']);
+  });
+
   test('gizli ayar klasörü klasör listesine girmez', () async {
     final a = await _Device.create(imap);
     await a.addLabel('Is', 1);
@@ -419,5 +454,63 @@ void main() {
     clock = clock.add(const Duration(seconds: 60));
     await a.service.sync(a.accountId);
     expect(imap.commandLog.where((c) => c == 'list').length, greaterThan(lists));
+  });
+
+  test('engellenen kullanıcılar iki yönde taşınır: engel ve engel kaldırma', () async {
+    final phone = await _Device.create(imap);
+    final web = await _Device.create(imap, writer: 'web');
+    await phone.block('gurultu@spam.example', name: 'Gürültü');
+    await phone.sync();
+    expect(
+      phone.latestDocument()!.data.blockedSenders,
+      {
+        'gurultu@spam.example': {'email': 'gurultu@spam.example', 'name': 'Gürültü'},
+      },
+    );
+
+    await web.sync();
+    expect(await web.blocked(), ['gurultu@spam.example:Gürültü']);
+
+    final entry = (await web.db.blockedSendersOf(web.accountId)).single;
+    await web.db.deleteBlockedSender(entry.id);
+    await web.sync();
+    await phone.sync();
+    expect(phone.latestDocument()!.data.blockedSenders, isEmpty);
+    expect(await phone.blocked(), isEmpty);
+  });
+
+  test('iki taraf aynı anda farklı adres engellerse ikisi de korunur; tanınmayan kayıt olduğu gibi taşınır', () async {
+    final phone = await _Device.create(imap);
+    final web = await _Device.create(imap, writer: 'web');
+    await phone.sync();
+    await web.sync();
+    await phone.block('a@spam.example');
+    await web.block('b@spam.example');
+    await phone.sync();
+    await web.sync();
+    await phone.sync();
+    expect(await phone.blocked(), ['a@spam.example:', 'b@spam.example:']);
+    expect(await web.blocked(), ['a@spam.example:', 'b@spam.example:']);
+
+    // Biçimi bozuk bir kayıt yargılanmaz ve silinmez.
+    final latest = phone.latestDocument()!;
+    final box = imap.mailboxes.firstWhere((m) => isSettingsMailbox(m.path, m.delimiter));
+    final broken = SettingsDocument(
+      rev: latest.rev + 1,
+      updatedAt: latest.updatedAt,
+      writer: 'web',
+      data: SettingsData(
+        blockedSenders: {
+          ...latest.data.blockedSenders,
+          'Tuhaf Anahtar': {'email': 'adres degil'},
+        },
+      ),
+    );
+    final uid = (imap.store[box.path] ?? {}).keys.fold<int>(0, (a, b) => a > b ? a : b) + 1;
+    imap.store.putIfAbsent(box.path, () => {})[uid] = envelope(uid: uid);
+    imap.seedBody(box.path, uid, FetchedBody(plainText: serializeSettingsDocument(broken)));
+    await phone.sync();
+    expect(await phone.blocked(), ['a@spam.example:', 'b@spam.example:']);
+    expect(phone.latestDocument()!.data.blockedSenders['Tuhaf Anahtar'], {'email': 'adres degil'});
   });
 }

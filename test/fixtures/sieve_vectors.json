@@ -1,0 +1,153 @@
+[
+  {
+    "name": "empty script gets the block",
+    "script": "",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "addresses are lower-cased, de-duplicated and sorted",
+    "script": "",
+    "emails": [
+      "B@X.com",
+      "a@x.com",
+      "b@x.com"
+    ],
+    "junk": "INBOX.Junk",
+    "expect": {
+      "script": "# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\", \"b@x.com\"] {\n  fileinto \"INBOX.Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n",
+      "emails": [
+        "a@x.com",
+        "b@x.com"
+      ]
+    }
+  },
+  {
+    "name": "block goes after the leading requires, not before",
+    "script": "require [\"fileinto\", \"vacation\"];\nif header :contains \"subject\" \"x\" { fileinto \"Work\"; }\n",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "require [\"fileinto\", \"vacation\"];\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nif header :contains \"subject\" \"x\" { fileinto \"Work\"; }\n",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "several require commands, comments between them, a semicolon inside a string",
+    "script": "# my filters\nrequire \"fileinto\";\n/* note */\nrequire [\"envelope\", \"x;y\"];\n\nkeep;\n",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "# my filters\nrequire \"fileinto\";\n/* note */\nrequire [\"envelope\", \"x;y\"];\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nkeep;\n",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "no require: the block goes to the very top, before the user rules",
+    "script": "if header :contains \"subject\" \"x\" { discard; }\n",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nif header :contains \"subject\" \"x\" { discard; }\n",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "script without trailing newline",
+    "script": "keep;",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"a@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nkeep;",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "CRLF script keeps CRLF",
+    "script": "require \"fileinto\";\r\nkeep;\r\n",
+    "emails": [
+      "a@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "require \"fileinto\";\r\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\r\nrequire [\"fileinto\"];\r\nif address :is :all \"from\" [\"a@x.com\"] {\r\n  fileinto \"Junk\";\r\n  stop;\r\n}\r\n# END KAYDET BLOCKED SENDERS\r\n\r\nkeep;\r\n",
+      "emails": [
+        "a@x.com"
+      ]
+    }
+  },
+  {
+    "name": "quotes, backslashes and brackets in data are escaped and read back",
+    "script": "",
+    "emails": [
+      "we\"ird\\]@x.com"
+    ],
+    "junk": "My \"Junk\"",
+    "expect": {
+      "script": "# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"we\\\"ird\\\\]@x.com\"] {\n  fileinto \"My \\\"Junk\\\"\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n",
+      "emails": [
+        "we\"ird\\]@x.com"
+      ]
+    }
+  },
+  {
+    "name": "present block is replaced in place, user rules untouched",
+    "script": "require \"fileinto\";\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"old@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nkeep;\n",
+    "emails": [
+      "new@x.com",
+      "old@x.com"
+    ],
+    "junk": "Junk",
+    "expect": {
+      "script": "require \"fileinto\";\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"new@x.com\", \"old@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nkeep;\n",
+      "emails": [
+        "new@x.com",
+        "old@x.com"
+      ]
+    }
+  },
+  {
+    "name": "empty list removes the block and leaves the rest",
+    "script": "require \"fileinto\";\n# BEGIN KAYDET BLOCKED SENDERS (managed by Kaydet, do not edit)\nrequire [\"fileinto\"];\nif address :is :all \"from\" [\"old@x.com\"] {\n  fileinto \"Junk\";\n  stop;\n}\n# END KAYDET BLOCKED SENDERS\n\nkeep;\n",
+    "emails": [],
+    "junk": "Junk",
+    "expect": {
+      "script": "require \"fileinto\";\nkeep;\n",
+      "emails": null
+    }
+  },
+  {
+    "name": "empty list on a script without the block changes nothing",
+    "script": "require \"fileinto\";\nkeep;\n",
+    "emails": [],
+    "junk": "Junk",
+    "expect": {
+      "script": "require \"fileinto\";\nkeep;\n",
+      "emails": null
+    }
+  }
+]

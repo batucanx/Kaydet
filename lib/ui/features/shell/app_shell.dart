@@ -692,8 +692,8 @@ class _AllAccountsButton extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: circleColor,
                 ),
-                child: Icon(
-                  LucideIcons.home,
+                child: ImageIcon(
+                  const AssetImage('assets/icons/home.png'),
                   size: IconSize.lg,
                   color: iconColor,
                 ),
@@ -706,7 +706,7 @@ class _AllAccountsButton extends StatelessWidget {
   }
 }
 
-class _AccountAvatarButton extends StatelessWidget {
+class _AccountAvatarButton extends ConsumerWidget {
   const _AccountAvatarButton({
     required this.account,
     required this.isActive,
@@ -718,8 +718,15 @@ class _AccountAvatarButton extends StatelessWidget {
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
+    // Sunucusuna kalıcı olarak ulaşılamayan hesapta avatarın sol-üstünde uyarı
+    // rozeti (bkz. `SyncController._noteConnectionFailure`).
+    final unreachable = ref.watch(
+      syncControllerProvider.select(
+        (s) => s.unreachableAccounts.containsKey(account.id),
+      ),
+    );
     // `_SideRail` ile aynı gerekçe: açık temada ray mavi zeminli olduğundan
     // `accent` halkası zeminle karışıp görünmez olurdu — beyaz halkaya döner.
     // Koyu temada dokunulmaz.
@@ -728,7 +735,9 @@ class _AccountAvatarButton extends StatelessWidget {
     // hâlde avatarla rozet arasında görünür bir kare/daire sınırı kalır.
     final railBg = t.isDark ? t.surfaceDeep : t.appBarBg;
     return Tooltip(
-      message: account.email,
+      message: unreachable
+          ? '${account.email} · Sunucuya ulaşılamıyor'
+          : account.email,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(Radii.full),
@@ -801,6 +810,25 @@ class _AccountAvatarButton extends StatelessWidget {
                 ),
               ),
             ),
+            if (unreachable)
+              Positioned(
+                left: -1,
+                top: -1,
+                child: Semantics(
+                  label: 'Sunucuya ulaşılamıyor',
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: t.warning,
+                      border: Border.all(color: railBg, width: 2),
+                    ),
+                    child: Icon(LucideIcons.serverOff, size: 8, color: railBg),
+                  ),
+                ),
+              ),
           ],
         ),
       ),

@@ -298,6 +298,26 @@ class Contacts extends Table {
   ];
 }
 
+/// Engellenen kullanıcılar (hesap başına): bu adreslerden gelen iletiler Gelen Kutusu yerine
+/// İstenmeyen klasörüne gider (bkz. `SyncEngine`). Liste web istemcisiyle ayar belgesi
+/// (`settings_document.dart`) üzerinden eşitlenir; anahtar küçük harfli adrestir.
+@DataClassName('BlockedSenderRow')
+class BlockedSenders extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get accountId =>
+      integer().references(Accounts, #id, onDelete: KeyAction.cascade)();
+
+  /// Her zaman küçük harfle saklanır; karşılaştırma büyük/küçük harfe duyarsızdır.
+  TextColumn get email => text()();
+  TextColumn get name => text().withDefault(const Constant(''))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {accountId, email},
+  ];
+}
+
 @DataClassName('PendingOperationRow')
 class PendingOperations extends Table {
   IntColumn get id => integer().autoIncrement()();

@@ -4,11 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/remote_push_controller.dart';
 import '../../../core/result.dart';
 import '../../../data/repositories/account_repository.dart';
 import '../../../domain/models/mail_models.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
+import '../settings/data_usage_notice.dart';
 
 /// Giriş ekranı.
 ///
@@ -405,6 +407,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                               failure: _failure!,
                                             ),
                                           ),
+                                  ),
+                                  const SizedBox(height: Space.lg),
+                                  DataUsageNote(
+                                    pushServerActive:
+                                        ref.watch(remotePushSyncProvider) !=
+                                        null,
                                   ),
                                   const SizedBox(height: Space.lg),
                                   SizedBox(

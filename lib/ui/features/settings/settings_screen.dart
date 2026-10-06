@@ -11,6 +11,7 @@ import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import 'accounts_settings_screen.dart';
 import 'appearance_settings_screen.dart';
+import 'blocked_senders_settings_screen.dart';
 import 'labels_settings_screen.dart';
 import 'maintenance_settings_screen.dart';
 import 'notifications_settings_screen.dart';
@@ -36,6 +37,8 @@ class SettingsScreen extends ConsumerWidget {
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
     final signatures =
         ref.watch(signaturesProvider).value ?? const <SignatureRow>[];
+    final blocked =
+        ref.watch(blockedSendersProvider).value ?? const <BlockedSenderRow>[];
     final sync = ref.watch(syncControllerProvider);
 
     final themeLabel = settings.themeMode.label;
@@ -126,6 +129,16 @@ class SettingsScreen extends ConsumerWidget {
                 trailing: const Icon(LucideIcons.chevronRight, size: 18),
                 onTap: () =>
                     context.pushScreen(const SignaturesSettingsScreen()),
+              ),
+              SettingsTile(
+                icon: LucideIcons.ban,
+                title: 'Engellenen kullanıcılar',
+                subtitle: blocked.isEmpty
+                    ? 'Kimse engellenmedi'
+                    : '${blocked.length} kullanıcı',
+                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                onTap: () =>
+                    context.pushScreen(const BlockedSendersSettingsScreen()),
               ),
               SettingsTile(
                 icon: LucideIcons.hardDrive,

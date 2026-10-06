@@ -27,6 +27,127 @@ import '../search/search_screen.dart';
 import 'bounded_dismissible.dart';
 import 'mail_row.dart';
 
+/// Sunucusuna kalıcı olarak ulaşılamayan hesap için sakin şerit (bkz.
+/// `SyncController._noteConnectionFailure`: ardışık hata + süre eşiği).
+///
+/// Tek hesap görünümünde yalnızca etkin hesap için; Tüm Hesaplar'da ulaşılamayan
+/// hesapların adresleri listelenir. Sunucu yanıt verince kendiliğinden kaybolur.
+class _UnreachableBanner extends ConsumerWidget {
+  const _UnreachableBanner({required this.isAllAccounts});
+
+  final bool isAllAccounts;
+
+  static String _time(DateTime at) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    final now = DateTime.now();
+    final sameDay =
+        at.year == now.year && at.month == now.month && at.day == now.day;
+    final clock = '${two(at.hour)}:${two(at.minute)}';
+    return sameDay ? clock : '${two(at.day)}.${two(at.month)} $clock';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final unreachable = ref.watch(
+      syncControllerProvider.select((s) => s.unreachableAccounts),
+    );
+    if (unreachable.isEmpty) return const SizedBox.shrink();
+
+    final String message;
+    if (isAllAccounts) {
+      final emails = [
+        for (final a in ref.watch(allAccountsProvider).value ?? const <AccountRow>[])
+          if (unreachable.containsKey(a.id)) a.email,
+      ];
+      if (emails.isEmpty) return const SizedBox.shrink();
+      message = 'Sunucuya ulaşılamıyor: ${emails.join(', ')}';
+    } else {
+      final activeId = ref.watch(accountIdProvider);
+      if (activeId == null || !unreachable.containsKey(activeId)) {
+        return const SizedBox.shrink();
+      }
+      final last = unreachable[activeId];
+      message = last == null
+          ? 'Sunucuya ulaşılamıyor.'
+          : 'Sunucuya ulaşılamıyor · Son eşitleme ${_time(last)}';
+    }
+
+    return StatusBanner(
+      message: message,
+      icon: LucideIcons.serverOff,
+      actionLabel: 'Yeniden dene',
+      onAction: () => ref
+          .read(syncControllerProvider.notifier)
+          .syncCurrentFolder(allAccounts: true),
+    );
+  }
+}
+
+/// AppBar'ın altındaki ince "eşitleniyor" çizgisi.
+///
+/// Hesap değişiminde ya da kullanım sırasında eşitleme birkaç saniye sürebilir;
+/// çizgi, listenin bir anda güncellenmesi yerine kullanıcıya işin sürdüğünü
+/// gösterir. Çok kısa turlarda (arka plan yoklaması) titremesin diye çizgi
+/// [_showDelay] sonra belirir. Yüksekliği sabittir; belirip kaybolması
+/// listeyi kaydırmaz. Yalnızca `isSyncing` izlenir, bu yüzden ekranın geri
+/// kalanı yeniden kurulmaz.
+class _SyncProgressBar extends ConsumerStatefulWidget {
+  const _SyncProgressBar();
+
+  @override
+  ConsumerState<_SyncProgressBar> createState() => _SyncProgressBarState();
+}
+
+class _SyncProgressBarState extends ConsumerState<_SyncProgressBar> {
+  static const Duration _showDelay = Duration(milliseconds: 250);
+
+  Timer? _timer;
+  bool _visible = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _apply(ref.read(syncControllerProvider).isSyncing);
+    ref.listenManual(
+      syncControllerProvider.select((s) => s.isSyncing),
+      (_, next) => _apply(next),
+    );
+  }
+
+  void _apply(bool syncing) {
+    _timer?.cancel();
+    if (!syncing) {
+      if (_visible) setState(() => _visible = false);
+      return;
+    }
+    _timer = Timer(_showDelay, () {
+      if (mounted) setState(() => _visible = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    // Görünmezken oluşturulmaz: boşta sürekli kare üretmesin.
+    return SizedBox(
+      height: 2,
+      child: _visible
+          ? LinearProgressIndicator(
+              minHeight: 2,
+              color: t.accent,
+              backgroundColor: t.accent.withValues(alpha: 0.15),
+            )
+          : null,
+    );
+  }
+}
+
 /// Mail listesi — uygulamanın merkezi.
 class MailListScreen extends ConsumerStatefulWidget {
   const MailListScreen({super.key});
@@ -131,6 +252,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       ),
       body: Column(
         children: [
+          const _SyncProgressBar(),
           if (isOffline)
             const StatusBanner(
               message:
@@ -138,6 +260,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
                   'bağlantı gelince gönderilecek.',
               icon: LucideIcons.cloudOff,
             ),
+          if (!isOffline && syncError == null)
+            _UnreachableBanner(isAllAccounts: unifiedUse != null),
           if (syncError != null && !isOffline)
             StatusBanner(
               message: syncError.userMessage,
@@ -267,6 +391,10 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
               a.id: a,
           }
         : const <int, AccountRow>{};
+    // Klasör yüklenirken ya da liste boşken ("yükleniyor"/"boş" yer tutucusu)
+    // altta sayfalama kontrolü gösterilmez: ortada hâlâ bir ileti yok.
+    final hasMessages = items.any((i) => i is MessageItem);
+    final showLoadMore = hasMessages && (hasMore || isLoadingMore);
     return ListView.builder(
       key: const PageStorageKey('mail-list'),
       controller: _scroll,
@@ -276,7 +404,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       // Varsayılan 250px'lik ön-inşa alanı hızlı kaydırmada avatar/logoların
       // "pop-in" etmesine yol açıyordu; ~3 ekran yüksekliği önden inşa edilir.
       scrollCacheExtent: const ScrollCacheExtent.pixels(1200),
-      itemCount: items.length + (hasMore || isLoadingMore ? 1 : 0),
+      itemCount: items.length + (showLoadMore ? 1 : 0),
       itemBuilder: (context, index) {
         if (index >= items.length) {
           return _LoadMoreControl(
@@ -286,9 +414,10 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
         }
         return switch (items[index]) {
           PinnedSectionItem() => const _PinnedSection(),
+          // İlk indirme sürerken liste boş kalır; "yükleniyor" bilgisini
+          // AppBar altındaki `_SyncProgressBar` verir.
           FolderLoadingItem() => SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.6,
-            child: const _FolderLoading(),
           ),
           EmptyListItem(:final filterActive) => SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.6,
@@ -998,15 +1127,11 @@ class _SelectionActionBar extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _BarAction(
-                icon: LucideIcons.trash2,
-                label: 'Sil',
+                icon: LucideIcons.archive,
+                label: 'Arşivle',
                 onTap: () async {
-                  final deleted = await deleteWithConfirmation(
-                    context,
-                    ref,
-                    ids,
-                  );
-                  if (deleted) done();
+                  await archiveMessages(context, ref, ids);
+                  done();
                 },
               ),
               _BarAction(
@@ -1026,11 +1151,15 @@ class _SelectionActionBar extends ConsumerWidget {
                 },
               ),
               _BarAction(
-                icon: LucideIcons.archive,
-                label: 'Arşivle',
+                icon: LucideIcons.trash2,
+                label: 'Sil',
                 onTap: () async {
-                  await archiveMessages(context, ref, ids);
-                  done();
+                  final deleted = await deleteWithConfirmation(
+                    context,
+                    ref,
+                    ids,
+                  );
+                  if (deleted) done();
                 },
               ),
               _BarAction(
@@ -1189,98 +1318,6 @@ class _LoadMoreControl extends StatelessWidget {
 /// az taşabilir) bir taşma hatasına yol açmadan, tembel biçimde çizilmesini
 /// sağlar; kaydırma `NeverScrollableScrollPhysics` ile devre dışı bırakılır,
 /// yükleniyor durumunda kaydırılacak gerçek içerik yoktur.
-/// İlk eşitleme sürerken üst çubuğun hemen altında, tam genişlikte ileri geri
-/// kayan ince şerit (mobil uygulamalardaki sayfa yükleme çubuğu gibi).
-class _FolderLoading extends StatefulWidget {
-  const _FolderLoading();
-
-  @override
-  State<_FolderLoading> createState() => _FolderLoadingState();
-}
-
-class _FolderLoadingState extends State<_FolderLoading>
-    with SingleTickerProviderStateMixin {
-  static const double _barHeight = 3;
-  static const double _thumbFraction = 0.32;
-
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1200),
-  );
-
-  @override
-  void initState() {
-    super.initState();
-    _controller.repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    // Hızlı geçen yüklemelerde yanıp sönmesin diye şerit hafifçe belirerek girer.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: context.motion(Motion.base),
-      curve: Motion.standard,
-      builder: (context, opacity, child) =>
-          Opacity(opacity: opacity, child: child),
-      child: Align(
-        alignment: Alignment.topCenter,
-        child: Semantics(
-          label: 'Yükleniyor',
-          child: ExcludeSemantics(
-            child: SizedBox(
-              height: _barHeight,
-              width: double.infinity,
-              child: ColoredBox(
-                color: t.divider,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final trackWidth = constraints.maxWidth;
-                    final thumbWidth = trackWidth * _thumbFraction;
-                    return AnimatedBuilder(
-                      animation: _controller,
-                      builder: (context, _) {
-                        final x =
-                            Curves.easeInOutCubic.transform(_controller.value) *
-                            (trackWidth - thumbWidth);
-                        return Stack(
-                          children: [
-                            Positioned(
-                              left: x,
-                              width: thumbWidth,
-                              top: 0,
-                              bottom: 0,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: t.accent,
-                                  borderRadius: BorderRadius.circular(
-                                    Radii.full,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _ListSkeleton extends StatelessWidget {
   const _ListSkeleton();
 
@@ -1698,8 +1735,8 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
                                 shape: BoxShape.circle,
                                 color: t.onAccentFill.withValues(alpha: 0.22),
                               ),
-                              child: Icon(
-                                LucideIcons.home,
+                              child: ImageIcon(
+                                const AssetImage('assets/icons/home.png'),
                                 size: IconSize.lg,
                                 color:
                                     theme.appBarTheme.iconTheme?.color ??

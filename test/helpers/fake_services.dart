@@ -139,6 +139,22 @@ class FakeImapService implements ImapService {
   }
 
   @override
+  Future<Result<MailboxState>> statusMailbox(String path) async {
+    commandLog.add('status:$path');
+    final box = _box(path);
+    final maxUid = box.keys.isEmpty
+        ? 0
+        : box.keys.reduce((a, b) => a > b ? a : b);
+    return Ok(
+      MailboxState(
+        uidValidity: uidValidity,
+        uidNext: maxUid + 1,
+        messageCount: box.length,
+      ),
+    );
+  }
+
+  @override
   Future<Result<MailboxState>> selectMailbox(
     String path, {
     bool enableCondStore = false,
@@ -298,6 +314,16 @@ class FakeImapService implements ImapService {
       hasAttachments: false,
     );
     return Ok(uid);
+  }
+
+  /// `unsubscribe:` komutlarının yolları (ayar klasörünü gizleme testleri için).
+  final List<String> unsubscribed = [];
+
+  @override
+  Future<Result<void>> unsubscribeMailbox(String encodedPath) async {
+    commandLog.add('unsubscribe:$encodedPath');
+    unsubscribed.add(encodedPath);
+    return okVoid;
   }
 
   @override

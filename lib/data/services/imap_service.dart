@@ -39,6 +39,10 @@ abstract class ImapService {
     bool enableCondStore = false,
   });
 
+  /// Seçili klasörü DEĞİŞTİRMEDEN klasörün durumunu (`STATUS`) sorar: UIDVALIDITY,
+  /// UIDNEXT ve ileti sayısı. Ucuz bir "değişti mi?" yoklaması içindir.
+  Future<Result<MailboxState>> statusMailbox(String path);
+
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
   Future<Result<List<int>>> searchAllUids();
 
@@ -96,6 +100,10 @@ abstract class ImapService {
 
   /// Klasör oluşturur.
   Future<Result<void>> createMailbox(String path);
+
+  /// Klasörü abonelik listesinden çıkarır (`UNSUBSCRIBE`). Birçok sunucu yeni klasörü
+  /// kendiliğinden abone yapar ve webmail onu listeler; klasör ve iletileri etkilenmez.
+  Future<Result<void>> unsubscribeMailbox(String encodedPath);
 
   /// Klasörü siler.
   Future<Result<void>> deleteMailbox({
@@ -390,6 +398,28 @@ class EnoughMailImapService implements ImapService {
   });
 
   @override
+  Future<Result<MailboxState>> statusMailbox(String path) => _guard(() async {
+    final box = await _requireClient.statusMailbox(
+      em.Mailbox(
+        encodedName: path,
+        encodedPath: path,
+        flags: const [],
+        pathSeparator: '/',
+      ),
+      [
+        em.StatusFlags.uidValidity,
+        em.StatusFlags.uidNext,
+        em.StatusFlags.messages,
+      ],
+    );
+    return MailboxState(
+      uidValidity: box.uidValidity ?? 0,
+      uidNext: box.uidNext ?? 0,
+      messageCount: box.messagesExists,
+    );
+  });
+
+  @override
   Future<Result<List<int>>> searchAllUids() => _guard(() async {
     final result = await _requireClient.uidSearchMessages(
       searchCriteria: 'ALL',
@@ -551,17 +581,26 @@ class EnoughMailImapService implements ImapService {
       } catch (_) {}
     }
 
-    String resolveAttachmentName(String? name, String? mime, {required String fallback}) {
-      final base = (name != null && name.trim().isNotEmpty) ? name.trim() : fallback;
+    String resolveAttachmentName(
+      String? name,
+      String? mime, {
+      required String fallback,
+    }) {
+      final base = (name != null && name.trim().isNotEmpty)
+          ? name.trim()
+          : fallback;
       if (base.contains('.')) return base;
       final m = (mime ?? '').toLowerCase();
       final ext = switch (m) {
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' => '.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' =>
+          '.docx',
         'application/msword' => '.doc',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' => '.xlsx',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' =>
+          '.xlsx',
         'application/vnd.ms-excel' => '.xls',
         'application/pdf' => '.pdf',
-        'application/vnd.openxmlformats-officedocument.presentationml.presentation' => '.pptx',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation' =>
+          '.pptx',
         'application/vnd.ms-powerpoint' => '.ppt',
         'text/plain' => '.txt',
         'text/csv' => '.csv',
@@ -576,11 +615,16 @@ class EnoughMailImapService implements ImapService {
     final attachments = <FetchedAttachment>[];
     try {
       for (final info in message.findContentInfo()) {
-        final mime = info.contentType?.mediaType.text ?? 'application/octet-stream';
+        final mime =
+            info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(
           FetchedAttachment(
             partId: info.fetchId,
-            fileName: resolveAttachmentName(info.fileName, mime, fallback: 'dosya'),
+            fileName: resolveAttachmentName(
+              info.fileName,
+              mime,
+              fallback: 'dosya',
+            ),
             mimeType: mime,
             sizeBytes: info.size ?? 0,
             contentId: info.cid,
@@ -591,11 +635,16 @@ class EnoughMailImapService implements ImapService {
         disposition: em.ContentDisposition.inline,
       )) {
         if (info.isText) continue;
-        final mime = info.contentType?.mediaType.text ?? 'application/octet-stream';
+        final mime =
+            info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(
           FetchedAttachment(
             partId: info.fetchId,
-            fileName: resolveAttachmentName(info.fileName, mime, fallback: 'gomulu'),
+            fileName: resolveAttachmentName(
+              info.fileName,
+              mime,
+              fallback: 'gomulu',
+            ),
             mimeType: mime,
             sizeBytes: info.size ?? 0,
             contentId: info.cid,
@@ -730,6 +779,18 @@ class EnoughMailImapService implements ImapService {
   @override
   Future<Result<void>> createMailbox(String path) => _guard(() async {
     await _requireClient.createMailbox(path);
+  });
+
+  @override
+  Future<Result<void>> unsubscribeMailbox(String encodedPath) => _guard(() async {
+    await _requireClient.unsubscribeMailbox(
+      em.Mailbox(
+        encodedName: encodedPath,
+        encodedPath: encodedPath,
+        flags: const [],
+        pathSeparator: '/',
+      ),
+    );
   });
 
   @override

@@ -82,10 +82,74 @@ void main() {
     test('geçerli belge yoksa NoSettings; daha yeni biçim varsa NewerSettings', () {
       expect(pickLatestSettings(const []), isA<NoSettings>());
       expect(pickLatestSettings(['{"format":"baska"}', '[]']), isA<NoSettings>());
-      final future = jsonEncode({...doc(9).toJson(), 'v': 2});
+      final future = jsonEncode({...doc(9).toJson(), 'v': 4});
       expect(
         pickLatestSettings([serializeSettingsDocument(doc(2)), future]),
         isA<NewerSettings>(),
+      );
+    });
+
+    test('v1 belge (şablonsuz) okunur; yazılan belge v3 ve şablonları taşır', () {
+      final v1 = jsonEncode({
+        'format': 'kaydet-settings',
+        'v': 1,
+        'rev': 1,
+        'updatedAt': 'x',
+        'writer': 'mobile',
+        'labels': <String, Object?>{},
+        'signatures': <String, Object?>{},
+      });
+      final old = pickLatestSettings([v1]);
+      expect(old, isA<FoundSettings>());
+      expect((old as FoundSettings).document.data.templates, isEmpty);
+
+      const withTemplate = SettingsDocument(
+        rev: 2,
+        updatedAt: '2026-10-02T10:00:00.000Z',
+        writer: 'mobile',
+        data: SettingsData(
+          templates: {
+            't1': {'title': 'Merhaba', 'content': 'Selam', 'isBuiltIn': false},
+          },
+        ),
+      );
+      expect(withTemplate.toJson()['v'], 3);
+      expect((old).document.data.blockedSenders, isEmpty);
+      final back = pickLatestSettings([serializeSettingsDocument(withTemplate)]);
+      expect(
+        (back as FoundSettings).document.data.templates['t1'],
+        {'title': 'Merhaba', 'content': 'Selam', 'isBuiltIn': false},
+      );
+    });
+
+    test('v2 belge (engelsiz) okunur; engellenen kullanıcılar v3 olarak gidip gelir', () {
+      final v2 = jsonEncode({
+        'format': 'kaydet-settings',
+        'v': 2,
+        'rev': 1,
+        'updatedAt': 'x',
+        'writer': 'web',
+        'labels': <String, Object?>{},
+        'signatures': <String, Object?>{},
+        'templates': <String, Object?>{},
+      });
+      final old = pickLatestSettings([v2]);
+      expect((old as FoundSettings).document.data.blockedSenders, isEmpty);
+
+      const withBlocked = SettingsDocument(
+        rev: 2,
+        updatedAt: '2026-10-02T10:00:00.000Z',
+        writer: 'mobile',
+        data: SettingsData(
+          blockedSenders: {
+            'a@x.com': {'email': 'a@x.com', 'name': 'Ayşe'},
+          },
+        ),
+      );
+      final back = pickLatestSettings([serializeSettingsDocument(withBlocked)]);
+      expect(
+        (back as FoundSettings).document.data.blockedSenders['a@x.com'],
+        {'email': 'a@x.com', 'name': 'Ayşe'},
       );
     });
 

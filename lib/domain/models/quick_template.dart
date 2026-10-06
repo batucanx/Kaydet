@@ -34,6 +34,17 @@ class QuickTemplate {
         isBuiltIn: isBuiltIn ?? this.isBuiltIn,
       );
 
+  @override
+  bool operator ==(Object other) =>
+      other is QuickTemplate &&
+      other.id == id &&
+      other.title == title &&
+      other.content == content &&
+      other.isBuiltIn == isBuiltIn;
+
+  @override
+  int get hashCode => Object.hash(id, title, content, isBuiltIn);
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,

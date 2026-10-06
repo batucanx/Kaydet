@@ -217,6 +217,22 @@ class MailConnection {
     await disconnect();
   });
 
+  /// Hesabın IMAP ayarlarını güvenli depodaki kimlik bilgisiyle birleştirir (bağlantı kurmaz).
+  /// ManageSieve gibi aynı sunucudaki yan hizmetler kullanır.
+  Future<MailServerConfig?> imapConfig(int accountId) async {
+    final account = await _db.accountById(accountId);
+    if (account == null) return null;
+    final credentialResult = await _credentialFor(account);
+    if (credentialResult is Err<MailCredential>) return null;
+    return MailServerConfig(
+      host: account.imapHost,
+      port: account.imapPort,
+      security: account.imapSecurity,
+      username: account.username,
+      credential: (credentialResult as Ok<MailCredential>).value,
+    );
+  }
+
   /// Hesabın SMTP ayarlarını güvenli depodaki kimlik bilgisiyle birleştirir.
   Future<MailServerConfig?> smtpConfig(int accountId) async {
     final account = await _db.accountById(accountId);

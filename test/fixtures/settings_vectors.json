@@ -2,24 +2,96 @@
   {
     "name": "first contact, nothing on the server: push what we have",
     "base": null,
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
     "remote": null,
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "first contact, nothing anywhere: nothing to write",
     "base": null,
-    "local": { "labels": {}, "signatures": {} },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
     "remote": null,
-    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": false, "localChanged": false }
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": false
+    }
   },
   {
     "name": "first contact: union of both sides",
     "base": null,
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_b": {
+          "name": "B",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 }, "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          },
+          "kaydet_b": {
+            "name": "B",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": true
     }
@@ -27,165 +99,1526 @@
   {
     "name": "first contact: the server wins a conflict",
     "base": null,
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "nothing changed anywhere",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": false, "localChanged": false }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": false
+    }
   },
   {
     "name": "added here",
-    "base": { "labels": {}, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": {}, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "added there",
-    "base": { "labels": {}, "signatures": {} },
-    "local": { "labels": {}, "signatures": {} },
-    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_b": {
+          "name": "B",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_b": {
+            "name": "B",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "different labels added on both sides",
-    "base": { "labels": {}, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_b": {
+          "name": "B",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 }, "kaydet_b": { "name": "B", "tone": 2 } }, "signatures": {} },
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          },
+          "kaydet_b": {
+            "name": "B",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": true
     }
   },
   {
     "name": "same label added on both sides with different tones: the server's version stays",
-    "base": { "labels": {}, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "modified here",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 3
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 3
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "modified there",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 4 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 4 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 4
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 4
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "same field modified on both sides: the side that is pushing wins",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 5 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 3 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 3
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 5
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 3
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "different fields of one signature modified on both sides: both survive",
-    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
-    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false } } },
-    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": true } } },
-    "expect": { "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": true } } }, "pushNeeded": true, "localChanged": true }
+    "base": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "y",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {
+          "Is": {
+            "name": "Is",
+            "body": "y",
+            "isDefault": true
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
   },
   {
     "name": "deleted here",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": {}, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "deleted there",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "remote": { "labels": {}, "signatures": {} },
-    "expect": { "merged": { "labels": {}, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "deleted here but modified there: the modification wins",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": {}, "signatures": {} },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": false, "localChanged": true }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
   },
   {
     "name": "deleted there but modified here: the modification wins",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} },
-    "remote": { "labels": {}, "signatures": {} },
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 2
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 2
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "document lost on the server: never read as 'everything was deleted'",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} },
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
     "remote": null,
-    "expect": { "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": {} }, "pushNeeded": true, "localChanged": false }
+    "expect": {
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 1
+          }
+        },
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   },
   {
     "name": "fields this client does not know (image fields) survive its own edit",
-    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
-    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false } } },
-    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
+    "base": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false,
+          "imageType": "remote",
+          "imageWidth": 200
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "y",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false,
+          "imageType": "remote",
+          "imageWidth": 200
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "y", "isDefault": false, "imageType": "remote", "imageWidth": 200 } } },
+      "merged": {
+        "labels": {},
+        "signatures": {
+          "Is": {
+            "name": "Is",
+            "body": "y",
+            "isDefault": false,
+            "imageType": "remote",
+            "imageWidth": 200
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": false
     }
   },
   {
     "name": "extra remote fields alone are not a local change",
-    "base": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
-    "local": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false } } },
-    "remote": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote" } } },
+    "base": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {
+        "Is": {
+          "name": "Is",
+          "body": "x",
+          "isDefault": false,
+          "imageType": "remote"
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": {}, "signatures": { "Is": { "name": "Is", "body": "x", "isDefault": false, "imageType": "remote" } } },
+      "merged": {
+        "labels": {},
+        "signatures": {
+          "Is": {
+            "name": "Is",
+            "body": "x",
+            "isDefault": false,
+            "imageType": "remote"
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": false,
       "localChanged": false
     }
   },
   {
     "name": "two default signatures after a merge: the one made default here stays",
-    "base": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
-    "local": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
-    "remote": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": true } } },
+    "base": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": false
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": true
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": false
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
+      "merged": {
+        "labels": {},
+        "signatures": {
+          "A": {
+            "name": "A",
+            "body": "",
+            "isDefault": true
+          },
+          "B": {
+            "name": "B",
+            "body": "",
+            "isDefault": false
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": false
     }
   },
   {
     "name": "two default signatures that nobody here made default: the smallest key stays",
-    "base": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
-    "local": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": false }, "B": { "name": "B", "body": "", "isDefault": false } } },
-    "remote": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": true } } },
+    "base": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": false
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": false
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": false
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {
+        "A": {
+          "name": "A",
+          "body": "",
+          "isDefault": true
+        },
+        "B": {
+          "name": "B",
+          "body": "",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": {}, "signatures": { "A": { "name": "A", "body": "", "isDefault": true }, "B": { "name": "B", "body": "", "isDefault": false } } },
+      "merged": {
+        "labels": {},
+        "signatures": {
+          "A": {
+            "name": "A",
+            "body": "",
+            "isDefault": true
+          },
+          "B": {
+            "name": "B",
+            "body": "",
+            "isDefault": false
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": true
     }
   },
   {
     "name": "labels and signatures merge independently",
-    "base": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": { "S": { "name": "S", "body": "x", "isDefault": true } } },
-    "local": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": { "S": { "name": "S", "body": "x", "isDefault": true } } },
-    "remote": { "labels": { "kaydet_a": { "name": "A", "tone": 1 } }, "signatures": { "S": { "name": "S", "body": "z", "isDefault": true } } },
+    "base": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {
+        "S": {
+          "name": "S",
+          "body": "x",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 2
+        }
+      },
+      "signatures": {
+        "S": {
+          "name": "S",
+          "body": "x",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {
+        "kaydet_a": {
+          "name": "A",
+          "tone": 1
+        }
+      },
+      "signatures": {
+        "S": {
+          "name": "S",
+          "body": "z",
+          "isDefault": true
+        }
+      },
+      "templates": {},
+      "blockedSenders": {}
+    },
     "expect": {
-      "merged": { "labels": { "kaydet_a": { "name": "A", "tone": 2 } }, "signatures": { "S": { "name": "S", "body": "z", "isDefault": true } } },
+      "merged": {
+        "labels": {
+          "kaydet_a": {
+            "name": "A",
+            "tone": 2
+          }
+        },
+        "signatures": {
+          "S": {
+            "name": "S",
+            "body": "z",
+            "isDefault": true
+          }
+        },
+        "templates": {},
+        "blockedSenders": {}
+      },
       "pushNeeded": true,
       "localChanged": true
+    }
+  },
+  {
+    "name": "templates: first contact, union of both sides",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t2": {
+          "title": "B",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {
+          "t1": {
+            "title": "A",
+            "content": "x",
+            "isBuiltIn": false
+          },
+          "t2": {
+            "title": "B",
+            "content": "x",
+            "isBuiltIn": false
+          }
+        },
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "templates: a template added here is pushed",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {
+          "t1": {
+            "title": "A",
+            "content": "x",
+            "isBuiltIn": false
+          }
+        },
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "templates: a template deleted there is deleted here",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "templates: an edit here wins over a deletion there",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A2",
+          "content": "x",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {
+          "t1": {
+            "title": "A2",
+            "content": "x",
+            "isBuiltIn": false
+          }
+        },
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "templates: edits of different fields merge",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "old",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A2",
+          "content": "old",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {
+        "t1": {
+          "title": "A",
+          "content": "new",
+          "isBuiltIn": false
+        }
+      },
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {
+          "t1": {
+            "title": "A2",
+            "content": "new",
+            "isBuiltIn": false
+          }
+        },
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "blocked senders: first contact, a block made here is pushed",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "remote": null,
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "A"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "blocked senders: a block made on the other side lands here",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": ""
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {
+          "b@x.com": {
+            "email": "b@x.com",
+            "name": ""
+          }
+        }
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "blocked senders: both sides block different addresses, both are kept",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": ""
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": ""
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": ""
+          },
+          "b@x.com": {
+            "email": "b@x.com",
+            "name": ""
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "blocked senders: an unblock made here (removed locally, unchanged remotely) is pushed",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "blocked senders: an unblock made on the other side removes it here",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {}
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "blocked senders: a name change on one side wins over an unblock on the other",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "Ayşe"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {}
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "Ayşe"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
     }
   }
 ]

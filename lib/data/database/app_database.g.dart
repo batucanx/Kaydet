@@ -6003,6 +6003,354 @@ class ContactsCompanion extends UpdateCompanion<ContactRow> {
   }
 }
 
+class $BlockedSendersTable extends BlockedSenders
+    with TableInfo<$BlockedSendersTable, BlockedSenderRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $BlockedSendersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<int> id = GeneratedColumn<int>(
+    'id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<int> accountId = GeneratedColumn<int>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _emailMeta = const VerificationMeta('email');
+  @override
+  late final GeneratedColumn<String> email = GeneratedColumn<String>(
+    'email',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, accountId, email, name, createdAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'blocked_senders';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<BlockedSenderRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('email')) {
+      context.handle(
+        _emailMeta,
+        email.isAcceptableOrUnknown(data['email']!, _emailMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_emailMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {accountId, email},
+  ];
+  @override
+  BlockedSenderRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return BlockedSenderRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}account_id'],
+      )!,
+      email: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}email'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $BlockedSendersTable createAlias(String alias) {
+    return $BlockedSendersTable(attachedDatabase, alias);
+  }
+}
+
+class BlockedSenderRow extends DataClass
+    implements Insertable<BlockedSenderRow> {
+  final int id;
+  final int accountId;
+
+  /// Her zaman küçük harfle saklanır; karşılaştırma büyük/küçük harfe duyarsızdır.
+  final String email;
+  final String name;
+  final DateTime createdAt;
+  const BlockedSenderRow({
+    required this.id,
+    required this.accountId,
+    required this.email,
+    required this.name,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<int>(id);
+    map['account_id'] = Variable<int>(accountId);
+    map['email'] = Variable<String>(email);
+    map['name'] = Variable<String>(name);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    return map;
+  }
+
+  BlockedSendersCompanion toCompanion(bool nullToAbsent) {
+    return BlockedSendersCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      email: Value(email),
+      name: Value(name),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory BlockedSenderRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return BlockedSenderRow(
+      id: serializer.fromJson<int>(json['id']),
+      accountId: serializer.fromJson<int>(json['accountId']),
+      email: serializer.fromJson<String>(json['email']),
+      name: serializer.fromJson<String>(json['name']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<int>(id),
+      'accountId': serializer.toJson<int>(accountId),
+      'email': serializer.toJson<String>(email),
+      'name': serializer.toJson<String>(name),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+    };
+  }
+
+  BlockedSenderRow copyWith({
+    int? id,
+    int? accountId,
+    String? email,
+    String? name,
+    DateTime? createdAt,
+  }) => BlockedSenderRow(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    email: email ?? this.email,
+    name: name ?? this.name,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  BlockedSenderRow copyWithCompanion(BlockedSendersCompanion data) {
+    return BlockedSenderRow(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      email: data.email.present ? data.email.value : this.email,
+      name: data.name.present ? data.name.value : this.name,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BlockedSenderRow(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('email: $email, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, accountId, email, name, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is BlockedSenderRow &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.email == this.email &&
+          other.name == this.name &&
+          other.createdAt == this.createdAt);
+}
+
+class BlockedSendersCompanion extends UpdateCompanion<BlockedSenderRow> {
+  final Value<int> id;
+  final Value<int> accountId;
+  final Value<String> email;
+  final Value<String> name;
+  final Value<DateTime> createdAt;
+  const BlockedSendersCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.email = const Value.absent(),
+    this.name = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  });
+  BlockedSendersCompanion.insert({
+    this.id = const Value.absent(),
+    required int accountId,
+    required String email,
+    this.name = const Value.absent(),
+    this.createdAt = const Value.absent(),
+  }) : accountId = Value(accountId),
+       email = Value(email);
+  static Insertable<BlockedSenderRow> custom({
+    Expression<int>? id,
+    Expression<int>? accountId,
+    Expression<String>? email,
+    Expression<String>? name,
+    Expression<DateTime>? createdAt,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (email != null) 'email': email,
+      if (name != null) 'name': name,
+      if (createdAt != null) 'created_at': createdAt,
+    });
+  }
+
+  BlockedSendersCompanion copyWith({
+    Value<int>? id,
+    Value<int>? accountId,
+    Value<String>? email,
+    Value<String>? name,
+    Value<DateTime>? createdAt,
+  }) {
+    return BlockedSendersCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      email: email ?? this.email,
+      name: name ?? this.name,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<int>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<int>(accountId.value);
+    }
+    if (email.present) {
+      map['email'] = Variable<String>(email.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('BlockedSendersCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('email: $email, ')
+          ..write('name: $name, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $PendingOperationsTable extends PendingOperations
     with TableInfo<$PendingOperationsTable, PendingOperationRow> {
   @override
@@ -7383,6 +7731,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $LabelsTable labels = $LabelsTable(this);
   late final $SignaturesTable signatures = $SignaturesTable(this);
   late final $ContactsTable contacts = $ContactsTable(this);
+  late final $BlockedSendersTable blockedSenders = $BlockedSendersTable(this);
   late final $PendingOperationsTable pendingOperations =
       $PendingOperationsTable(this);
   late final $TranslatedEmailCacheTable translatedEmailCache =
@@ -7403,6 +7752,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     labels,
     signatures,
     contacts,
+    blockedSenders,
     pendingOperations,
     translatedEmailCache,
     messageLanguages,
@@ -7464,6 +7814,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('contacts', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('blocked_senders', kind: UpdateKind.delete)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -7618,6 +7975,24 @@ final class $$AccountsTableReferences
     ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_contactsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$BlockedSendersTable, List<BlockedSenderRow>>
+  _blockedSendersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.blockedSenders,
+    aliasName: 'accounts__id__blocked_senders__account_id',
+  );
+
+  $$BlockedSendersTableProcessedTableManager get blockedSendersRefs {
+    final manager = $$BlockedSendersTableTableManager(
+      $_db,
+      $_db.blockedSenders,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_blockedSendersRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -7852,6 +8227,31 @@ class $$AccountsTableFilterComposer
           }) => $$ContactsTableFilterComposer(
             $db: $db,
             $table: $db.contacts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> blockedSendersRefs(
+    Expression<bool> Function($$BlockedSendersTableFilterComposer f) f,
+  ) {
+    final $$BlockedSendersTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.blockedSenders,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$BlockedSendersTableFilterComposer(
+            $db: $db,
+            $table: $db.blockedSenders,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -8171,6 +8571,31 @@ class $$AccountsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> blockedSendersRefs<T extends Object>(
+    Expression<T> Function($$BlockedSendersTableAnnotationComposer a) f,
+  ) {
+    final $$BlockedSendersTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.blockedSenders,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$BlockedSendersTableAnnotationComposer(
+            $db: $db,
+            $table: $db.blockedSenders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> pendingOperationsRefs<T extends Object>(
     Expression<T> Function($$PendingOperationsTableAnnotationComposer a) f,
   ) {
@@ -8217,6 +8642,7 @@ class $$AccountsTableTableManager
             bool labelsRefs,
             bool signaturesRefs,
             bool contactsRefs,
+            bool blockedSendersRefs,
             bool pendingOperationsRefs,
           })
         > {
@@ -8318,6 +8744,7 @@ class $$AccountsTableTableManager
                 labelsRefs = false,
                 signaturesRefs = false,
                 contactsRefs = false,
+                blockedSendersRefs = false,
                 pendingOperationsRefs = false,
               }) {
                 return PrefetchHooks(
@@ -8328,6 +8755,7 @@ class $$AccountsTableTableManager
                     if (labelsRefs) db.labels,
                     if (signaturesRefs) db.signatures,
                     if (contactsRefs) db.contacts,
+                    if (blockedSendersRefs) db.blockedSenders,
                     if (pendingOperationsRefs) db.pendingOperations,
                   ],
                   addJoins: null,
@@ -8438,6 +8866,27 @@ class $$AccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (blockedSendersRefs)
+                        await $_getPrefetchedData<
+                          AccountRow,
+                          $AccountsTable,
+                          BlockedSenderRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._blockedSendersRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).blockedSendersRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (pendingOperationsRefs)
                         await $_getPrefetchedData<
                           AccountRow,
@@ -8485,6 +8934,7 @@ typedef $$AccountsTableProcessedTableManager =
         bool labelsRefs,
         bool signaturesRefs,
         bool contactsRefs,
+        bool blockedSendersRefs,
         bool pendingOperationsRefs,
       })
     >;
@@ -12255,6 +12705,325 @@ typedef $$ContactsTableProcessedTableManager =
       ContactRow,
       PrefetchHooks Function({bool accountId})
     >;
+typedef $$BlockedSendersTableCreateCompanionBuilder =
+    BlockedSendersCompanion Function({
+      Value<int> id,
+      required int accountId,
+      required String email,
+      Value<String> name,
+      Value<DateTime> createdAt,
+    });
+typedef $$BlockedSendersTableUpdateCompanionBuilder =
+    BlockedSendersCompanion Function({
+      Value<int> id,
+      Value<int> accountId,
+      Value<String> email,
+      Value<String> name,
+      Value<DateTime> createdAt,
+    });
+
+final class $$BlockedSendersTableReferences
+    extends
+        BaseReferences<_$AppDatabase, $BlockedSendersTable, BlockedSenderRow> {
+  $$BlockedSendersTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('blocked_senders__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<int>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$BlockedSendersTableFilterComposer
+    extends Composer<_$AppDatabase, $BlockedSendersTable> {
+  $$BlockedSendersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get email => $composableBuilder(
+    column: $table.email,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$BlockedSendersTableOrderingComposer
+    extends Composer<_$AppDatabase, $BlockedSendersTable> {
+  $$BlockedSendersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get email => $composableBuilder(
+    column: $table.email,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$BlockedSendersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $BlockedSendersTable> {
+  $$BlockedSendersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get email =>
+      $composableBuilder(column: $table.email, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$BlockedSendersTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $BlockedSendersTable,
+          BlockedSenderRow,
+          $$BlockedSendersTableFilterComposer,
+          $$BlockedSendersTableOrderingComposer,
+          $$BlockedSendersTableAnnotationComposer,
+          $$BlockedSendersTableCreateCompanionBuilder,
+          $$BlockedSendersTableUpdateCompanionBuilder,
+          (BlockedSenderRow, $$BlockedSendersTableReferences),
+          BlockedSenderRow,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$BlockedSendersTableTableManager(
+    _$AppDatabase db,
+    $BlockedSendersTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$BlockedSendersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$BlockedSendersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$BlockedSendersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                Value<int> accountId = const Value.absent(),
+                Value<String> email = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => BlockedSendersCompanion(
+                id: id,
+                accountId: accountId,
+                email: email,
+                name: name,
+                createdAt: createdAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> id = const Value.absent(),
+                required int accountId,
+                required String email,
+                Value<String> name = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+              }) => BlockedSendersCompanion.insert(
+                id: id,
+                accountId: accountId,
+                email: email,
+                name: name,
+                createdAt: createdAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$BlockedSendersTable, BlockedSenderRow>(table),
+                  $$BlockedSendersTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$BlockedSendersTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn:
+                                    $$BlockedSendersTableReferences
+                                        ._accountIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$BlockedSendersTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $BlockedSendersTable,
+      BlockedSenderRow,
+      $$BlockedSendersTableFilterComposer,
+      $$BlockedSendersTableOrderingComposer,
+      $$BlockedSendersTableAnnotationComposer,
+      $$BlockedSendersTableCreateCompanionBuilder,
+      $$BlockedSendersTableUpdateCompanionBuilder,
+      (BlockedSenderRow, $$BlockedSendersTableReferences),
+      BlockedSenderRow,
+      PrefetchHooks Function({bool accountId})
+    >;
 typedef $$PendingOperationsTableCreateCompanionBuilder =
     PendingOperationsCompanion Function({
       Value<int> id,
@@ -13376,6 +14145,8 @@ class $AppDatabaseManager {
       $$SignaturesTableTableManager(_db, _db.signatures);
   $$ContactsTableTableManager get contacts =>
       $$ContactsTableTableManager(_db, _db.contacts);
+  $$BlockedSendersTableTableManager get blockedSenders =>
+      $$BlockedSendersTableTableManager(_db, _db.blockedSenders);
   $$PendingOperationsTableTableManager get pendingOperations =>
       $$PendingOperationsTableTableManager(_db, _db.pendingOperations);
   $$TranslatedEmailCacheTableTableManager get translatedEmailCache =>

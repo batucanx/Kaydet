@@ -18,6 +18,7 @@ import '../../../app/translation_providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/repositories/blocked_sender_repository.dart';
 import '../../../data/repositories/translation_repository.dart'
     show MailTranslation;
 import '../../../domain/models/mail_models.dart';
@@ -353,78 +354,77 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
               scrollY: _scrollY,
               maxOffset: _currentHeaderHeight,
               child: NotificationListener<SizeChangedLayoutNotification>(
-                  onNotification: (_) {
-                    _measureHeader();
-                    return false;
-                  },
-                  child: SizeChangedLayoutNotifier(
-                    child: GestureDetector(
-                      // Başlığın üstünde başlayan dikey sürükleme gövdeyi
-                      // kaydırır (WebView başlığın ARKASINDA kalır).
-                      onVerticalDragUpdate: (details) =>
-                          _bodyScroll.drag(-details.delta.dy),
-                      child: ColoredBox(
-                        key: _headerKey,
-                        color: t.readingBg,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            ConstrainedBox(
-                              constraints: BoxConstraints(
-                                maxHeight:
-                                    MediaQuery.sizeOf(context).height * 0.4,
+                onNotification: (_) {
+                  _measureHeader();
+                  return false;
+                },
+                child: SizeChangedLayoutNotifier(
+                  child: GestureDetector(
+                    // Başlığın üstünde başlayan dikey sürükleme gövdeyi
+                    // kaydırır (WebView başlığın ARKASINDA kalır).
+                    onVerticalDragUpdate: (details) =>
+                        _bodyScroll.drag(-details.delta.dy),
+                    child: ColoredBox(
+                      key: _headerKey,
+                      color: t.readingBg,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ConstrainedBox(
+                            constraints: BoxConstraints(
+                              maxHeight:
+                                  MediaQuery.sizeOf(context).height * 0.4,
+                            ),
+                            child: SingleChildScrollView(
+                              padding: const EdgeInsets.fromLTRB(
+                                Space.lg,
+                                Space.sm,
+                                Space.lg,
+                                0,
                               ),
-                              child: SingleChildScrollView(
-                                padding: const EdgeInsets.fromLTRB(
-                                  Space.lg,
-                                  Space.sm,
-                                  Space.lg,
-                                  0,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    SelectableText(
-                                      subject,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleLarge?.copyWith(
-                                        fontSize: 16 * AppText.scale,
-                                        height: 22 / 16,
-                                      ),
-                                    ),
-                                    const SizedBox(height: Space.sm),
-                                    _Header(
-                                      message: message,
-                                      onRecipientsExpanded: (v) =>
-                                          _recipientsExpanded = v,
-                                    ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SelectableText(
+                                    subject,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(
+                                          fontSize: 16 * AppText.scale,
+                                          height: 22 / 16,
+                                        ),
+                                  ),
+                                  const SizedBox(height: Space.sm),
+                                  _Header(
+                                    message: message,
+                                    onRecipientsExpanded: (v) =>
+                                        _recipientsExpanded = v,
+                                  ),
+                                  const SizedBox(height: Space.md),
+                                  if (attachments.isNotEmpty) ...[
+                                    _AttachmentStrip(attachments: attachments),
                                     const SizedBox(height: Space.md),
-                                    if (attachments.isNotEmpty) ...[
-                                      _AttachmentStrip(
-                                        attachments: attachments,
-                                      ),
-                                      const SizedBox(height: Space.md),
-                                    ],
-                                    TranslateBar(
-                                      messageId: _messageId,
-                                      subject: message.subject,
-                                      body: body,
-                                      noticeBottomInset: _ActionBar.height,
-                                    ),
                                   ],
-                                ),
+                                  TranslateBar(
+                                    messageId: _messageId,
+                                    subject: message.subject,
+                                    body: body,
+                                    noticeBottomInset: _ActionBar.height,
+                                  ),
+                                ],
                               ),
                             ),
-                            Divider(color: t.divider, height: 1),
-                          ],
-                        ),
+                          ),
+                          Divider(color: t.divider, height: 1),
+                        ],
                       ),
                     ),
                   ),
                 ),
               ),
+            ),
           ),
         ],
       ),
@@ -459,7 +459,7 @@ class _BackButton extends StatelessWidget {
   }
 }
 
-class _Header extends StatelessWidget {
+class _Header extends ConsumerWidget {
   const _Header({required this.message, this.onRecipientsExpanded});
 
   final MessageRow message;
@@ -478,7 +478,7 @@ class _Header extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
     final to = EmailAddress.decodeList(message.toAddrJson);
     final cc = EmailAddress.decodeList(message.ccJson);
@@ -531,12 +531,27 @@ class _Header extends StatelessWidget {
                         ),
                       ),
                       if (message.isFlagged)
-                        Padding(
-                          padding: const EdgeInsets.only(left: Space.sm),
-                          child: Icon(
-                            LucideIcons.pin,
-                            size: 14,
-                            color: t.pinIcon,
+                        // Dokununca sabitleme kaldırılır; hedef küçük ikondan
+                        // geniştir.
+                        Tooltip(
+                          message: 'Sabitlemeyi kaldır',
+                          child: InkResponse(
+                            radius: 18,
+                            onTap: () => ref
+                                .read(mailRepositoryProvider)
+                                .setFlagged([message.id], false),
+                            child: Padding(
+                              padding: const EdgeInsets.only(
+                                left: Space.sm,
+                                top: Space.xs,
+                                bottom: Space.xs,
+                              ),
+                              child: Icon(
+                                LucideIcons.pin,
+                                size: 14,
+                                color: t.pinIcon,
+                              ),
+                            ),
                           ),
                         ),
                       const SizedBox(width: Space.sm),
@@ -545,9 +560,9 @@ class _Header extends StatelessWidget {
                           message.dateUtc,
                           locale: Localizations.localeOf(context).languageCode,
                         ),
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: t.textTertiary,
-                        ),
+                        style: Theme.of(
+                          context,
+                        ).textTheme.bodySmall?.copyWith(color: t.textTertiary),
                       ),
                     ],
                   ),
@@ -639,7 +654,9 @@ class _RecipientsBlockState extends State<_RecipientsBlock> {
         Semantics(
           button: true,
           expanded: _expanded,
-          label: _expanded ? 'Alıcı ayrıntılarını gizle' : 'Alıcı ayrıntılarını göster',
+          label: _expanded
+              ? 'Alıcı ayrıntılarını gizle'
+              : 'Alıcı ayrıntılarını göster',
           excludeSemantics: true,
           onTap: _toggle,
           child: InkWell(
@@ -924,11 +941,8 @@ class _RecipientInfoChip extends StatelessWidget {
     final hasName = name.isNotEmpty;
 
     return InkWell(
-      onTap: () => showRecipientDetails(
-        context,
-        address: address,
-        accountId: accountId,
-      ),
+      onTap: () =>
+          showRecipientDetails(context, address: address, accountId: accountId),
       splashColor: t.textTertiary.withValues(alpha: 0.10),
       highlightColor: t.textTertiary.withValues(alpha: 0.06),
       child: ConstrainedBox(
@@ -961,8 +975,9 @@ class _RecipientInfoChip extends StatelessWidget {
                     address.email,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: (hasName ? textTheme.bodySmall : textTheme.bodyMedium)
-                        ?.copyWith(color: t.textSecondary),
+                    style:
+                        (hasName ? textTheme.bodySmall : textTheme.bodyMedium)
+                            ?.copyWith(color: t.textSecondary),
                   ),
                 ],
               ),
@@ -1100,7 +1115,10 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
                 ],
               ),
             ),
-            _AttachmentOverflowButton(attachment: widget.attachment, kind: kind),
+            _AttachmentOverflowButton(
+              attachment: widget.attachment,
+              kind: kind,
+            ),
           ],
         ),
       ),
@@ -1116,7 +1134,10 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
 /// dönen gösterge), menü ancak dosya hazır olduktan SONRA açılır — kullanıcı
 /// "Paylaş" gibi bir eylemi seçtiğinde arkada eksik/yanlış bir dosya olmaz.
 class _AttachmentOverflowButton extends ConsumerStatefulWidget {
-  const _AttachmentOverflowButton({required this.attachment, required this.kind});
+  const _AttachmentOverflowButton({
+    required this.attachment,
+    required this.kind,
+  });
 
   final AttachmentRow attachment;
   final AttachmentKind kind;
@@ -1439,8 +1460,8 @@ class _BodyShimmer extends StatelessWidget {
         var used = 0.0;
         for (var i = 0; ; i++) {
           final factor = _lineWidthFactors[i % _lineWidthFactors.length];
-          final endOfParagraph = i % _lineWidthFactors.length ==
-              _lineWidthFactors.length - 1;
+          final endOfParagraph =
+              i % _lineWidthFactors.length == _lineWidthFactors.length - 1;
           final gap = endOfParagraph ? Space.lg : Space.sm;
           if (used + _barHeight > available || rows.length >= 80) break;
           rows.add((factor, gap));
@@ -1713,26 +1734,29 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 
     final cacheKey = (html, dark);
     final cached = _preparedCache.remove(cacheKey);
-    final (body, emailSupportsDark) = cached ?? await Isolate.run(() {
-      // Kaynağın kendi viewport etiketi kaldırılır ki `MailHtmlDocument`in
-      // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
-      // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
-      // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
-      final noConflictingViewport = TextExtraction.stripMetaRefresh(
-        TextExtraction.stripViewportMeta(html),
-      ).replaceAllMapped(
-        // Görsel çözme (decode) ana iş parçacığını tutmasın: `decoding=async`.
-        RegExp(r'<img\b(?![^>]*\bdecoding\s*=)', caseSensitive: false),
-        (m) => '<img decoding="async"',
-      );
-      return (
-        TextExtraction.resolveColorSchemeQueries(
-          noConflictingViewport,
-          dark: dark,
-        ),
-        TextExtraction.supportsDarkScheme(noConflictingViewport),
-      );
-    });
+    final (body, emailSupportsDark) =
+        cached ??
+        await Isolate.run(() {
+          // Kaynağın kendi viewport etiketi kaldırılır ki `MailHtmlDocument`in
+          // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
+          // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
+          // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
+          final noConflictingViewport =
+              TextExtraction.stripMetaRefresh(
+                TextExtraction.stripViewportMeta(html),
+              ).replaceAllMapped(
+                // Görsel çözme (decode) ana iş parçacığını tutmasın: `decoding=async`.
+                RegExp(r'<img\b(?![^>]*\bdecoding\s*=)', caseSensitive: false),
+                (m) => '<img decoding="async"',
+              );
+          return (
+            TextExtraction.resolveColorSchemeQueries(
+              noConflictingViewport,
+              dark: dark,
+            ),
+            TextExtraction.supportsDarkScheme(noConflictingViewport),
+          );
+        });
     // Son kullanılan başa yazılır (LRU): aynı iletiye önceki/sonraki ile geri
     // dönüldüğünde regex temizliği ve isolate açılışı yeniden yapılmaz.
     _preparedCache[cacheKey] = (body, emailSupportsDark);
@@ -1868,10 +1892,8 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
         AnimatedSwitcher(
           duration: Motion.instant,
           reverseDuration: Motion.base,
-          layoutBuilder: (current, previous) => Stack(
-            fit: StackFit.expand,
-            children: [...previous, ?current],
-          ),
+          layoutBuilder: (current, previous) =>
+              Stack(fit: StackFit.expand, children: [...previous, ?current]),
           child: _ready && !widget.loading
               ? const SizedBox.shrink()
               : ColoredBox(
@@ -1964,6 +1986,58 @@ class _ActionBar extends ConsumerWidget {
   }
 }
 
+/// "Göndericiyi engelle": adres engellenir, iletileri sunucuda İstenmeyen'e taşınır ve ekran
+/// kapanır; "Geri al" engeli yeniden kaldırır (iletiler Gelen Kutusu'na döner).
+Future<void> _blockSender(
+  BuildContext context,
+  WidgetRef ref,
+  MessageRow message,
+) async {
+  final overlay = Overlay.of(context);
+  final navigator = Navigator.of(context);
+  final repository = ref.read(blockedSenderRepositoryProvider);
+  final result = await repository.block(
+    accountId: message.accountId,
+    email: message.fromEmail,
+    name: message.fromName,
+  );
+  switch (result.outcome) {
+    case BlockOutcome.blocked:
+      if (navigator.mounted) navigator.pop();
+      final id = result.row?.id;
+      KaydetNotice.show(
+        overlay,
+        message: '${message.fromEmail} engellendi.',
+        actionLabel: id == null ? null : 'Geri al',
+        onAction: id == null ? null : () => unawaited(repository.unblock(id)),
+        duration: const Duration(seconds: 6),
+      );
+    case BlockOutcome.alreadyBlocked:
+      KaydetNotice.show(
+        overlay,
+        message: '${message.fromEmail} zaten engelli.',
+      );
+    case BlockOutcome.ownAddress:
+      KaydetNotice.show(
+        overlay,
+        message: 'Kendi adresinizi engelleyemezsiniz.',
+      );
+    case BlockOutcome.invalidAddress:
+      KaydetNotice.show(overlay, message: 'Geçerli bir e-posta adresi girin.');
+  }
+}
+
+/// "Göndericinin engelini kaldır": adres listeden çıkar, iletileri Gelen Kutusu'na döner.
+Future<void> _unblockSender(
+  BuildContext context,
+  WidgetRef ref,
+  BlockedSenderRow sender,
+) async {
+  final overlay = Overlay.of(context);
+  await ref.read(blockedSenderRepositoryProvider).unblock(sender.id);
+  KaydetNotice.show(overlay, message: '${sender.email} için engel kaldırıldı.');
+}
+
 /// Okuma ekranının "..." menüsü — alt eylem çubuğunun sağ ucunda yaşıyor
 /// (bkz. `_ActionBar`), eskiden üst `AppBar`'daydı: üst kısmın sade kalması
 /// için taşındı. "Tümünü Yanıtla" artık ayrı bir düğme değil, bu menünün EN
@@ -1981,6 +2055,19 @@ class _MoreMenu extends ConsumerWidget {
     final repository = ref.read(mailRepositoryProvider);
     final selfEmail = ref.watch(accountByIdProvider(message.accountId))?.email;
     final showReplyAll = message.hasMultipleRecipients(selfEmail);
+    final inJunk =
+        (ref.watch(mailboxesForAccountProvider(message.accountId)).value ??
+                const <MailboxRow>[])
+            .any(
+              (m) =>
+                  m.id == message.mailboxId && m.specialUse == SpecialUse.junk,
+            );
+    final fromKey = message.fromEmail.trim().toLowerCase();
+    final blockedRow =
+        (ref.watch(blockedSendersOfAccountProvider(message.accountId)).value ??
+                const <BlockedSenderRow>[])
+            .where((b) => b.email == fromKey)
+            .firstOrNull;
 
     return MenuAnchor(
       animated: true,
@@ -2031,24 +2118,49 @@ class _MoreMenu extends ConsumerWidget {
         SubmenuButton(
           animated: true,
           leadingIcon: const Icon(LucideIcons.folderInput, size: IconSize.sm),
-          menuChildren: folderMenuItems(ref, (target) async {
-            await repository.moveToFolder(
-              messageIds: [message.id],
-              targetMailboxId: target.id,
-            );
-            if (context.mounted) Navigator.of(context).pop();
-          }, accountId: message.accountId, excludeMailboxId: message.mailboxId),
+          menuChildren: folderMenuItems(
+            ref,
+            (target) async {
+              await repository.moveToFolder(
+                messageIds: [message.id],
+                targetMailboxId: target.id,
+              );
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            accountId: message.accountId,
+            excludeMailboxId: message.mailboxId,
+          ),
           child: const Text('Klasöre taşı'),
         ),
         const Divider(height: 1),
-        MenuItemButton(
-          leadingIcon: const Icon(LucideIcons.octagonAlert, size: IconSize.sm),
-          onPressed: () async {
-            await repository.markSpam([message.id]);
-            if (context.mounted) Navigator.of(context).pop();
-          },
-          child: const Text('İstenmeyen olarak bildir'),
-        ),
+        if (!inJunk)
+          MenuItemButton(
+            leadingIcon: const Icon(
+              LucideIcons.octagonAlert,
+              size: IconSize.sm,
+            ),
+            onPressed: () async {
+              await repository.markSpam([message.id]);
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('İstenmeyen olarak bildir'),
+          ),
+        if (message.fromEmail.isNotEmpty && !message.isLocalOnly)
+          if (blockedRow != null)
+            MenuItemButton(
+              leadingIcon: const Icon(
+                LucideIcons.circleCheck,
+                size: IconSize.sm,
+              ),
+              onPressed: () => _unblockSender(context, ref, blockedRow),
+              child: const Text('Göndericinin engelini kaldır'),
+            )
+          else
+            MenuItemButton(
+              leadingIcon: const Icon(LucideIcons.ban, size: IconSize.sm),
+              onPressed: () => _blockSender(context, ref, message),
+              child: const Text('Göndericiyi engelle'),
+            ),
       ],
       builder: (context, controller, child) => IconButton(
         icon: const Icon(LucideIcons.ellipsisVertical, size: IconSize.md),
@@ -2101,4 +2213,3 @@ extension MessageRowReplyX on MessageRow {
     return participants.length > 1;
   }
 }
-

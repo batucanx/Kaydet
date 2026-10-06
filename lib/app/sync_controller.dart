@@ -21,6 +21,7 @@ class SyncState {
     this.lastError,
     this.lastSyncAt,
     this.hasMore = true,
+    this.unreachableAccounts = const {},
   });
 
   final bool isSyncing;
@@ -30,6 +31,11 @@ class SyncState {
   final DateTime? lastSyncAt;
   final bool hasMore;
 
+  /// Sunucusuna kalıcı olarak ulaşılamayan hesaplar (bkz.
+  /// `SyncController._noteConnectionFailure`). Değer, o hesabın son başarılı
+  /// eşitleme zamanıdır (hiç olmadıysa `null`).
+  final Map<int, DateTime?> unreachableAccounts;
+
   SyncState copyWith({
     bool? isSyncing,
     bool? isLoadingMore,
@@ -38,6 +44,7 @@ class SyncState {
     bool clearError = false,
     DateTime? lastSyncAt,
     bool? hasMore,
+    Map<int, DateTime?>? unreachableAccounts,
   }) => SyncState(
     isSyncing: isSyncing ?? this.isSyncing,
     isLoadingMore: isLoadingMore ?? this.isLoadingMore,
@@ -45,6 +52,7 @@ class SyncState {
     lastError: clearError ? null : (lastError ?? this.lastError),
     lastSyncAt: lastSyncAt ?? this.lastSyncAt,
     hasMore: hasMore ?? this.hasMore,
+    unreachableAccounts: unreachableAccounts ?? this.unreachableAccounts,
   );
 }
 
@@ -59,6 +67,7 @@ class SyncController extends Notifier<SyncState> {
   Timer? _serverChangeDebounce;
   StreamSubscription<List<ConnectivityResult>>? _connectivity;
   Timer? _folderRefresh;
+  Timer? _settingsRefresh;
   StreamSubscription<int?>? _remotePushes;
   Timer? _pushDebounce;
 
@@ -102,6 +111,10 @@ class SyncController extends Notifier<SyncState> {
   /// için açık klasörün emniyet eşitlemesi.
   static const Duration _mailPollInterval = Duration(seconds: 25);
 
+  /// Ayar belgesinin (etiket/imza) "değişti mi?" yoklaması: tek bir `STATUS`; belge
+  /// ancak değiştiyse indirilir. Web'de yapılan değişiklik telefona bu sürede iner.
+  static const Duration _settingsPollInterval = Duration(seconds: 8);
+
   @override
   SyncState build() {
     _disposed = false;
@@ -120,6 +133,7 @@ class SyncController extends Notifier<SyncState> {
         // silinmiş hesap için eşitleme denenmeye devam eder ve bir sonraki
         // girişte eski hata afişi ekranda kalır.
         _stopWatching();
+        _resetReachability();
         _bootstrapped = false;
         // Bu dinleyici, duraklatılmış bir `Consumer` aboneliği devam ederken
         // (ör. üstü örtülen ekran yeniden görününce) widget ağacı KURULURKEN
@@ -158,6 +172,8 @@ class SyncController extends Notifier<SyncState> {
     _mailRefresh = null;
     _folderRefresh?.cancel();
     _folderRefresh = null;
+    _settingsRefresh?.cancel();
+    _settingsRefresh = null;
     _serverChanges?.cancel();
     _serverChanges = null;
     _serverChangeDebounce?.cancel();
@@ -191,6 +207,7 @@ class SyncController extends Notifier<SyncState> {
     _lastFolderSync = DateTime.now();
     _startFolderPolling();
     _startMailPolling();
+    _startSettingsPolling();
     _watchServerChanges();
   }
 
@@ -239,6 +256,18 @@ class SyncController extends Notifier<SyncState> {
         scheduleMicrotask(syncAll);
       }
     });
+    // Akış yalnızca değişimleri bildirir; uygulama çevrimdışı açıldıysa
+    // sunucu "ulaşılamıyor" sanılmasın diye ilk durum ayrıca okunur.
+    unawaited(() async {
+      try {
+        final results = await Connectivity().checkConnectivity();
+        if (_disposed) return;
+        final offline = results.every((r) => r == ConnectivityResult.none);
+        if (offline != state.isOffline) {
+          state = state.copyWith(isOffline: offline);
+        }
+      } on Object catch (_) {}
+    }());
   }
 
   void _watchServerChanges() {
@@ -291,8 +320,84 @@ class SyncController extends Notifier<SyncState> {
   /// geri gelince yeniden eşitleme (bkz. `_watchConnectivity`) zaten yeniden
   /// dener. Etkin olmayan hesabın hatası hiçbir zaman gösterilmez.
   void _reportFailure(int accountId, AppFailure failure) {
+    // Bağlantı hatası afişe doğrudan çıkmaz; ardışık/süreli olursa hesap
+    // "ulaşılamıyor" işaretlenir. Etkin olmayan hesap için de izlenir (rozet).
+    if (failure is ConnectionFailure) {
+      _noteConnectionFailure(accountId);
+      return;
+    }
     if (!_isCurrent(accountId) || !failure.isActionable) return;
     state = state.copyWith(lastError: failure);
+  }
+
+  /// Bir hesabın ilk ardışık bağlantı hatası ve sayısı.
+  final Map<int, ({DateTime since, int count})> _connectionFailures = {};
+
+  /// Hesabın son başarılı eşitleme zamanı ("ulaşılamıyor" şeridi için).
+  final Map<int, DateTime> _lastSuccess = {};
+
+  /// Ulaşılamayan hesapta periyodik yoklama bu ana kadar atlanır.
+  final Map<int, DateTime> _retryNotBefore = {};
+
+  /// "Sunucu ulaşılamıyor" demek için gereken ardışık hata sayısı ve ilk
+  /// hatadan beri geçmesi gereken süre. Tek seferlik kopmalar bildirilmez.
+  static const int _unreachableMinFailures = 2;
+  static const Duration _unreachableMinSpan = Duration(seconds: 60);
+  static const Duration _retryBaseDelay = Duration(seconds: 30);
+  static const Duration _retryMaxDelay = Duration(minutes: 15);
+
+  void _noteConnectionFailure(int accountId) {
+    // Cihaz çevrimdışıyken sunucuyu suçlamayız (bkz. çevrimdışı şeridi).
+    if (state.isOffline) {
+      _connectionFailures.remove(accountId);
+      return;
+    }
+    final now = DateTime.now();
+    final previous = _connectionFailures[accountId];
+    final entry = (since: previous?.since ?? now, count: (previous?.count ?? 0) + 1);
+    _connectionFailures[accountId] = entry;
+    if (entry.count < _unreachableMinFailures ||
+        now.difference(entry.since) < _unreachableMinSpan) {
+      return;
+    }
+
+    // Üstel bekleme: 30 sn, 1 dk, 2 dk … en çok 15 dk.
+    final exponent = (entry.count - _unreachableMinFailures).clamp(0, 5);
+    final delay = _retryBaseDelay * (1 << exponent);
+    _retryNotBefore[accountId] =
+        now.add(delay > _retryMaxDelay ? _retryMaxDelay : delay);
+
+    if (state.unreachableAccounts.containsKey(accountId)) return;
+    state = state.copyWith(
+      unreachableAccounts: {
+        ...state.unreachableAccounts,
+        accountId: _lastSuccess[accountId],
+      },
+    );
+  }
+
+  /// Sunucu yanıt verdi: sayaç sıfırlanır, şerit/rozet kaybolur.
+  void _noteReachable(int accountId) {
+    _lastSuccess[accountId] = DateTime.now();
+    _connectionFailures.remove(accountId);
+    _retryNotBefore.remove(accountId);
+    if (!state.unreachableAccounts.containsKey(accountId)) return;
+    state = state.copyWith(
+      unreachableAccounts: {...state.unreachableAccounts}..remove(accountId),
+    );
+  }
+
+  /// Ulaşılamayan hesapta otomatik yoklama bekleme süresinde mi? Kullanıcı
+  /// eylemleri (yeniden dene, çekip yenile, öne gelme) bunu yok sayar.
+  bool _backingOff(int accountId) {
+    final until = _retryNotBefore[accountId];
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  void _resetReachability() {
+    _connectionFailures.clear();
+    _lastSuccess.clear();
+    _retryNotBefore.clear();
   }
 
   /// Tur sürerken hesap değiştiyse yeni hesabın eşitlemesi buradan başlar
@@ -333,6 +438,7 @@ class SyncController extends Notifier<SyncState> {
         return;
       }
 
+      _noteReachable(accountId);
       final boxes = (mailboxes as Ok<List<MailboxRow>>).value;
       final inbox = boxes.where((m) => m.specialUse == SpecialUse.inbox);
       if (inbox.isEmpty) return;
@@ -391,7 +497,13 @@ class SyncController extends Notifier<SyncState> {
   Future<void> syncCurrentFolder({bool allAccounts = false}) async {
     final accountId = ref.read(accountIdProvider);
     final unifiedUse = ref.read(selectedFolderProvider)?.unifiedUse;
-    if (accountId == null || _running || _foldersSyncing) {
+    if (accountId == null) return;
+    if (_running || _foldersSyncing) {
+      // Sürmekte olan tur BAŞKA bir klasör içindir (ör. yeni hesabın ilk
+      // Gelen Kutusu indirmesi). Çağrı sessizce düşseydi kullanıcının seçtiği
+      // klasör, çekip yenilenene kadar hiç eşitlenmezdi; tur bitince
+      // `_drainPendingFolderSync` bunu yeniden çalıştırır.
+      _serverChangePending = true;
       return;
     }
     if (unifiedUse != null) {
@@ -423,6 +535,7 @@ class SyncController extends Notifier<SyncState> {
         _reportFailure(accountId, outcome.failure);
         return;
       }
+      _noteReachable(accountId);
       state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
       await ref.read(mailRepositoryProvider).processQueue(accountId);
       _startBodyPrefetch(engine, accountId, mailbox);
@@ -461,8 +574,11 @@ class SyncController extends Notifier<SyncState> {
     final now = DateTime.now();
     final last = _lastUnifiedFullSync;
     final full =
-        allAccounts || last == null || now.difference(last) > _unifiedFullSyncGap;
-    final accounts = ref.read(allAccountsProvider).value ?? const <AccountRow>[];
+        allAccounts ||
+        last == null ||
+        now.difference(last) > _unifiedFullSyncGap;
+    final accounts =
+        ref.read(allAccountsProvider).value ?? const <AccountRow>[];
     final orderedIds = full
         ? [
             for (final a in accounts)
@@ -487,6 +603,7 @@ class SyncController extends Notifier<SyncState> {
           _reportFailure(id, outcome.failure);
           continue;
         }
+        _noteReachable(id);
         await repository.processQueue(id);
         _fireAndForget(repository.trimMailbox(box.id));
         if (id == activeId) {
@@ -703,6 +820,7 @@ class SyncController extends Notifier<SyncState> {
         DateTime.now().difference(last) < _folderMinGap) {
       return;
     }
+    if (!force && _backingOff(accountId)) return;
     _foldersSyncing = true;
     try {
       final result = await ref
@@ -710,6 +828,7 @@ class SyncController extends Notifier<SyncState> {
           .syncMailboxes(accountId);
       if (result is Ok<List<MailboxRow>>) {
         _lastFolderSync = DateTime.now();
+        _noteReachable(accountId);
       } else if (result is Err<List<MailboxRow>>) {
         _reportFailure(accountId, result.failure);
       }
@@ -752,6 +871,15 @@ class SyncController extends Notifier<SyncState> {
     );
   }
 
+  void _startSettingsPolling() {
+    _settingsRefresh?.cancel();
+    if (_disposed || _paused) return;
+    _settingsRefresh = Timer.periodic(
+      _settingsPollInterval,
+      (_) => _fireAndForget(_syncSettings()),
+    );
+  }
+
   void _startMailPolling() {
     _mailRefresh?.cancel();
     if (_disposed || _paused) return;
@@ -766,6 +894,10 @@ class SyncController extends Notifier<SyncState> {
     // Drift değişikliklerini ana isolate'e bildirir. Aynı kutuya ikinci bir
     // periyodik sync açıp gereksiz IMAP trafiği üretmeyelim.
     if (await _serviceWatches(ref.read(currentMailboxProvider))) return;
+
+    // Sunucu ulaşılamıyorsa yoklama üstel bekleme süresince atlanır.
+    final activeId = ref.read(accountIdProvider);
+    if (activeId != null && _backingOff(activeId)) return;
 
     // Kullanıcı Gelen Kutusu dışındaki bir klasördeyse IDLE/yoklama yalnızca
     // o klasörü izler; Gelen Kutusu'na düşen yeni ileti push gelmezse
@@ -803,7 +935,11 @@ class SyncController extends Notifier<SyncState> {
           .syncMailbox(accountId: accountId, mailbox: inbox);
       if (!_isCurrent(accountId)) return;
       if (outcome is Ok<SyncOutcome>) {
+        _noteReachable(accountId);
         _fireAndForget(_maybeNotify(inbox, outcome.value));
+      } else if (outcome is Err<SyncOutcome> &&
+          outcome.failure is ConnectionFailure) {
+        _noteConnectionFailure(accountId);
       }
     } on Object catch (_) {
       // Geçici hata: bir sonraki yoklamada yeniden denenir.
@@ -866,6 +1002,8 @@ class SyncController extends Notifier<SyncState> {
     _mailRefresh = null;
     _folderRefresh?.cancel();
     _folderRefresh = null;
+    _settingsRefresh?.cancel();
+    _settingsRefresh = null;
     _serverChangeDebounce?.cancel();
     _serverChangeDebounce = null;
     _serverChangePending = false;
@@ -887,10 +1025,37 @@ class SyncController extends Notifier<SyncState> {
     db.markTablesUpdated([db.messages, db.mailboxes]);
     _startFolderPolling();
     _startMailPolling();
+    _startSettingsPolling();
     _watchServerChanges();
     _watchRemotePushes();
     await syncCurrentFolder();
     await syncFolders(force: true);
+    _fireAndForget(_syncSettings(force: true));
+  }
+
+  /// Web'de değişen etiket/imzalar için ayar belgesini yoklar. Önce tek bir `STATUS`
+  /// (seçili klasöre dokunmaz); belge değiştiyse tam tur çalışır, ardından görüntülenen
+  /// klasör geri seçilir. Ayar klasörü IDLE ile izlenmediği için gecikmeyi bu yoklama sınırlar.
+  Future<void> _syncSettings({bool force = false}) async {
+    final accountId = ref.read(accountIdProvider);
+    if (accountId == null ||
+        _disposed ||
+        _paused ||
+        _running ||
+        _foldersSyncing) {
+      return;
+    }
+    if (!force && _backingOff(accountId)) return;
+    final service = ref.read(settingsSyncServiceProvider);
+    if (!force && !await service.hasRemoteChange(accountId)) {
+      // STATUS komutu IDLE'ı bitirmiş olabilir.
+      _markQuiet();
+      if (!_disposed) await _restartIdle();
+      return;
+    }
+    await service.sync(accountId, force: true);
+    // Tam tur ayar klasörünü seçti: görüntülenen klasör ve IDLE geri gelsin.
+    if (!_disposed && !_paused) await syncCurrentFolder();
   }
 
   void clearError() => state = state.copyWith(clearError: true);

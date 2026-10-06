@@ -273,6 +273,11 @@ class SyncEngine {
       final fetched = await _fetchAndStore(accountId, mailbox, slice);
       if (fetched is Err<List<int>>) return Err(fetched.failure);
       newIds = (fetched as Ok<List<int>>).value;
+      final diverted = await _divertBlockedSenders(accountId, mailbox);
+      newIds = [
+        for (final id in newIds)
+          if (!diverted.contains(id)) id,
+      ];
       await _db.updateMailboxSync(
         mailbox.id,
         uidNext: state.uidNext,
@@ -303,6 +308,16 @@ class SyncEngine {
       );
       if (fetched is Err<List<int>>) return Err(fetched.failure);
       newIds = (fetched as Ok<List<int>>).value;
+    }
+
+    // Engellenen göndericilerin iletileri (yeni gelenler ve önceki bir turdan kalanlar)
+    // sunucuda İstenmeyen'e taşınır; bildirim üretmesinler diye yeni listeden de çıkar.
+    final diverted = await _divertBlockedSenders(accountId, mailbox);
+    if (diverted.isNotEmpty) {
+      newIds = [
+        for (final id in newIds)
+          if (!diverted.contains(id)) id,
+      ];
     }
 
     // --- 3. Silinenler ve bayrak değişiklikleri ---------------------------
@@ -353,6 +368,41 @@ class SyncEngine {
         resynced: resynced,
       ),
     );
+  }
+
+  /// Engellenen göndericilerin Gelen Kutusu iletilerini SUNUCUDA İstenmeyen klasörüne taşır
+  /// (yalnızca yerelde gizlemek yetmez: web ve diğer istemciler de aynı sonucu görmeli).
+  ///
+  /// Gelen Kutusu seçiliyken, işlem kilidi altında çalışır. Taşıma başarısız olursa
+  /// (çevrimdışı, sunucu hatası) hiçbir şey değişmez ve sonraki tur yeniden dener.
+  /// Bekleyen bir işlemin (arşivle/sil/taşı) kilitlediği iletilere dokunulmaz. Dönüş: yerelden
+  /// kaldırılan ileti kimlikleri. İstenmeyen klasörü senkronize edildiğinde iletiler orada belirir.
+  Future<Set<int>> _divertBlockedSenders(int accountId, MailboxRow mailbox) async {
+    if (mailbox.specialUse != SpecialUse.inbox) return const {};
+    final blocked = await _db.blockedEmails(accountId);
+    if (blocked.isEmpty) return const {};
+    final junk = await _db.mailboxBySpecialUse(accountId, SpecialUse.junk);
+    if (junk == null || junk.id == mailbox.id) return const {};
+    final rows = await _db.messagesFromSenders(
+      mailboxId: mailbox.id,
+      emails: blocked,
+    );
+    if (rows.isEmpty) return const {};
+    final locked = await _lockedUids(accountId, mailbox.id);
+    final movable = [
+      for (final row in rows)
+        if (row.uid != null && !locked.contains(row.uid)) row,
+    ];
+    if (movable.isEmpty) return const {};
+    final moved = await _connection.imap.moveMessages(
+      uids: [for (final row in movable) row.uid!],
+      targetPath: junk.path,
+      sourcePath: mailbox.path,
+    );
+    if (moved is Err<void>) return const {};
+    final ids = [for (final row in movable) row.id];
+    await _db.deleteMessages(ids);
+    return ids.toSet();
   }
 
   /// Daha eski iletileri sayfa sayfa indirir.
@@ -657,7 +707,13 @@ class SyncEngine {
           isFlagged: Value(envelope.isFlagged),
           isAnswered: Value(envelope.isAnswered),
           isForwarded: Value(envelope.isForwarded),
-          isDraft: Value(envelope.isDraft),
+          // Sunucudaki `\Draft` bayrağı yalnızca Taslaklar klasöründe anlamlı:
+          // başka istemciden gelen/iletilen bir iletide kalmış bayrak, alınan
+          // iletiyi düzenlenebilir taslağa çevirmemeli (açınca gövde yerine
+          // yazma ekranı çıkardı).
+          isDraft: Value(
+            envelope.isDraft && mailbox.specialUse == SpecialUse.drafts,
+          ),
           isDeleted: Value(envelope.isDeleted),
           hasAttachments: Value(envelope.hasAttachments),
           sizeBytes: Value(envelope.sizeBytes),

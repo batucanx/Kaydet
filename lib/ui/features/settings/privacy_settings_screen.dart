@@ -3,8 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/remote_push_controller.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
+import 'data_usage_notice.dart';
 
 /// Gizlilik alt sayfası.
 class PrivacySettingsScreen extends ConsumerWidget {
@@ -55,6 +57,10 @@ class PrivacySettingsScreen extends ConsumerWidget {
                 ),
               ),
             ],
+          ),
+          const SectionHeader('VERİLERİNİZ'),
+          DataUsageDetails(
+            pushServerActive: ref.watch(remotePushSyncProvider) != null,
           ),
         ],
       ),
