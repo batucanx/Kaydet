@@ -13,11 +13,17 @@ class NewMailNotifier {
   NewMailNotifier({
     required AppDatabase database,
     required NotificationService notifications,
+    this.remotePushShowsAlerts = false,
   }) : _db = database,
        _notifications = notifications;
 
   final AppDatabase _db;
   final NotificationService _notifications;
+
+  /// iOS'ta sunucu tabanlı push (APNs) yeni ileti bildirimini zaten kendisi
+  /// gösterir. Uygulama açılıp eşitleyince aynı ileti "yeni" görünür; yerel
+  /// bildirim de üretilirse kullanıcı aynı bildirimi ikinci kez alır.
+  final bool remotePushShowsAlerts;
 
   /// Tek turda gösterilen en fazla ileti bildirimi; fazlası özet bildirimde
   /// sayı olarak görünür.
@@ -41,6 +47,7 @@ class NewMailNotifier {
     required SyncOutcome outcome,
     int? suppressMailboxId,
   }) async {
+    if (remotePushShowsAlerts) return;
     if (outcome.initialDownload || outcome.newMessageIds.isEmpty) return;
 
     final rows = await _db.messagesByIds(outcome.newMessageIds);

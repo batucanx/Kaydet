@@ -30,6 +30,7 @@ import '../data/services/secure_store.dart';
 import '../data/services/share_intake_service.dart';
 import '../data/services/smtp_service.dart';
 import 'sync_controller.dart';
+import 'remote_push_flag.dart';
 
 /// Uygulama genelindeki bağımlılık grafiği.
 ///
@@ -97,6 +98,7 @@ final newMailNotifierProvider = Provider<NewMailNotifier>(
   (ref) => NewMailNotifier(
     database: ref.watch(databaseProvider),
     notifications: ref.watch(notificationServiceProvider),
+    remotePushShowsAlerts: remotePushShowsAlerts,
   ),
 );
 

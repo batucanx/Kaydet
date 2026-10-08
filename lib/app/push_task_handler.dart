@@ -10,6 +10,7 @@ import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
 import 'push_protocol.dart';
+import 'remote_push_flag.dart';
 
 /// Ön plan servisinin içinde çalışan görev — uygulama kapalıyken bile Gelen
 /// Kutusu'nu dinleyip yeni iletiyi geldiği anda bildirir.
@@ -40,6 +41,7 @@ class PushTaskHandler extends TaskHandler {
     _notifier = NewMailNotifier(
       database: database,
       notifications: NotificationService(),
+      remotePushShowsAlerts: remotePushShowsAlerts,
     );
 
     // Ağ geri gelince ölü bağlantılar hemen fark edilip yenilensin; aksi

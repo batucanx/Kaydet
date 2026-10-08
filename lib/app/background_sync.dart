@@ -18,6 +18,7 @@ import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
 import '../data/services/smtp_service.dart';
+import 'remote_push_flag.dart';
 
 /// Arka plan senkronizasyonu.
 ///
@@ -130,6 +131,7 @@ Future<bool> runBackgroundSync() async {
   final notifier = NewMailNotifier(
     database: database,
     notifications: NotificationService(),
+  remotePushShowsAlerts: remotePushShowsAlerts,
   );
 
   try {
