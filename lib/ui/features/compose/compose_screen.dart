@@ -469,23 +469,44 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _quill.document = Document.fromDelta(docDelta);
     }
 
+    bool isSelf(EmailAddress a) =>
+        selfEmail != null &&
+        a.email.trim().toLowerCase() == selfEmail.trim().toLowerCase();
+
+    // Yanıtın asıl alıcıları. Kendi gönderdiğimiz iletiyi (Gönderilenler)
+    // yanıtlarken "Kime" kendimiz olmaz: ilk iletinin alıcılarına gidilir.
+    // Gönderen adresi okunamadıysa da (boş) alıcılara düşülür.
+    final fromUsable = from.email.trim().isNotEmpty && !isSelf(from);
+    final primary = fromUsable
+        ? [from]
+        : [
+            for (final a in to)
+              if (!isSelf(a)) a,
+          ];
+    final primaryText = (primary.isEmpty ? [from] : primary)
+        .where((a) => a.email.trim().isNotEmpty)
+        .map((a) => a.formatted)
+        .join(', ');
+
     switch (widget.mode) {
       case ComposeMode.reply:
-        _to.text = from.formatted;
+        _to.text = primaryText;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
         setReplyBody(quoteHeader, TextExtraction.quote(quotedSource));
 
       case ComposeMode.replyAll:
-        // Kendi adresimiz alıcı listesinden çıkarılır.
+        // Kendi adresimiz ve asıl alıcılar Bilgi listesinden çıkarılır.
+        final primaryEmails = {
+          for (final a in primary) a.email.trim().toLowerCase(),
+          from.email.trim().toLowerCase(),
+        };
+        final seenCc = <String>{};
         final others = [...to, ...cc]
-            .where(
-              (a) =>
-                  selfEmail == null ||
-                  a.email.toLowerCase() != selfEmail.toLowerCase(),
-            )
-            .where((a) => a.email.toLowerCase() != from.email.toLowerCase())
+            .where((a) => !isSelf(a))
+            .where((a) => !primaryEmails.contains(a.email.trim().toLowerCase()))
+            .where((a) => seenCc.add(a.email.trim().toLowerCase()))
             .toList();
-        _to.text = from.formatted;
+        _to.text = primaryText;
         _cc.text = others.map((a) => a.formatted).join(', ');
         _showCcBcc = others.isNotEmpty;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');

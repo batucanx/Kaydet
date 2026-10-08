@@ -125,7 +125,11 @@ abstract class ImapService {
   });
 
   /// Bağlantıyı canlı tutar.
-  Future<Result<void>> noop();
+  ///
+  /// [timeout] verilirse varsayılan komut süresi yerine o kullanılır; dolarsa
+  /// bağlantı kapatılır (bkz. `_guard`). Arka plandan dönüşte soketin hâlâ
+  /// canlı olup olmadığını hızlıca anlamak içindir.
+  Future<Result<void>> noop({Duration? timeout});
 
   /// IDLE başlatır; yeni ileti geldiğinde akış tetiklenir.
   Future<Result<void>> startIdle();
@@ -852,9 +856,9 @@ class EnoughMailImapService implements ImapService {
   }
 
   @override
-  Future<Result<void>> noop() => _guard(() async {
+  Future<Result<void>> noop({Duration? timeout}) => _guard(() async {
     await _requireClient.noop();
-  });
+  }, timeout: timeout ?? _commandTimeout);
 
   @override
   Future<Result<void>> startIdle() => _guard(() async {

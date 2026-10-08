@@ -27,6 +27,7 @@ class MailRow extends StatelessWidget {
     required this.onAvatarTap,
     required this.onLongPress,
     this.account,
+    this.onRemoveLabel,
   });
 
   final MessageRow message;
@@ -40,6 +41,9 @@ class MailRow extends StatelessWidget {
   /// İletinin ait olduğu hesap. Yalnızca Tüm Hesaplar görünümünde verilir;
   /// doluysa satırın altında hesabın avatarı ve e-postası gösterilir.
   final AccountRow? account;
+
+  /// Verilirse her etiket çipinde "x" görünür; dokunulunca etiket adıyla çağrılır.
+  final ValueChanged<String>? onRemoveLabel;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -204,6 +208,9 @@ class MailRow extends StatelessWidget {
                           for (final name in labelNames.take(3))
                             LabelChip(
                               name: name,
+                              onDeleted: onRemoveLabel == null
+                                  ? null
+                                  : () => onRemoveLabel!(name),
                               toneIndex:
                                   labels
                                       .where((l) => l.name == name)

@@ -190,6 +190,21 @@ class MailConnection {
     await _imap.noop();
   }
 
+  /// Arka plandan dönüşte bağlantının gerçekten canlı olduğunu doğrular.
+  ///
+  /// iOS arka plandaki soketi sessizce öldürür ama `isConnected` bayrağı
+  /// `true` kalır; ilk komut ölü soket üzerinde 30 sn'lik zaman aşımına kadar
+  /// takılırdı. Kısa süreli bir NOOP bunu saniyeler içinde yakalar ve soketi
+  /// kapatır; sonraki işlem (`exclusive`) taze bağlantı kurar.
+  Future<void> revalidate(
+    int accountId, {
+    Duration timeout = const Duration(seconds: 3),
+  }) => _lock.synchronized(() async {
+    if (!isConnectedTo(accountId)) return;
+    final result = await _imap.noop(timeout: timeout);
+    if (result is Err<void>) await disconnect();
+  });
+
   void _stopKeepAlive() {
     _keepAlive?.cancel();
     _keepAlive = null;

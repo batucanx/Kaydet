@@ -258,9 +258,9 @@ class LabelChip extends StatelessWidget {
     return Container(
       padding: EdgeInsets.only(
         left: Space.sm,
-        right: onDeleted == null ? Space.sm : Space.xs,
-        top: 2,
-        bottom: 2,
+        right: onDeleted == null ? Space.sm : 0,
+        top: onDeleted == null ? 2 : 0,
+        bottom: onDeleted == null ? 2 : 0,
       ),
       decoration: BoxDecoration(
         color: tone.background,
@@ -280,10 +280,14 @@ class LabelChip extends StatelessWidget {
             ),
           ),
           if (onDeleted != null) ...[
-            const SizedBox(width: Space.xs),
+            // Dokunma alanı simgeden geniş: 12px'lik "x" parmakla tutturulamaz.
             GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: onDeleted,
-              child: Icon(LucideIcons.x, size: 12, color: tone.foreground),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+                child: Icon(LucideIcons.x, size: 12, color: tone.foreground),
+              ),
             ),
           ],
         ],

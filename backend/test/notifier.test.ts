@@ -64,6 +64,17 @@ describe('Notifier', () => {
     expect(payload.uid).toBe(3);
   });
 
+  it('yüke uzantının okuyacağı kompakt ileti listesini koyar (en çok 8)', async () => {
+    const many = Array.from({ length: 12 }, (_, i) => msg(i + 1, 'A', 'x'));
+    many[11] = { ...many[11]!, date: '2026-10-07T01:00:00.000Z' } as any;
+    await s.notifier.notify(s.account, many);
+    const payload = (s.send.mock.calls[0] as unknown as [string, string, any])[2];
+    expect(payload.items).toHaveLength(8);
+    expect(payload.items[0]).toEqual({ u: 5, f: 'A', s: 'x' });
+    expect(payload.items[7]).toEqual({ u: 12, f: 'A', s: 'x', d: '2026-10-07T01:00:00.000Z' });
+    expect(JSON.stringify(payload).length).toBeLessThan(4096);
+  });
+
   it('rozet, aynı cihazdaki tüm hesapların toplamıdır', async () => {
     const second = s.repo.upsertAccount({
       apnsToken: TOKEN, environment: 'development', clientAccountId: 8,

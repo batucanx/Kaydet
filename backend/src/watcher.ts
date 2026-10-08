@@ -22,7 +22,13 @@ export function describeMessage(m: FetchMessageObject): NewMessage | null {
   const from = m.envelope?.from?.[0];
   const fromName = (from?.name || from?.address || 'Yeni ileti').trim();
   const subject = (m.envelope?.subject ?? '').trim() || '(Konu yok)';
-  return { uid: m.uid, fromName: clip(fromName), subject: clip(subject) };
+  const date = m.envelope?.date;
+  return {
+    uid: m.uid,
+    fromName: clip(fromName),
+    subject: clip(subject),
+    ...(date ? { date: new Date(date).toISOString() } : {}),
+  };
 }
 
 export interface WatcherDeps {

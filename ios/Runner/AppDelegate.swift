@@ -97,6 +97,40 @@ import workmanager_apple
       case "takePendingMailOpen":
         result(self?.pendingMailOpen)
         self?.pendingMailOpen = nil
+      case "takePushStubs":
+        // Notification Service Extension'ın yazdığı ileti özetleri (bkz.
+        // Shared/PushStubStore.swift). Silinmez: Dart, gerçek ileti eşitlemeyle
+        // gelince `removePushStubs` ile kaldırır.
+        guard let root = PushStubStore.rootURL() else {
+          result([])
+          return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let stubs = PushStubStore.readAll(root: root).map { stub -> [String: Any] in
+            [
+              "accountId": stub.accountId,
+              "uid": stub.uid,
+              "from": stub.from,
+              "subject": stub.subject,
+              "dateMs": stub.dateMs,
+            ]
+          }
+          DispatchQueue.main.async { result(stubs) }
+        }
+      case "removePushStubs":
+        guard
+          let arguments = call.arguments as? [String: Any],
+          let accountId = arguments["accountId"] as? Int,
+          let uids = arguments["uids"] as? [Int],
+          let root = PushStubStore.rootURL()
+        else {
+          result(nil)
+          return
+        }
+        DispatchQueue.global(qos: .utility).async {
+          PushStubStore.remove(accountId: accountId, uids: uids, root: root)
+          DispatchQueue.main.async { result(nil) }
+        }
       case "setBadgeCount":
         guard
           let arguments = call.arguments as? [String: Any],

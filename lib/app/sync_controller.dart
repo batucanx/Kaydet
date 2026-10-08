@@ -11,6 +11,7 @@ import '../data/repositories/sync_engine.dart';
 import '../data/services/notification_service.dart';
 import 'providers.dart';
 import 'push_service.dart';
+import 'push_stubs.dart';
 
 /// Eşitleme durumu — arayüzdeki göstergeleri besler.
 class SyncState {
@@ -203,6 +204,8 @@ class SyncController extends Notifier<SyncState> {
     // İlk eşitleme sürerken (ya da çevrimdışı takılırsa) gelen push'lar
     // kaçmasın diye dinleyici eşitlemeden ÖNCE kurulur.
     _watchRemotePushes();
+    // Bildirimlerden kalan ileti özetleri, eşitleme beklenmeden listeye düşer.
+    _fireAndForget(ref.read(pushStubsProvider.notifier).refresh());
     await syncAll();
     _lastFolderSync = DateTime.now();
     _startFolderPolling();
@@ -458,6 +461,7 @@ class SyncController extends Notifier<SyncState> {
         hasMore: inbox.first.hasMoreOnServer,
         clearError: true,
       );
+      _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
 
       // Kuyruktaki kullanıcı eylemleri ve giden kutusu.
       await ref.read(mailRepositoryProvider).processQueue(accountId);
@@ -537,6 +541,7 @@ class SyncController extends Notifier<SyncState> {
       }
       _noteReachable(accountId);
       state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
+      _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
       await ref.read(mailRepositoryProvider).processQueue(accountId);
       _startBodyPrefetch(engine, accountId, mailbox);
 
@@ -1019,6 +1024,7 @@ class SyncController extends Notifier<SyncState> {
   /// Uygulama öne geldiğinde yeniden eşitlenir.
   Future<void> resume() async {
     _paused = false;
+    _fireAndForget(ref.read(pushStubsProvider.notifier).refresh());
     // Arka planda başka bir isolate (push/periyodik görev) veritabanına yazmış
     // olabilir; Drift akışları bunu kendiliğinden görmez, liste hemen tazelenir.
     final db = ref.read(databaseProvider);
@@ -1028,6 +1034,12 @@ class SyncController extends Notifier<SyncState> {
     _startSettingsPolling();
     _watchServerChanges();
     _watchRemotePushes();
+    // Arka planda ölmüş soket üzerinde SELECT 30 sn takılırdı; önce kısa bir
+    // NOOP ile doğrulanır, ölüyse bir sonraki adım taze bağlanır.
+    final activeId = ref.read(accountIdProvider);
+    if (activeId != null) {
+      await ref.read(mailConnectionProvider).revalidate(activeId);
+    }
     await syncCurrentFolder();
     await syncFolders(force: true);
     _fireAndForget(_syncSettings(force: true));

@@ -431,7 +431,12 @@
     var bs = getComputedStyle(body);
     var avail = body.clientWidth - (parseFloat(bs.paddingLeft) || 0) - (parseFloat(bs.paddingRight) || 0);
     if (!avail) return;
-    var natural = shrinkWrap.scrollWidth;
+    // `<kd-root>`un kendi `scrollWidth`i sayfanın taşmasını her zaman
+    // yansıtmaz (negatif kenar boşluğu, satır içi/görsel taşması). Sayfa
+    // gerçekte daha geniş taşıyorsa (`body.scrollWidth`, sol dolgu düşülerek)
+    // o değer esas alınır; iOS'ta bu küçük taşma sayfanın yana kaymasına yol açar.
+    var padLeft = parseFloat(bs.paddingLeft) || 0;
+    var natural = Math.max(shrinkWrap.scrollWidth, body.scrollWidth - padLeft);
     if (natural <= avail + 1) return; // sığıyor: dokunma
     var scale = avail / natural;
     put(shrinkWrap, 'transform-origin', 'top left');
@@ -635,6 +640,22 @@
   // WebView'ın gerçek genişliği ilk yerleşimde henüz oturmamış olabilir; genişlik
   // değişince (ya da yükleme bitince) akışkanlaştırma o genişliğe göre yeniden kurulur.
   window.addEventListener('load', settle);
+
+  // iOS'ta `overflow-x:hidden` yatay kaydırmayı engellemez; küçük bir taşma
+  // olan e-postada sayfa sola kayıp gövde dolgusu/sol kenar kırpılır. Sayfa
+  // yakınlaştırılmamışken yatay ofset her zaman sıfıra döndürülür (taşma yoksa
+  // ofset zaten 0'dır, yani diğer e-postalar etkilenmez).
+  window.addEventListener('scroll', function () {
+    var vv = window.visualViewport;
+    if (vv && vv.scale > 1.01) return;
+    var x = window.pageXOffset || doc.documentElement.scrollLeft || (doc.body && doc.body.scrollLeft) || 0;
+    if (x > 0) guarded(function () {
+      window.scrollTo(0, window.pageYOffset || 0);
+      doc.documentElement.scrollLeft = 0;
+      if (doc.body) doc.body.scrollLeft = 0;
+    });
+  }, { passive: true });
+
   var frame = 0;
   window.addEventListener('resize', function () {
     scheduleReport();

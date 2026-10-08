@@ -276,6 +276,8 @@ List<Widget> labelMenuItems(
   ValueChanged<String> onSelected, {
   int? accountId,
   bool mixedAccounts = false,
+  Set<String> applied = const {},
+  ValueChanged<String>? onRemoved,
 }) {
   if (mixedAccounts) return _mixedAccountsMenu();
   final t = context.tokens;
@@ -290,15 +292,28 @@ List<Widget> labelMenuItems(
   }
   return [
     for (final label in labels)
-      MenuItemButton(
-        leadingIcon: Icon(
-          LucideIcons.tag,
-          size: IconSize.sm,
-          color: t.toneAt(label.toneIndex).foreground,
+      // Uygulanmış etikete dokunmak onu kaldırır (onay işaretiyle gösterilir).
+      if (onRemoved != null && applied.contains(label.name))
+        MenuItemButton(
+          leadingIcon: Icon(
+            LucideIcons.tag,
+            size: IconSize.sm,
+            color: t.toneAt(label.toneIndex).foreground,
+          ),
+          trailingIcon: const Icon(LucideIcons.check, size: IconSize.sm),
+          onPressed: () => onRemoved(label.name),
+          child: Text(label.name),
+        )
+      else
+        MenuItemButton(
+          leadingIcon: Icon(
+            LucideIcons.tag,
+            size: IconSize.sm,
+            color: t.toneAt(label.toneIndex).foreground,
+          ),
+          onPressed: () => onSelected(label.name),
+          child: Text(label.name),
         ),
-        onPressed: () => onSelected(label.name),
-        child: Text(label.name),
-      ),
   ];
 }
 

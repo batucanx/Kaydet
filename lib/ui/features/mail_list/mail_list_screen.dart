@@ -6,7 +6,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/push_stubs.dart';
 import '../../../app/sync_controller.dart';
+import '../../../core/date_format.dart' show formatListDate;
 import '../../../core/result.dart' show AuthFailure;
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
@@ -262,6 +264,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             ),
           if (!isOffline && syncError == null)
             _UnreachableBanner(isAllAccounts: unifiedUse != null),
+          if (unifiedUse == null && folderUse == SpecialUse.inbox)
+            const _PushStubsSection(),
           if (syncError != null && !isOffline)
             StatusBanner(
               message: syncError.userMessage,
@@ -544,6 +548,119 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
       onMenuTap: () => Scaffold.of(context).openDrawer(),
       onSearchTap: () => context.pushScreen(const SearchScreen()),
       filterButton: const _FilterMenuButton(),
+    );
+  }
+}
+
+/// Bildirimle gelmiş ama henüz IMAP'ten eşitlenmemiş iletiler (bkz.
+/// `PushStub`): uygulama uzun süre arka plandayken gelen iletiler, eşitleme
+/// bitene kadar burada görünür; gerçek ileti gelince kendiliğinden kaybolur.
+/// Listenin DIŞINDA, üstte durur — liste/animasyon/seçim mantığına karışmaz.
+class _PushStubsSection extends ConsumerWidget {
+  const _PushStubsSection();
+
+  static const int _maxShown = 4;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final accountId = ref.watch(accountIdProvider);
+    final stubs = [
+      for (final s in ref.watch(pushStubsProvider))
+        if (s.accountId == accountId) s,
+    ];
+    if (stubs.isEmpty) return const SizedBox.shrink();
+
+    final t = context.tokens;
+    final shown = stubs.take(_maxShown).toList();
+    final extra = stubs.length - shown.length;
+    return Material(
+      color: t.surface,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Space.lg, Space.sm, Space.lg, 0),
+            child: Row(
+              children: [
+                SizedBox.square(
+                  dimension: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: t.textTertiary,
+                  ),
+                ),
+                const SizedBox(width: Space.sm),
+                Text(
+                  'Yeni iletiler alınıyor',
+                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                    color: t.textTertiary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          for (final stub in shown)
+            InkWell(
+              onTap: () => ref
+                  .read(syncControllerProvider.notifier)
+                  .syncCurrentFolder(),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Space.lg,
+                  vertical: Space.sm,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            stub.from.isEmpty ? 'Yeni ileti' : stub.from,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(color: t.textPrimary),
+                          ),
+                          Text(
+                            stub.subject,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodyMedium
+                                ?.copyWith(color: t.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: Space.sm),
+                    Text(
+                      formatListDate(stub.date),
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: t.textTertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (extra > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                Space.lg,
+                0,
+                Space.lg,
+                Space.sm,
+              ),
+              child: Text(
+                '+$extra ileti daha',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                  color: t.textTertiary,
+                ),
+              ),
+            ),
+          const Divider(height: 1),
+        ],
+      ),
     );
   }
 }
@@ -896,6 +1013,9 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
         onTap: widget.onTap,
         onAvatarTap: widget.onAvatarTap,
         onLongPress: widget.onLongPress,
+        onRemoveLabel: (name) => ref
+            .read(mailRepositoryProvider)
+            .setLabel(messageIds: [message.id], labelName: name, add: false),
       ),
     );
   }

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../domain/models/push_stub.dart';
 import '../../domain/use_cases/notification_text.dart';
 import '../database/app_database.dart';
 
@@ -93,6 +94,52 @@ class NotificationService {
     } on PlatformException catch (_) {
       return null;
     }
+  }
+
+  /// Notification Service Extension'ın App Group'a yazdığı ileti özetleri
+  /// (bkz. `ios/Shared/PushStubStore.swift`); iOS dışında ya da okunamazsa boş.
+  Future<List<PushStub>> takePushStubs() async {
+    if (!Platform.isIOS) return const [];
+    try {
+      final reply = await _iosChannel.invokeListMethod<Map<Object?, Object?>>(
+        'takePushStubs',
+      );
+      final stubs = <PushStub>[];
+      for (final item in reply ?? const <Map<Object?, Object?>>[]) {
+        final accountId = item['accountId'];
+        final uid = item['uid'];
+        if (accountId is! int || uid is! int) continue;
+        final dateMs = item['dateMs'];
+        stubs.add(
+          PushStub(
+            accountId: accountId,
+            uid: uid,
+            from: (item['from'] as String?) ?? '',
+            subject: (item['subject'] as String?) ?? '',
+            date: dateMs is int
+                ? DateTime.fromMillisecondsSinceEpoch(dateMs, isUtc: true)
+                : DateTime.now().toUtc(),
+          ),
+        );
+      }
+      return stubs;
+    } on PlatformException catch (_) {
+      return const [];
+    } on MissingPluginException catch (_) {
+      return const [];
+    }
+  }
+
+  /// Eşitlemeyle gerçek iletisi gelen özet kayıtlarını native depodan siler.
+  Future<void> removePushStubs(int accountId, List<int> uids) async {
+    if (!Platform.isIOS || uids.isEmpty) return;
+    try {
+      await _iosChannel.invokeMethod<void>('removePushStubs', {
+        'accountId': accountId,
+        'uids': uids,
+      });
+    } on PlatformException catch (_) {
+    } on MissingPluginException catch (_) {}
   }
 
   // `NotificationService()` her çağrıda yeni bir örnek döner (bkz.

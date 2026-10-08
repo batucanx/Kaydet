@@ -6,6 +6,29 @@ export interface NewMessage {
   uid: number;
   fromName: string;
   subject: string;
+  /** İletinin tarihi (ISO 8601); zarfta yoksa belirtilmez. */
+  date?: string;
+}
+
+/** Push yükündeki en çok ileti sayısı; APNs yük sınırı 4 KB. */
+const MAX_PAYLOAD_ITEMS = 8;
+const MAX_ITEM_FIELD = 80;
+
+const clipItem = (text: string) =>
+  text.length > MAX_ITEM_FIELD ? `${text.slice(0, MAX_ITEM_FIELD - 1)}…` : text;
+
+/**
+ * İstemcideki Notification Service Extension'ın okuduğu kompakt ileti listesi
+ * (u: uid, f: gönderen, s: konu, d: tarih). Uygulama kapalıyken bile liste
+ * bu kayıtlardan hemen doldurulur (bkz. ios/NotificationService).
+ */
+function payloadItems(messages: NewMessage[]) {
+  return messages.slice(-MAX_PAYLOAD_ITEMS).map((m) => ({
+    u: m.uid,
+    f: clipItem(m.fromName),
+    s: clipItem(m.subject),
+    ...(m.date ? { d: m.date } : {}),
+  }));
 }
 
 export interface NotifierOptions {
@@ -53,14 +76,22 @@ export class Notifier {
             body: latest.subject,
             badge,
             threadId: `account-${account.client_account_id}`,
-            data: { accountId: account.client_account_id, uid: latest.uid },
+            data: {
+              accountId: account.client_account_id,
+              uid: latest.uid,
+              items: payloadItems(messages),
+            },
           })
         : buildMailPayload({
             title: `${messages.length} yeni ileti`,
             body: latestLine,
             badge,
             threadId: `account-${account.client_account_id}`,
-            data: { accountId: account.client_account_id, uid: latest.uid },
+            data: {
+              accountId: account.client_account_id,
+              uid: latest.uid,
+              items: payloadItems(messages),
+            },
           });
 
     for (let attempt = 0; ; attempt++) {

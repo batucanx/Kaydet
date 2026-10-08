@@ -66,7 +66,7 @@ class NotificationNavigator {
       await _ref.read(accountRepositoryProvider).switchAccount(accountId);
     }
 
-    for (var attempt = 0; attempt < 4; attempt++) {
+    for (var attempt = 0; attempt < 8; attempt++) {
       final inbox = await db.mailboxBySpecialUse(accountId, SpecialUse.inbox);
       if (inbox != null) {
         final message = await db.messageByUid(inbox.id, target.uid);
@@ -81,7 +81,7 @@ class NotificationNavigator {
           await _ref.read(syncControllerProvider.notifier).syncCurrentFolder();
         }
       }
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      await Future<void>.delayed(const Duration(milliseconds: 700));
     }
   }
 

@@ -459,6 +459,16 @@ class _BackButton extends StatelessWidget {
   }
 }
 
+List<String> _decodeLabelNames(String json) {
+  try {
+    final decoded = jsonDecode(json);
+    if (decoded is List) return decoded.whereType<String>().toList();
+  } on FormatException {
+    // Bozuk etiket verisi başlığı/menüyü engellemez.
+  }
+  return const [];
+}
+
 class _Header extends ConsumerWidget {
   const _Header({required this.message, this.onRecipientsExpanded});
 
@@ -467,15 +477,7 @@ class _Header extends ConsumerWidget {
   /// Alıcı ayrıntıları açılıp kapanınca bildirilir (bkz. `_RecipientsBlock`).
   final ValueChanged<bool>? onRecipientsExpanded;
 
-  List<String> get _labelNames {
-    try {
-      final decoded = jsonDecode(message.labelsJson);
-      if (decoded is List) return decoded.whereType<String>().toList();
-    } on FormatException {
-      // Bozuk etiket verisi başlığı engellemez.
-    }
-    return const [];
-  }
+  List<String> get _labelNames => _decodeLabelNames(message.labelsJson);
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -493,7 +495,17 @@ class _Header extends ConsumerWidget {
             runSpacing: Space.xs,
             children: [
               for (final name in _labelNames)
-                LabelChip(name: name, toneIndex: 0),
+                LabelChip(
+                  name: name,
+                  toneIndex: 0,
+                  onDeleted: () => ref
+                      .read(mailRepositoryProvider)
+                      .setLabel(
+                        messageIds: [message.id],
+                        labelName: name,
+                        add: false,
+                      ),
+                ),
             ],
           ),
           const SizedBox(height: Space.lg),
@@ -1384,10 +1396,14 @@ class _BodyView extends StatelessWidget {
     }
 
     if (plain != null && plain.trim().isNotEmpty) {
-      return _scrolls(
-        _padded(
-          SelectableText(plain, style: Theme.of(context).textTheme.bodyLarge),
-        ),
+      // Düz metin de WebView'dan geçer: pinch-zoom, yerel kaydırma ve
+      // seçim HTML iletilerle birebir aynı olsun.
+      return _HtmlWebView(
+        html: _plainTextToHtml(plain),
+        onMailto: onMailto,
+        topInset: topInset,
+        onScrollY: onScrollY,
+        bridge: scrollBridge,
       );
     }
 
@@ -1423,6 +1439,18 @@ class _BodyView extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
     child: child,
   );
+}
+
+/// Düz metin gövdeyi WebView'ın göstereceği HTML'e çevirir: kaçışlar,
+/// satır sonları ve uzun satırlar korunur; http(s) adresleri bağlantı olur.
+String _plainTextToHtml(String plain) {
+  final escaped = const HtmlEscape(HtmlEscapeMode.element).convert(plain);
+  final linked = escaped.replaceAllMapped(
+    RegExp(r'https?://[^\s<>"]+', caseSensitive: false),
+    (m) => '<a href="${m[0]}">${m[0]}</a>',
+  );
+  return '<div style="white-space:pre-wrap;overflow-wrap:anywhere;">'
+      '$linked</div>';
 }
 
 /// Gövde metninin geleceği alanda hayalet ekran (shimmer) efekti.
@@ -1912,10 +1940,10 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 }
 
 /// Alt eylem çubuğu — Outlook mobil gibi eşit aralıklı, aynı görünümde ikon
-/// düğmeler: Yanıtla / İlet / Arşivle / Sil / Diğer. Hiçbiri öne çıkarılmaz.
-/// "Tümünü Yanıtla" ayrı bir düğme DEĞİL — [_MoreMenu]nin en üstünde (bkz. o
-/// widget'ın belgesi); iki yanıt eylemini iki ayrı düğme olarak göstermek
-/// çubuğu kalabalıklaştırıyordu.
+/// düğmeler: Yanıtla / Tümünü yanıtla / İlet / Arşivle / Sil / Diğer. Hiçbiri
+/// öne çıkarılmaz. "Tümünü yanıtla" yalnızca iletide birden çok katılımcı
+/// varsa görünür (bkz. `MessageRowReplyX.hasMultipleRecipients`); altı düğme
+/// 48dp'lik dokunma alanıyla dar ekrana da (320dp) sığar.
 class _ActionBar extends ConsumerWidget {
   const _ActionBar({required this.message});
 
@@ -1928,6 +1956,8 @@ class _ActionBar extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final t = context.tokens;
+    final selfEmail = ref.watch(accountByIdProvider(message.accountId))?.email;
+    final showReplyAll = message.hasMultipleRecipients(selfEmail);
 
     Future<void> startCompose(ComposeMode mode) => openCompose(
       context,
@@ -1954,6 +1984,12 @@ class _ActionBar extends ConsumerWidget {
                 tooltip: 'Yanıtla',
                 onPressed: () => startCompose(ComposeMode.reply),
               ),
+              if (showReplyAll)
+                IconButton(
+                  icon: const Icon(LucideIcons.replyAll),
+                  tooltip: 'Tümünü yanıtla',
+                  onPressed: () => startCompose(ComposeMode.replyAll),
+                ),
               IconButton(
                 icon: const Icon(LucideIcons.cornerUpRight),
                 tooltip: 'İlet',
@@ -2040,9 +2076,7 @@ Future<void> _unblockSender(
 
 /// Okuma ekranının "..." menüsü — alt eylem çubuğunun sağ ucunda yaşıyor
 /// (bkz. `_ActionBar`), eskiden üst `AppBar`'daydı: üst kısmın sade kalması
-/// için taşındı. "Tümünü Yanıtla" artık ayrı bir düğme değil, bu menünün EN
-/// ÜSTÜNDE — alt çubuktaki tek "Yanıtla" düğmesiyle iki yanıt eylemi aynı
-/// anda gösterilmiyor. "Etiketle"/"Klasöre taşı" ayrı bir alttan panel
+/// için taşındı. "Etiketle"/"Klasöre taşı" ayrı bir alttan panel
 /// açmıyor, aynı popup içinde kendi alt menüsüne (bkz. `SubmenuButton`)
 /// cascade oluyor (bkz. bellek: popup'lar modallara tercih edilir).
 class _MoreMenu extends ConsumerWidget {
@@ -2053,8 +2087,6 @@ class _MoreMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repository = ref.read(mailRepositoryProvider);
-    final selfEmail = ref.watch(accountByIdProvider(message.accountId))?.email;
-    final showReplyAll = message.hasMultipleRecipients(selfEmail);
     final inJunk =
         (ref.watch(mailboxesForAccountProvider(message.accountId)).value ??
                 const <MailboxRow>[])
@@ -2072,20 +2104,6 @@ class _MoreMenu extends ConsumerWidget {
     return MenuAnchor(
       animated: true,
       menuChildren: [
-        if (showReplyAll) ...[
-          MenuItemButton(
-            leadingIcon: const Icon(LucideIcons.replyAll, size: IconSize.sm),
-            onPressed: () => openCompose(
-              context,
-              ref,
-              replyToId: message.id,
-              mode: ComposeMode.replyAll,
-              noticeBottomInset: _ActionBar.height,
-            ),
-            child: const Text('Tümünü yanıtla'),
-          ),
-          const Divider(height: 1),
-        ],
         MenuItemButton(
           leadingIcon: Icon(
             message.isFlagged ? LucideIcons.pinOff : LucideIcons.pin,
@@ -2106,13 +2124,26 @@ class _MoreMenu extends ConsumerWidget {
         SubmenuButton(
           animated: true,
           leadingIcon: const Icon(LucideIcons.tag, size: IconSize.sm),
-          menuChildren: labelMenuItems(context, ref, (label) async {
-            await repository.setLabel(
-              messageIds: [message.id],
-              labelName: label,
-              add: true,
-            );
-          }, accountId: message.accountId),
+          menuChildren: labelMenuItems(
+            context,
+            ref,
+            (label) async {
+              await repository.setLabel(
+                messageIds: [message.id],
+                labelName: label,
+                add: true,
+              );
+            },
+            accountId: message.accountId,
+            applied: _decodeLabelNames(message.labelsJson).toSet(),
+            onRemoved: (label) async {
+              await repository.setLabel(
+                messageIds: [message.id],
+                labelName: label,
+                add: false,
+              );
+            },
+          ),
           child: const Text('Etiketle'),
         ),
         SubmenuButton(

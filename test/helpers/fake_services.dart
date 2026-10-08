@@ -383,7 +383,7 @@ class FakeImapService implements ImapService {
   }
 
   @override
-  Future<Result<void>> noop() async {
+  Future<Result<void>> noop({Duration? timeout}) async {
     commandLog.add('noop');
     return okVoid;
   }
