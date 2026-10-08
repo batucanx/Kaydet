@@ -28,6 +28,7 @@ class MailRow extends StatelessWidget {
     required this.onLongPress,
     this.account,
     this.onRemoveLabel,
+    this.onUnpin,
   });
 
   final MessageRow message;
@@ -44,6 +45,9 @@ class MailRow extends StatelessWidget {
 
   /// Verilirse her etiket çipinde "x" görünür; dokunulunca etiket adıyla çağrılır.
   final ValueChanged<String>? onRemoveLabel;
+
+  /// Verilirse sabitleme ikonuna dokunmak sabitlemeyi kaldırır.
+  final VoidCallback? onUnpin;
 
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
@@ -318,7 +322,23 @@ class MailRow extends StatelessWidget {
                 if (message.hasAttachments && pinned)
                   const SizedBox(width: Space.sm),
                 if (pinned)
-                  Icon(LucideIcons.pin, size: 14, color: t.pinIcon),
+                  onUnpin == null
+                      ? Icon(LucideIcons.pin, size: 14, color: t.pinIcon)
+                      : Tooltip(
+                          message: 'Sabitlemeyi kaldır',
+                          child: InkResponse(
+                            radius: 18,
+                            onTap: onUnpin,
+                            child: Padding(
+                              padding: const EdgeInsets.all(Space.xs),
+                              child: Icon(
+                                LucideIcons.pin,
+                                size: 14,
+                                color: t.pinIcon,
+                              ),
+                            ),
+                          ),
+                        ),
               ],
             ),
           ],

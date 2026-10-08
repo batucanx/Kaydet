@@ -484,6 +484,7 @@ class _Header extends ConsumerWidget {
     final t = context.tokens;
     final to = EmailAddress.decodeList(message.toAddrJson);
     final cc = EmailAddress.decodeList(message.ccJson);
+    final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -497,7 +498,12 @@ class _Header extends ConsumerWidget {
               for (final name in _labelNames)
                 LabelChip(
                   name: name,
-                  toneIndex: 0,
+                  toneIndex:
+                      labels
+                          .where((l) => l.name == name)
+                          .map((l) => l.toneIndex)
+                          .firstOrNull ??
+                      0,
                   onDeleted: () => ref
                       .read(mailRepositoryProvider)
                       .setLabel(
@@ -1685,6 +1691,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
   void dispose() {
     _themeReload?.cancel();
     _readyFallback?.cancel();
+    _revealTimer?.cancel();
     _cancelEntranceListener();
     _handle.detach();
     super.dispose();
@@ -1699,6 +1706,8 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
       // Yeni içerik: yeni belge yerleşene kadar iskelet. WebView AYNI kalır
       // (yalnızca içerik yüklenir) — önceki/sonraki iletiye geçiş akıcıdır.
       _ready = false;
+      _revealTimer?.cancel();
+      _revealScheduled = false;
       widget.onScrollY?.call(0);
       unawaited(_load());
     }
@@ -1826,10 +1835,20 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 
   void _markReady() {
     _readyFallback?.cancel();
-    if (!_ready && mounted) {
-      setState(() => _ready = true);
-    }
+    if (_ready || !mounted || _revealScheduled) return;
+    // JS "yerleşti" der demez WebView'ın yerel yüzeyi henüz yeni belgeyi
+    // ekrana çizmemiş olabilir; iskelet hemen kalkarsa altındaki boş (koyu
+    // temada beyaz) yüzey bir an görünür. İlk karenin çizilmesi için kısa bir
+    // pay bırakılır.
+    _revealScheduled = true;
+    _revealTimer = Timer(const Duration(milliseconds: 120), () {
+      _revealScheduled = false;
+      if (mounted && !_ready) setState(() => _ready = true);
+    });
   }
+
+  bool _revealScheduled = false;
+  Timer? _revealTimer;
 
   /// Emniyet ağı: render betiği bildirim yapamazsa (beklenmez) iskelet sonsuza
   /// dek kalmasın — sayfa yüklendikten kısa süre sonra hazır sayılır.
