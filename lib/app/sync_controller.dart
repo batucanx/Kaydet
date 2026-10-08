@@ -181,6 +181,8 @@ class SyncController extends Notifier<SyncState> {
     _serverChangeDebounce = null;
     _connectivity?.cancel();
     _connectivity = null;
+    _offlineConfirm?.cancel();
+    _offlineConfirm = null;
     _remotePushes?.cancel();
     _remotePushes = null;
     _pushDebounce?.cancel();
@@ -250,25 +252,50 @@ class SyncController extends Notifier<SyncState> {
     }
   }
 
-  void _watchConnectivity() {
-    _connectivity?.cancel();
-    _connectivity = Connectivity().onConnectivityChanged.listen((results) {
-      final offline = results.every((r) => r == ConnectivityResult.none);
-      state = state.copyWith(isOffline: offline);
-      if (!offline) {
+  /// Bağlantı kesildi bilgisi bu süre boyunca doğrulanmadan çevrimdışı
+  /// sayılmaz: hesap değişimi/ağ el değiştirmesi (Wi‑Fi↔mobil, VPN) sırasında
+  /// platform bir an "bağlantı yok" bildirir, oysa internet kopmamıştır.
+  static const Duration _offlineConfirmDelay = Duration(seconds: 2);
+  Timer? _offlineConfirm;
+
+  static bool _isNone(List<ConnectivityResult> results) =>
+      results.every((r) => r == ConnectivityResult.none);
+
+  void _applyConnectivity(List<ConnectivityResult> results) {
+    if (_disposed) return;
+    if (!_isNone(results)) {
+      _offlineConfirm?.cancel();
+      _offlineConfirm = null;
+      final wasOffline = state.isOffline;
+      if (wasOffline) {
+        state = state.copyWith(isOffline: false);
         scheduleMicrotask(syncAll);
       }
+      return;
+    }
+    if (state.isOffline || _offlineConfirm != null) return;
+    _offlineConfirm = Timer(_offlineConfirmDelay, () async {
+      _offlineConfirm = null;
+      try {
+        final again = await Connectivity().checkConnectivity();
+        if (_disposed) return;
+        if (_isNone(again)) state = state.copyWith(isOffline: true);
+      } on Object catch (_) {}
     });
+  }
+
+  void _watchConnectivity() {
+    // Bağlantı durumu cihaz geneldir; hesap değişiminde aboneliği yeniden
+    // kurmak platformdan sahte bir "bağlantı yok" olayı getirebilir.
+    if (_connectivity != null) return;
+    _connectivity = Connectivity().onConnectivityChanged.listen(
+      _applyConnectivity,
+    );
     // Akış yalnızca değişimleri bildirir; uygulama çevrimdışı açıldıysa
     // sunucu "ulaşılamıyor" sanılmasın diye ilk durum ayrıca okunur.
     unawaited(() async {
       try {
-        final results = await Connectivity().checkConnectivity();
-        if (_disposed) return;
-        final offline = results.every((r) => r == ConnectivityResult.none);
-        if (offline != state.isOffline) {
-          state = state.copyWith(isOffline: offline);
-        }
+        _applyConnectivity(await Connectivity().checkConnectivity());
       } on Object catch (_) {}
     }());
   }
