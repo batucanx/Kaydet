@@ -255,7 +255,7 @@ class SyncController extends Notifier<SyncState> {
   /// Bağlantı kesildi bilgisi bu süre boyunca doğrulanmadan çevrimdışı
   /// sayılmaz: hesap değişimi/ağ el değiştirmesi (Wi‑Fi↔mobil, VPN) sırasında
   /// platform bir an "bağlantı yok" bildirir, oysa internet kopmamıştır.
-  static const Duration _offlineConfirmDelay = Duration(seconds: 2);
+  static const Duration _offlineConfirmDelay = Duration(seconds: 8);
   Timer? _offlineConfirm;
 
   static bool _isNone(List<ConnectivityResult> results) =>
