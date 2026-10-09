@@ -57,6 +57,16 @@ class QuickTemplatesStore {
   static Future<QuickTemplatesStore> create() async =>
       QuickTemplatesStore(await SharedPreferences.getInstance());
 
+  /// Şablonlar hiç kaydedilmedi mi (kullanıcı ve eşitleme dokunmadı)? O zaman [read] yerleşik
+  /// varsayılanları döner; bunlar kullanıcının seçimi değil, yalnızca başlangıç değeridir.
+  bool get isPristine {
+    final prefs = _prefs;
+    if (prefs == null) return _memoryPristine;
+    return prefs.getStringList(_key) == null;
+  }
+
+  bool _memoryPristine = true;
+
   /// Kayıtlı şablonları okur. Hiç şablon kaydedilmemişse yerleşik varsayılanları döner.
   List<QuickTemplate> read() {
     final prefs = _prefs;
@@ -109,6 +119,7 @@ class QuickTemplatesStore {
     } else {
       _memoryTemplates.clear();
       _memoryTemplates.addAll(builtInTemplates);
+      _memoryPristine = true;
     }
   }
 
@@ -120,6 +131,7 @@ class QuickTemplatesStore {
     } else {
       _memoryTemplates.clear();
       _memoryTemplates.addAll(templates);
+      _memoryPristine = false;
     }
   }
 }

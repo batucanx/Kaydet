@@ -1,20 +1,22 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/translation_providers.dart';
 import '../../../data/database/app_database.dart';
-import '../../../domain/use_cases/language_names.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_notice.dart';
 
-/// Okuma ekranındaki çeviri denetimi.
+/// Okuma ekranındaki çeviri DURUM çubuğu.
 ///
-/// - Kaynak dil Türkçe ise HİÇBİR ŞEY göstermez.
-/// - Değilse: `🌐 İngilizce   [Türkçeye Çevir]`; çeviri sürerken
-///   `Çevriliyor...`; bitince `Türkçe gösteriliyor · [Orijinali göster]`.
+/// - Çeviriyi BAŞLATAN denetim burada değil, alt çubuktaki "..." menüsündedir
+///   (bkz. `_MoreMenu`): her iletide görünen bir düğme olmasın diye. Açılışta
+///   HİÇBİR ağ isteği yapılmaz (dil algılama dahil); istek yalnızca menüden
+///   istenince, orijinal gövdenin TAMAMIyla gider.
+/// - Çubuk yalnızca çeviri sürerken (`Çevriliyor...`) ve bitince
+///   (`Türkçe gösteriliyor · [Orijinali göster]`) görünür; başlangıç
+///   durumunda hiçbir şey çizmez ama hata/limit bildirimlerini dinlemeyi
+///   sürdürür.
 /// - Orijinale dönmek ağa çıkmaz: orijinal gövde zaten yerelde durur, yalnızca
 ///   gösterim durumu değişir.
 ///
@@ -24,15 +26,14 @@ class TranslateBar extends ConsumerWidget {
   const TranslateBar({
     super.key,
     required this.messageId,
-    required this.subject,
     required this.body,
     this.noticeBottomInset = 0,
   });
 
   final int messageId;
-  final String subject;
 
-  /// ORİJİNAL gövde (çevrilmiş değil) — istek bundan kurulur.
+  /// ORİJİNAL gövde (çevrilmiş değil) — yalnızca çevrilecek metin var mı diye
+  /// bakılır.
   final MessageBodyRow? body;
 
   /// Bildirimin kapatmaması gereken alt yükseklik (alt eylem çubuğu).
@@ -43,7 +44,6 @@ class TranslateBar extends ConsumerWidget {
     final t = context.tokens;
     final provider = translationControllerProvider(messageId);
     final state = ref.watch(provider);
-    final languageAsync = ref.watch(messageLanguageProvider(messageId));
 
     ref.listen(provider, (previous, next) {
       final failure = next.failure;
@@ -70,21 +70,10 @@ class TranslateBar extends ConsumerWidget {
         (body?.plainText?.trim().isNotEmpty ?? false);
     if (!hasText) return const SizedBox.shrink();
 
-    final shown = state.phase == TranslationPhase.shown;
-    final language = languageAsync.value;
-
-    // Türkçe ileti: çeviri arayüzü yok (çeviri gösteriliyorsa yine de
-    // "Orijinali göster" kaybolmasın).
-    if (!shown && isTurkish(language)) return const SizedBox.shrink();
-    // Dil algılanırken (kısa süre) yer tutulmaz; Türkçe iletide düğmenin
-    // yanıp sönmesini önler.
-    if (!shown && languageAsync.isLoading) return const SizedBox.shrink();
-
     final controller = ref.read(provider.notifier);
     final labelStyle = Theme.of(
       context,
     ).textTheme.labelLarge?.copyWith(color: t.textSecondary);
-    final languageName = languageDisplayName(language);
 
     final Widget content = switch (state.phase) {
       TranslationPhase.loading => Row(
@@ -114,33 +103,9 @@ class TranslateBar extends ConsumerWidget {
           ),
         ],
       ),
-      TranslationPhase.idle => Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Icon(
-            LucideIcons.languages,
-            size: IconSize.sm,
-            color: t.textSecondary,
-          ),
-          const SizedBox(width: Space.sm),
-          if (languageName != null) ...[
-            Text(languageName, style: labelStyle),
-            Text(' · ', style: labelStyle),
-          ],
-          _LinkButton(
-            label: 'Türkçeye Çevir',
-            onPressed: () => unawaited(
-              controller.translate(
-                subject: subject,
-                html: body?.html,
-                plainText: body?.plainText,
-                sourceLanguage: language ?? 'auto',
-              ),
-            ),
-          ),
-        ],
-      ),
+      TranslationPhase.idle => const SizedBox.shrink(),
     };
+    if (state.phase == TranslationPhase.idle) return const SizedBox.shrink();
 
     return Padding(
       padding: const EdgeInsets.only(bottom: Space.md),

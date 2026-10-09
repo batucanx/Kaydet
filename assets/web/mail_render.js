@@ -408,6 +408,17 @@
   var shrinkWrap = null;
   var shrinkScale = 1;
 
+  /** `el` içindeki öğelerin (dönüşüm dahil) ekrandaki en sağ kenarı; çok büyük belgelerde ilk 4000 öğeyle sınırlı. */
+  function renderedRight(el) {
+    var all = el.getElementsByTagName('*'), max = el.getBoundingClientRect().right;
+    var n = Math.min(all.length, 4000);
+    for (var i = 0; i < n; i++) {
+      var r = all[i].getBoundingClientRect();
+      if (r.width && r.right > max) max = r.right;
+    }
+    return max;
+  }
+
   function applyShrinkToFit() {
     var body = doc.body;
     if (!shrinkWrap) shrinkWrap = doc.getElementsByTagName('kd-root')[0];
@@ -445,6 +456,20 @@
     // aşamasında (transform) olur, iç yerleşimi bir daha etkilemez.
     put(shrinkWrap, 'width', natural + 'px');
     put(shrinkWrap, 'transform', 'scale(' + scale + ')');
+    // Genişlik `natural`a sabitlenince yüzdeli tablolar yeniden yerleşir ve asgari
+    // genişlikleri `natural`ı aşabilir (ör. e-Fatura tabloları): `scrollWidth`
+    // bunu her zaman yansıtmaz, ilk ölçek birkaç piksel yetersiz kalır ve sağ
+    // kenar kırpılırdı. Bu yüzden ekranda GERÇEKTEN çizilen en sağ kenar ölçülür;
+    // taştıysa gerçek (küçültülmemiş) genişlik buradan bulunup ölçek düşürülür.
+    var left = shrinkWrap.getBoundingClientRect().left;
+    for (var pass = 0; pass < 3; pass++) {
+      var right = renderedRight(shrinkWrap);
+      if (right <= left + avail + 1) break;
+      natural = Math.max(natural, (right - left) / scale);
+      scale = avail / natural;
+      put(shrinkWrap, 'width', natural + 'px');
+      put(shrinkWrap, 'transform', 'scale(' + scale + ')');
+    }
     shrinkScale = scale;
   }
 
@@ -612,8 +637,7 @@
   }
 
   // Düzeni son hâline getirir ve ANCAK SONRA içeriği gösterir (iskelet bu
-  // bildirimle kalkar). Tek geçiş: akışkanlaştırma → ekrana sığdırma → yazı/renk
-  // düzeltmesi; her biri yalnızca gerektiğinde iş yapar (taşma yoksa ölçekleme yok,
+  // bildirimle kalkar). Tek geçiş: akışkanlaştırma → ekrana sığdırma → yazı/renk düzeltmesi (ölçek varsa sığdırma yenilenir); her biri yalnızca gerektiğinde iş yapar (taşma yoksa ölçekleme yok,
   // kendi metni olmayan öğelere bakılmaz). `load` (görseller dahil) en geç
   // `REVEAL_MAX_MS` beklenir: yavaş bir görsel iskeleti sonsuza dek tutmasın.
   // Gösterilmeden önce yapılır; çünkü yazı boyutu ya da koyu tema rengi
@@ -621,10 +645,19 @@
   var enhanced = false;
 
   function settle() {
+    var t0 = performance.now();
     clearTimeout(revealTimer);
     guarded(applyFluid);
     guarded(applyShrinkToFit);
-    if (!enhanced) { enhanced = true; guarded(enhance); }
+    if (!enhanced) {
+      enhanced = true;
+      guarded(enhance);
+      // 6-12px metni büyütmek tabloların asgari genişliğini artırır: ölçek devredeyse
+      // (küçültülmüş belge) ona göre yeniden ölçülür, yoksa sağ kenar kırpılırdı.
+      // Ölçek yokken ek yerleşim okuması yapılmaz (büyük bültenlerde pahalı).
+      if (shrinkScale !== 1) guarded(applyShrinkToFit);
+    }
+    root.setAttribute('data-kd-settle-ms', String(Math.round(performance.now() - t0)));
     revealed = true;
     guarded(report);
   }

@@ -6,7 +6,7 @@ import 'tokens.dart';
 
 /// Tipografi rolleri — `docs/plan/04-tasarim-sistemi.md` §4.5
 abstract final class AppText {
-  static const String family = 'Satoshi';
+  static const String family = 'Geist';
 
   /// Tüm yazı boyutlarının ortak çarpanı — kullanıcı isteğiyle gelen kutusunun
   /// daha ferah ve zarif durması için orijinal 1.0 ölçeğine çekildi.
@@ -17,15 +17,9 @@ abstract final class AppText {
   /// yazı ölçeğiyle çarpılır (bkz. `app.dart` -> `builder`).
   static const double iosTextBoost = 1.08;
 
-  // Satoshi'nin statik seti SemiBold (600) içermez (bkz. pubspec.yaml).
-  // 600 ağırlığındaki roller bu yüzden tek değişken font dosyasından
-  // `wght` eksenini açıkça talep eder — motorun kayıtlı ağırlıklar
-  // arasından örtük tahmin yapmasına (ve platforma göre farklı sonuç
-  // vermesine) izin vermemek için. 400/500/700 statik dosyalardan
-  // geldiğinden onlara ihtiyaç yok. Bir widget `fontWeight: w600`
-  // kullanıp taban `AppText` stilini `copyWith` DIŞINDA bir yolla
-  // (ör. yeni bir `TextStyle`) kendi başına kuruyorsa bu listeyi de
-  // birlikte geçmesi gerekir — yoksa 600 için motor yine tahmine döner.
+  // Geist'in 600'ü artık kendi statik dosyasından gelir (bkz. pubspec.yaml);
+  // aşağıdaki `wght` değişkeni statik dosyada etkisizdir, yalnızca mevcut
+  // `fontVariations` kullanımlarını bozmamak için korunur.
   static const List<FontVariation> semibold = [FontVariation('wght', 600)];
 
   static const TextStyle titleLarge = TextStyle(
@@ -130,11 +124,9 @@ abstract final class AppTheme {
 
   static ThemeData _build(KaydetTokens t) {
     final isDark = t.isDark;
-    // Açık temada üst çubuk artık `accentFill` mavisi zeminli olduğu için
-    // (bkz. `KaydetTokens.light.appBarBg`) üzerindeki metin/ikon `onAccentFill`
-    // (beyaz) olur; koyu temada zemin zaten neredeyse siyah kaldığından
-    // `textPrimary` değişmez.
-    final onAppBar = isDark ? t.textPrimary : t.onAccentFill;
+    // Üst çubuk her iki temada da `canvas` zeminli (bkz. `appBarBg`); metin
+    // ve ikonlar ana metin rengindedir.
+    final onAppBar = t.onAccentFill;
 
     final colorScheme = ColorScheme(
       brightness: t.brightness,
@@ -174,7 +166,7 @@ abstract final class AppTheme {
       extensions: [t],
       splashFactory: InkSparkle.splashFactory,
       appBarTheme: AppBarTheme(
-        backgroundColor: t.appBarBg,
+        backgroundColor: t.topBar,
         foregroundColor: onAppBar,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
@@ -182,12 +174,13 @@ abstract final class AppTheme {
         centerTitle: false,
         toolbarHeight: Dimens.appBarHeight,
         titleTextStyle: AppText.titleMedium.copyWith(color: onAppBar),
-        // Açık temada üst çubuk artık koyu bir mavi zemin olduğundan durum
-        // çubuğu ikonları da (koyu temadaki gibi) açık renkli olmalı; alttaki
-        // sistem gezinme çubuğu ise kendi yüzeyinin (surface/surfaceElevated)
-        // parlaklığına göre ayrı kalır.
-        systemOverlayStyle: SystemUiOverlayStyle.light.copyWith(
+        // Durum çubuğu ikonları üst çubuk zeminine (canvas) göre seçilir;
+        // alttaki sistem gezinme çubuğu kendi yüzeyinin (surface/
+        // surfaceElevated) parlaklığına göre ayrı kalır.
+        systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.light,
+          statusBarBrightness: Brightness.dark,
           systemNavigationBarColor: isDark ? t.surfaceElevated : t.surface,
           systemNavigationBarIconBrightness: isDark
               ? Brightness.light

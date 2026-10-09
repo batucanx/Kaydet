@@ -19,20 +19,6 @@ class _FakeApi implements TranslationApi {
   final List<TranslationRequest> calls = [];
   Result<TranslationResponse>? forced;
 
-  final List<String> detectSamples = [];
-  Result<LanguageDetection> detection = const Ok(
-    LanguageDetection(language: 'en', nearLimit: false),
-  );
-
-  @override
-  Future<Result<LanguageDetection>> detectLanguage({
-    required String userId,
-    required String sample,
-  }) async {
-    detectSamples.add(sample);
-    return detection;
-  }
-
   @override
   Future<Result<TranslationResponse>> translate(
     TranslationRequest request,
@@ -393,84 +379,6 @@ void main() {
       expect(result.content, 'TR:Hello\nTR:Bye');
     });
 
-    for (final lang in ['en', 'de', 'fr', 'es', 'tr']) {
-      test('$lang dilindeki ileti algılanır ve önbelleklenir', () async {
-        api.detection = Ok(LanguageDetection(language: lang, nearLimit: false));
-        final id = await insertMessage(1);
-        Future<Result<String?>> detect() => repo.detectLanguage(
-          messageId: id,
-          subject: 'Konu',
-          html: _html,
-          plainText: null,
-        );
-        expect((await detect()).valueOrNull, lang);
-        expect((await detect()).valueOrNull, lang);
-        // İkinci açılış yerelden: sunucuya (kota harcayan) tek istek gider.
-        expect(api.detectSamples, hasLength(1));
-        // Örnek yalnızca görünür metindir, etiket/CSS/URL içermez.
-        expect(api.detectSamples.single, 'Hello Click here');
-        expect(isTurkish(lang), lang == 'tr');
-      });
-    }
-
-    test(
-      'algılama: çevrimdışı ve önbellekte yoksa hata döner, çökmez',
-      () async {
-        api.detection = const Err(TranslationNetworkFailure());
-        final result = await repo.detectLanguage(
-          messageId: await insertMessage(1),
-          subject: 's',
-          html: _html,
-          plainText: null,
-        );
-        expect(result.failureOrNull, isA<TranslationNetworkFailure>());
-      },
-    );
-
-    test('algılama: harf içermeyen/boş içerik sunucuya gitmez', () async {
-      final id = await insertMessage(1);
-      final result = await repo.detectLanguage(
-        messageId: id,
-        subject: '123',
-        html: '<p>12 — 34</p>',
-        plainText: null,
-      );
-      expect(result.valueOrNull, isNull);
-      expect(result.isOk, isTrue);
-      expect(api.detectSamples, isEmpty);
-    });
-
-    test('iletilen ileti: Türkçe başlık satırları örneğe girmez', () async {
-      final id = await insertMessage(1);
-      await repo.detectLanguage(
-        messageId: id,
-        subject: 'FWD: Complete your Adobe account',
-        html:
-            '<div><b>Gönderen:</b> "Adobe" &lt;noreply@adobe.com&gt;<br>'
-            '<b>Gönderilmiş:</b> 29.09.2026 10:01<br><b>Alıcı:</b> a@b.com<br>'
-            '<b>Konu:</b> Complete your Adobe account</div>'
-            '<p>You recently created an Adobe account using a@b.com.</p>'
-            '<p>To get the most out of your Adobe products and services, '
-            'please take a moment to complete your account details.</p>',
-        plainText: null,
-      );
-      final sample = api.detectSamples.single;
-      expect(sample, startsWith('You recently created'));
-      expect(sample, isNot(contains('Gönderen')));
-      expect(sample, isNot(contains('Alıcı')));
-    });
-
-    test('algılama örneği en çok 400 karakterdir', () async {
-      final id = await insertMessage(1);
-      await repo.detectLanguage(
-        messageId: id,
-        subject: 's',
-        html: '<p>${'word ' * 500}</p>',
-        plainText: null,
-      );
-      expect(api.detectSamples.single.length, lessThanOrEqualTo(400));
-    });
-
     test('algılanan kaynak dil isteğe ve önbellek anahtarına girer', () async {
       final id = await insertMessage(1);
       await repo.translate(
@@ -620,33 +528,6 @@ void main() {
       expect(
         (await client.translate(request)).failureOrNull,
         isA<TranslationUnavailableFailure>(),
-      );
-    });
-
-    test('dil algılama yanıtı tipli sonuca çevrilir', () async {
-      body = {'language': 'de', 'score': 0.9, 'nearLimit': false};
-      final r = (await client.detectLanguage(
-        userId: 'user-000001',
-        sample: 'Hallo Welt',
-      )).valueOrNull!;
-      expect(r.language, 'de');
-      expect(received!['sample'], 'Hallo Welt');
-      body = {'language': null, 'score': 0, 'nearLimit': false};
-      final none = (await client.detectLanguage(
-        userId: 'user-000001',
-        sample: 'x',
-      )).valueOrNull!;
-      expect(none.language, isNull);
-    });
-
-    test('dil algılamada limit dolu → tipli hata', () async {
-      status = 429;
-      body = {'error': 'TRANSLATION_MONTHLY_LIMIT_REACHED'};
-      final r = await client.detectLanguage(userId: 'user-000001', sample: 'x');
-      expect(r.failureOrNull, isA<TranslationMonthlyLimitFailure>());
-      expect(
-        r.failureOrNull!.userMessage,
-        'Bu ay için çeviri kullanım limitine ulaşıldı.',
       );
     });
 

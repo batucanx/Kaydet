@@ -164,9 +164,9 @@ class BlockedSendersSettingsScreen extends ConsumerWidget {
       builder: (context) => AlertDialog(
         title: const Text('Engel kaldırılsın mı?'),
         content: Text(
-          '${sender.email} adresinden gelen iletiler yeniden gelen kutusuna '
-          'düşecek; bu adresten İstenmeyen klasöründe bulunan iletiler de '
-          'gelen kutusuna taşınacak.',
+          '${sender.email} adresinden gelen yeni iletiler yeniden gelen '
+          'kutusuna düşecek. İstenmeyen klasöründeki mevcut iletiler '
+          'yerinde kalacak.',
         ),
         actionsAlignment: MainAxisAlignment.center,
         actions: [

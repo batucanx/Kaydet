@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:flutter/painting.dart' show Color;
 import 'package:flutter/services.dart' show rootBundle;
 
+import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/theme/tokens.dart';
 
 /// E-posta gövdesini WebView'a verilecek tam HTML belgesine sarar.
@@ -59,6 +60,46 @@ abstract final class MailHtmlDocument {
   static final Future<String> renderScript = rootBundle.loadString(
     _scriptAsset,
   );
+
+  /// Düz metin gövdeyi [build]in göstereceği HTML'e çevirir: kaçışlar,
+  /// satır sonları ve uzun satırlar korunur; http(s) adresleri bağlantı olur.
+  static String fromPlainText(String plain) {
+    final escaped = const HtmlEscape(HtmlEscapeMode.element).convert(plain);
+    final linked = escaped.replaceAllMapped(
+      RegExp(r'https?://[^\s<>"]+', caseSensitive: false),
+      (m) => '<a href="${m[0]}">${m[0]}</a>',
+    );
+    return '<div style="white-space:pre-wrap;overflow-wrap:anywhere;">'
+        '$linked</div>';
+  }
+
+  /// Ham e-posta HTML'ini [build]e verilecek gövdeye çevirir (regex temizliği;
+  /// büyük gövdelerde ağırdır, bu yüzden çağıran bir isolate'ta çalıştırır).
+  ///
+  /// Kaynağın kendi viewport etiketi kaldırılır ki [build]in yazdığı etiket
+  /// çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
+  /// `TextExtraction.stripViewportMeta`). Görsel çözme (decode) ana iş
+  /// parçacığını tutmasın diye `<img>`lere `decoding="async"` eklenir.
+  /// İkinci değer e-postanın kendi koyu temasını getirip getirmediğidir.
+  static (String body, bool emailSupportsDark) prepare(
+    String html, {
+    required bool dark,
+  }) {
+    final noConflictingViewport =
+        TextExtraction.stripMetaRefresh(
+          TextExtraction.stripViewportMeta(html),
+        ).replaceAllMapped(
+          RegExp(r'<img\b(?![^>]*\bdecoding\s*=)', caseSensitive: false),
+          (m) => '<img decoding="async"',
+        );
+    return (
+      TextExtraction.resolveColorSchemeQueries(
+        noConflictingViewport,
+        dark: dark,
+      ),
+      TextExtraction.supportsDarkScheme(noConflictingViewport),
+    );
+  }
 
   /// `body`: viewport temizliğinden geçmiş e-posta HTML'i.
   /// `emailSupportsDark`: e-posta kendi koyu temasını getiriyorsa (bkz.

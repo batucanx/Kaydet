@@ -38,6 +38,7 @@ class SettingsSyncService {
     SenderFilterSync? senderFilter,
     DateTime Function()? now,
     this.writer = 'mobile',
+    this.seedsDefaults = false,
   }) : _db = database,
        _connection = connection,
        _state = state,
@@ -62,6 +63,26 @@ class SettingsSyncService {
 
   /// Belgede `writer` olarak görünen istemci adı.
   final String writer;
+
+  /// Yeni hesabın varsayılan etiketlerini ve imzasını bu servis oluşturur (bkz. [defaultLabelSeeds]).
+  ///
+  /// Hesap eklenirken yerelde oluşturulsaydı, hesabı silip yeniden ekleyen kullanıcının (ya da web'de
+  /// varsayılanları silmiş bir kullanıcının) sunucudaki belgesi okunmadan varsayılanlar yerelde yeniden
+  /// doğar ve "burada eklendi" sayılıp belgeye geri yazılırdı. Burada yalnızca ilk karşılaşmada ve
+  /// sunucuda belge YOKKEN oluşturulur; belge varsa hesabın etiketleri belgenin dediğidir.
+  final bool seedsDefaults;
+
+  /// Yeni bir hesabın etiketleri: (ad, ton).
+  static const List<(String, int)> defaultLabelSeeds = [
+    ('İş', 10),
+    ('Kişisel', 6),
+    ('Tasarım', 12),
+    ('Finans', 3),
+  ];
+
+  /// Yeni bir hesabın ilk imzasının gövdesi.
+  static String defaultSignatureBody(String displayName) =>
+      '\n\n--\n$displayName\nKaydet ile gönderildi';
 
   /// Çok sık ardışık turlar (her eşitlemede) sunucuyu boşuna yormasın. Web'de yapılan
   /// etiket/imza değişikliği telefona en geç bu sürenin ardındaki ilk yoklamada iner.
@@ -202,8 +223,28 @@ class SettingsSyncService {
     final split = _splitRepresentable(remoteFull ?? SettingsData.empty);
 
     // 2. Üç yönlü birleştirme.
-    final local = await _readLocal(accountId, split.view.templates);
     final state = await _state.read(accountId);
+    final firstContact = _parseBase(state.baseJson) == null;
+    final templateStore = _templates;
+    if (remoteFull != null &&
+        firstContact &&
+        templateStore != null &&
+        templateStore.isPristine) {
+      // Yeni kurulum: yerel şablonlar kullanıcının seçimi değil, dokunulmamış yerleşik varsayılanlardır.
+      // Belge varsa şablonların doğrusu odur (web'de hepsi silinmişse boş kalmalı): birleştirmeye girmeden
+      // yerel depo belgeyle değiştirilir; aksi hâlde varsayılanlar "burada eklendi" sayılıp geri dönerdi.
+      await templateStore.replaceAll([
+        for (final e in split.view.templates.entries) _templateOf(e.key, e.value),
+      ]);
+      onTemplatesChanged?.call();
+    }
+    var local = await _readLocal(accountId, split.view.templates);
+    if (seedsDefaults &&
+        remoteFull == null &&
+        firstContact &&
+        await _seedDefaults(accountId, local)) {
+      local = await _readLocal(accountId, split.view.templates);
+    }
     final result = mergeSettings(
       base: _parseBase(state.baseJson),
       local: local.data,
@@ -272,6 +313,40 @@ class SettingsSyncService {
   }
 
   static const int _maxDocuments = 20;
+
+  /// Tamamen yeni bir hesap (belge yok, daha önce eşitlenmemiş) varsayılan etiket ve imzayla başlar.
+  /// Hesabın zaten etiketi/imzası varsa o alana dokunulmaz. Bir şey eklendiyse `true`.
+  Future<bool> _seedDefaults(int accountId, _Local local) async {
+    var seeded = false;
+    if (local.labelsByKey.isEmpty) {
+      for (final (name, tone) in defaultLabelSeeds) {
+        await _db.insertLabel(
+          LabelsCompanion.insert(
+            accountId: accountId,
+            name: name,
+            toneIndex: Value(tone),
+            imapKeyword: Value(labelImapKeyword(name)),
+          ),
+        );
+      }
+      seeded = true;
+    }
+    if (local.signaturesByKey.isEmpty) {
+      final account = await _db.accountById(accountId);
+      if (account != null) {
+        await _db.insertSignature(
+          SignaturesCompanion.insert(
+            accountId: accountId,
+            name: 'İmza 1',
+            body: Value(defaultSignatureBody(account.displayName)),
+            isDefault: const Value(true),
+          ),
+        );
+        seeded = true;
+      }
+    }
+    return seeded;
+  }
 
   SettingsData? _parseBase(String? json) {
     if (json == null) return null;
@@ -555,7 +630,14 @@ class SettingsSyncService {
         );
       } else if (existing.name != name || existing.toneIndex != tone) {
         final renameOk = existing.name == name || !namesInUse.contains(name);
-        if (renameOk) namesInUse.add(name);
+        if (renameOk) {
+          namesInUse.add(name);
+          // İletiler etiketi adıyla tuttuğundan başka cihazdaki ad değişikliği
+          // buradaki iletilere de yansır.
+          if (existing.name != name) {
+            await _db.rewriteLabelNames(accountId, existing.name, name);
+          }
+        }
         await _db.updateLabelRow(
           existing.id,
           LabelsCompanion(

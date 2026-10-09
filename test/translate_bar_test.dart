@@ -22,12 +22,6 @@ class _Api implements TranslationApi {
   Result<TranslationResponse>? forced;
 
   @override
-  Future<Result<LanguageDetection>> detectLanguage({
-    required String userId,
-    required String sample,
-  }) async => const Ok(LanguageDetection(language: 'en', nearLimit: false));
-
-  @override
   Future<Result<TranslationResponse>> translate(
     TranslationRequest request,
   ) async {
@@ -94,7 +88,6 @@ void main() {
 
   Future<ProviderContainer> pumpBar(
     WidgetTester tester, {
-    String? language = 'en',
     MessageBodyRow? body,
     Brightness brightness = Brightness.light,
   }) async {
@@ -104,10 +97,7 @@ void main() {
       userId: () async => 'user-000001',
     );
     final container = ProviderContainer(
-      overrides: [
-        translationRepositoryProvider.overrideWithValue(repo),
-        messageLanguageProvider.overrideWith((ref, id) async => language),
-      ],
+      overrides: [translationRepositoryProvider.overrideWithValue(repo)],
     );
     addTearDown(container.dispose);
     await tester.pumpWidget(
@@ -120,7 +110,6 @@ void main() {
           home: Scaffold(
             body: TranslateBar(
               messageId: messageId,
-              subject: 'Your order has been shipped',
               body: body ?? _body(),
             ),
           ),
@@ -131,6 +120,21 @@ void main() {
     return container;
   }
 
+  /// Çeviriyi, "..." menüsündeki öğenin yaptığı gibi denetleyiciden başlatır
+  /// (çubuğun kendisinde başlatma düğmesi yoktur).
+  void startTranslation(ProviderContainer container, {MessageBodyRow? body}) {
+    final b = body ?? _body();
+    unawaited(
+      container
+          .read(translationControllerProvider(messageId).notifier)
+          .translate(
+            subject: 'Your order has been shipped',
+            html: b.html,
+            plainText: b.plainText,
+          ),
+    );
+  }
+
   /// Gerçek async (sqlite) işlemlerin tamamlanması için.
   Future<void> settle(WidgetTester tester) async {
     await tester.runAsync(
@@ -139,34 +143,48 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('İngilizce ileti: dil adı ve "Türkçeye Çevir" görünür', (
+  testWidgets('açılışta ağ isteği yok; çubukta başlatma düğmesi yok', (
     tester,
   ) async {
     await pumpBar(tester);
-    expect(find.text('İngilizce'), findsOneWidget);
-    expect(find.text('Türkçeye Çevir'), findsOneWidget);
+    await settle(tester);
+    expect(find.text('Türkçeye Çevir'), findsNothing);
+    expect(find.text('Orijinali göster'), findsNothing);
+    expect(api.calls, isEmpty);
   });
 
-  testWidgets('Türkçe ileti: çeviri arayüzü gösterilmez', (tester) async {
-    await pumpBar(tester, language: 'tr');
-    expect(find.text('Türkçeye Çevir'), findsNothing);
-    expect(find.byType(InkWell), findsNothing);
+  testWidgets('çeviri başlatılınca gövdenin TAMAMI auto kaynakla gönderilir', (
+    tester,
+  ) async {
+    final html =
+        '<p>${List.generate(300, (i) => 'Sentence number $i here.').join('</p><p>')}</p>';
+    final body = _body(html: html);
+    final container = await pumpBar(tester, body: body);
+    startTranslation(container, body: body);
+    await settle(tester);
+    expect(api.calls, hasLength(1));
+    expect(api.calls.single.sourceLanguage, 'auto');
+    expect(api.calls.single.segments, hasLength(300));
+    expect(api.calls.single.segments.last, 'Sentence number 299 here.');
   });
 
   testWidgets('gövde metni yoksa hiçbir şey gösterilmez', (tester) async {
     await pumpBar(tester, body: _body(html: null, plain: null));
     expect(find.text('Türkçeye Çevir'), findsNothing);
+    expect(find.text('Orijinali göster'), findsNothing);
   });
 
   for (final brightness in Brightness.values) {
     testWidgets('${brightness.name} temada bağlantı rengi tema belirtecinden', (
       tester,
     ) async {
-      await pumpBar(tester, brightness: brightness);
+      final container = await pumpBar(tester, brightness: brightness);
+      startTranslation(container);
+      await settle(tester);
       final tokens = brightness == Brightness.dark
           ? KaydetTokens.dark
           : KaydetTokens.light;
-      final text = tester.widget<Text>(find.text('Türkçeye Çevir'));
+      final text = tester.widget<Text>(find.text('Orijinali göster'));
       expect(text.style?.color, tokens.accent);
     });
   }
@@ -174,21 +192,21 @@ void main() {
   testWidgets('Orijinal → Türkçe → Orijinal: geri dönüş ağa çıkmaz', (
     tester,
   ) async {
-    await pumpBar(tester);
+    final container = await pumpBar(tester);
 
-    await tester.tap(find.text('Türkçeye Çevir'));
+    startTranslation(container);
     await settle(tester);
     expect(api.calls, hasLength(1));
-    expect(api.calls.single.sourceLanguage, 'en');
+    expect(api.calls.single.sourceLanguage, 'auto');
     expect(find.textContaining('Türkçe gösteriliyor'), findsOneWidget);
 
     await tester.tap(find.text('Orijinali göster'));
     await tester.pump();
-    expect(find.text('Türkçeye Çevir'), findsOneWidget);
+    expect(find.textContaining('Türkçe gösteriliyor'), findsNothing);
     expect(api.calls, hasLength(1));
 
     // Aynı ileti tekrar çevrilir: yerel önbellek, ağ yok.
-    await tester.tap(find.text('Türkçeye Çevir'));
+    startTranslation(container);
     await settle(tester);
     expect(find.textContaining('Türkçe gösteriliyor'), findsOneWidget);
     expect(api.calls, hasLength(1));
@@ -197,8 +215,8 @@ void main() {
   testWidgets('çeviri sürerken "Çevriliyor..." gösterilir', (tester) async {
     final gate = Completer<Result<TranslationResponse>>();
     api.gate = gate;
-    await pumpBar(tester);
-    await tester.tap(find.text('Türkçeye Çevir'));
+    final container = await pumpBar(tester);
+    startTranslation(container);
     await settle(tester);
     expect(find.text('Çevriliyor...'), findsOneWidget);
     expect(find.text('Türkçeye Çevir'), findsNothing);
@@ -223,13 +241,14 @@ void main() {
     String message,
   ) async {
     api.forced = Err(failure);
-    await pumpBar(tester);
-    await tester.tap(find.text('Türkçeye Çevir'));
+    final container = await pumpBar(tester);
+    startTranslation(container);
     await settle(tester);
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.text(message), findsOneWidget);
-    // Orijinal her zaman kullanılabilir; yeniden denenebilir.
-    expect(find.text('Türkçeye Çevir'), findsOneWidget);
+    // Hata sonrası çubuk boşa döner; orijinal ekranda kalır ve menüden
+    // yeniden denenebilir.
+    expect(find.textContaining('Türkçe gösteriliyor'), findsNothing);
     await tester.pump(const Duration(seconds: 6));
   }
 

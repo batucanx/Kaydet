@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail render laboratuvarı</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0; padding: 12px; background: #f4f4f5; color: #18181b; }
+  @media (prefers-color-scheme: dark) { body { background: #18181b; color: #e4e4e7; } }
+  h1 { font-size: 16px; margin: 0 0 8px; }
+  #summary { font: 13px/1.5 ui-monospace, monospace; white-space: pre-wrap; margin-bottom: 12px; }
+  .row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 18px; flex-wrap: wrap; }
+  .card { flex: 0 0 auto; }
+  .card h2 { font-size: 13px; margin: 0 0 4px; font-family: ui-monospace, monospace; }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .warn { color: #d97706; }
+  iframe { border: 1px solid #a1a1aa; background: #fff; display: block; }
+  .report { font: 12px/1.45 ui-monospace, monospace; max-width: 520px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>Mail render laboratuvarı</h1>
+<div id="summary">yükleniyor…</div>
+<div id="out"></div>
+<script>
+/*
+ * Parametreler: ?w=390 (genişlik) &h=900 (yükseklik) &only=03-efatura (ad süzgeci)
+ *               &theme=light|dark|both (varsayılan: light) &shots=0 (iframe'leri gizle)
+ * Sonuç: window.__labResults (dizi) ve #summary.
+ */
+const q = new URLSearchParams(location.search);
+const W = +(q.get('w') || 390), H = +(q.get('h') || 900);
+const ONLY = q.get('only') || '', THEME = q.get('theme') || 'light';
+const SETTLE_WAIT_MS = 900;           // betik en geç 400ms'de oturur; pay bırakılır
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const norm = (s) => (s || '').replace(/[\s ]+/g, ' ').trim();
+
+// ── Denetimler ──────────────────────────────────────────────────────────
+
+function textNodes(root) {
+  const out = [], w = root.ownerDocument.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = w.nextNode(); n; n = w.nextNode()) if (/\S/.test(n.nodeValue)) out.push(n);
+  return out;
+}
+
+function analyze(frame, entry, loadMs) {
+  const win = frame.contentWindow, d = frame.contentDocument, root = d.documentElement;
+  const kd = d.querySelector('kd-root'), body = d.body;
+  const issues = [], warns = [], info = {};
+  const vw = root.clientWidth;
+  info.vw = vw;
+  info.fluid = root.getAttribute('data-kd-fluid');
+  info.scriptError = root.getAttribute('data-kd-error');
+  info.parseMs = +root.getAttribute('data-kd-ms');
+  info.settleMs = +root.getAttribute('data-kd-settle-ms');
+  info.loadMs = Math.round(loadMs);
+  if (info.scriptError) issues.push('betik hatası: ' + info.scriptError);
+  if (!kd) { issues.push('<kd-root> yok'); return { issues, warns, info }; }
+
+  const tr = kd.style.transform || '';
+  const m = /scale\(([\d.]+)\)/.exec(tr);
+  info.shrink = m ? +(+m[1]).toFixed(2) : 1;
+  if (info.shrink < 0.55) warns.push('okunabilirlik: ekrana sığdırma ölçeği ' + info.shrink);
+
+  // 1) taşma / sayfa dışına çıkma (dönüşüm sonrası gerçek kutular)
+  let maxRight = 0, widest = null;
+  const all = kd.getElementsByTagName('*');
+  info.elements = all.length;
+  for (const el of all) {
+    const r = el.getBoundingClientRect();
+    if (!r.width && !r.height) continue;
+    if (r.right > maxRight) { maxRight = r.right; widest = el; }
+  }
+  info.maxRight = Math.round(maxRight);
+  if (maxRight > vw + 2) {
+    issues.push('taşma: içerik ' + Math.round(maxRight - vw) + 'px sağa taşıyor (<' +
+      widest.tagName.toLowerCase() + (widest.id ? '#' + widest.id : '') + '>)');
+  }
+  // `transform: scale` küçültülmüş belgede scrollWidth ÇİZİLEN değil yerleşim kutusunu bildirir; çizilen kenar yukarıda denetlendi.
+  if (info.shrink === 1 && body.scrollWidth > vw + 2) issues.push('yatay kaydırma: body.scrollWidth=' + body.scrollWidth + ' > ' + vw);
+
+  // 2) ezilme / harf harf kırılma ("bozulmuş tablo")
+  const crushed = [];
+  for (const n of textNodes(kd)) {
+    const txt = n.nodeValue.trim();
+    if (txt.length < 8) continue;
+    const range = d.createRange(); range.selectNodeContents(n);
+    const tops = new Set();
+    for (const r of range.getClientRects()) if (r.width > 0) tops.add(Math.round(r.top / 2));
+    const lines = tops.size;
+    if (lines >= 4 && txt.length / lines < 2.6) crushed.push(txt.slice(0, 30) + ' (' + lines + ' satır)');
+  }
+  info.crushed = crushed.length;
+  if (crushed.length) issues.push('ezilmiş metin (harf harf kırılma) ×' + crushed.length + ': ' + crushed.slice(0, 3).join(' | '));
+
+  // 3) görseller
+  let imgs = 0, broken = 0, external = 0, cidLeft = 0, aspect = 0, tooWide = 0;
+  for (const img of kd.getElementsByTagName('img')) {
+    imgs++;
+    const src = img.getAttribute('src') || '';
+    if (/^cid:/i.test(src)) { cidLeft++; continue; }
+    if (/^https?:/i.test(src)) { external++; continue; }
+    if (!img.complete || !img.naturalWidth) { broken++; continue; }
+    const r = img.getBoundingClientRect();
+    if (r.right > vw + 2) tooWide++;
+    const explicit = img.hasAttribute('width') && img.hasAttribute('height');
+    if (!explicit && r.height > 4 && Math.abs(r.width / r.height - img.naturalWidth / img.naturalHeight) > 0.06) aspect++;
+  }
+  Object.assign(info, { imgs, external });
+  if (cidLeft) issues.push('çözülmemiş cid: görseli ×' + cidLeft);
+  if (broken) issues.push('kırık görsel ×' + broken);
+  if (tooWide) issues.push('görsel taşıyor ×' + tooWide);
+  if (aspect) issues.push('görsel en-boy oranı bozuk ×' + aspect);
+
+  // 4) kodlama
+  const text = norm(kd.textContent);
+  if (/�/.test(text)) issues.push('kodlama: U+FFFD (bozuk karakter) var');
+  if (/Ã[\u0080-¿]|Ä[°±\u009f\u009e]|Å[\u009f\u009e]/.test(text)) issues.push('kodlama: UTF-8 baytları Latin-1 gibi okunmuş (mojibake)');
+  for (const want of entry.expect || []) {
+    if (!text.includes(norm(want))) issues.push('kodlama/içerik: beklenen metin yok: "' + want + '"');
+  }
+
+  // 5) yazı tipi: satır içi font-family korunmalı, okunmaz küçük metin kalmamalı
+  let fontLost = 0, tiny = 0;
+  for (const el of kd.querySelectorAll('[style*="font-family"], font[face]')) {
+    const declared = (el.style.fontFamily || el.getAttribute('face') || '').split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+    if (!declared) continue;
+    if (!getComputedStyle(el).fontFamily.toLowerCase().includes(declared)) fontLost++;
+  }
+  for (const n of textNodes(kd)) {
+    const fs = parseFloat(getComputedStyle(n.parentElement).fontSize);
+    const eff = fs * (info.shrink || 1);
+    if (fs >= 6 && fs < 11.5) tiny++;
+    else if (eff < 6 && fs >= 11.5) info.tinyByShrink = (info.tinyByShrink || 0) + 1;
+  }
+  if (fontLost) issues.push('yazı tipi kaybı ×' + fontLost);
+  if (tiny) warns.push('11.5px altı yazı ×' + tiny);
+
+  // 6) boşluk / üst üste binme (farklı öğelerin metin kutuları kesişiyor mu)
+  const boxes = [];
+  for (const n of textNodes(kd).slice(0, 1500)) {
+    const range = d.createRange(); range.selectNodeContents(n);
+    const r = range.getBoundingClientRect();
+    if (r.width > 2 && r.height > 2) boxes.push({ r, el: n.parentElement });
+  }
+  boxes.sort((a, b) => a.r.top - b.r.top);
+  let overlaps = 0;
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length && boxes[j].r.top < boxes[i].r.bottom - 2; j++) {
+      const a = boxes[i], b = boxes[j];
+      if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el)) continue;
+      const ix = Math.min(a.r.right, b.r.right) - Math.max(a.r.left, b.r.left);
+      const iy = Math.min(a.r.bottom, b.r.bottom) - Math.max(a.r.top, b.r.top);
+      if (ix > 3 && iy > 3 && ix * iy > 0.3 * Math.min(a.r.width * a.r.height, b.r.width * b.r.height)) overlaps++;
+    }
+  }
+  info.overlaps = overlaps;
+  if (overlaps) issues.push('üst üste binen metin kutuları ×' + overlaps);
+
+  // 7) bağlantılar
+  const links = kd.querySelectorAll('a[href]');
+  let jsLinks = 0;
+  for (const a of links) if (/^\s*(javascript|data|vbscript):/i.test(a.getAttribute('href'))) jsLinks++;
+  info.links = links.length;
+  if (jsLinks) warns.push('tehlikeli şemalı bağlantı ×' + jsLinks + ' (gezinme temsilcisi engeller)');
+
+  // 8) güvenlik: e-postanın betiği/olay niteliği ÇALIŞMAMALI
+  if (win.__pwned) issues.push('GÜVENLİK: e-postanın betiği çalıştı (__pwned=' + win.__pwned + ')');
+  const csp = d.querySelector('meta[http-equiv="Content-Security-Policy"]');
+  if (!csp) issues.push('GÜVENLİK: CSP yok');
+
+  // 9) performans
+  if (info.settleMs > 150) warns.push('yavaş oturma: ' + info.settleMs + 'ms');
+  if (info.parseMs > 150) warns.push('yavaş başlatma: ' + info.parseMs + 'ms');
+  return { issues, warns, info };
+}
+
+// ── Akış ────────────────────────────────────────────────────────────────
+
+(async () => {
+  const manifest = await (await fetch('/build/mail_lab/manifest.json')).json();
+  const list = manifest.filter((e) =>
+    (!ONLY || e.name.includes(ONLY)) && (THEME === 'both' || e.dark === (THEME === 'dark')));
+  const out = document.getElementById('out'), results = [];
+  window.__labResults = results;
+  let bad = 0, warn = 0;
+  for (const entry of list) {
+    const row = document.createElement('div'); row.className = 'row';
+    const card = document.createElement('div'); card.className = 'card';
+    const title = document.createElement('h2'); title.textContent = entry.name;
+    const frame = document.createElement('iframe');
+    frame.width = W; frame.height = H;
+    row.append(card); card.append(title, frame); out.append(row);
+    const t0 = performance.now();
+    const loaded = new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    frame.src = '/build/mail_lab/docs/' + entry.name + '.html';
+    await loaded; const loadMs = performance.now() - t0;
+    await sleep(SETTLE_WAIT_MS);
+    let res;
+    try { res = analyze(frame, entry, loadMs); }
+    catch (e) { res = { issues: ['denetleyici hatası: ' + e.message], warns: [], info: {} }; }
+    res.name = entry.name; results.push(res);
+    const rep = document.createElement('div'); rep.className = 'report';
+    const lines = [(res.issues.length ? '✗ ' : '✓ ') + JSON.stringify(res.info)];
+    res.issues.forEach((s) => lines.push('  ✗ ' + s));
+    res.warns.forEach((s) => lines.push('  ! ' + s));
+    rep.textContent = lines.join('\n');
+    rep.className += res.issues.length ? ' bad' : res.warns.length ? ' warn' : ' ok';
+    row.append(rep);
+    if (res.issues.length) bad++; if (res.warns.length) warn++;
+    if (q.get('shots') === '0') frame.style.display = 'none';
+  }
+  const names = results.filter((r) => r.issues.length).map((r) => r.name);
+  document.getElementById('summary').textContent =
+    list.length + ' belge, ' + bad + ' hatalı, ' + warn + ' uyarılı (genişlik ' + W + 'px)' +
+    (names.length ? '\nHATALI: ' + names.join(', ') : '\nHepsi temiz.');
+  document.title = 'LAB DONE ' + bad;
+})();
+</script>
+</body>
+</html>

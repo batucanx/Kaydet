@@ -238,8 +238,10 @@ class QuickContactAvatar extends StatelessWidget {
   }
 }
 
-/// Etiket rozeti.
-class LabelChip extends StatelessWidget {
+/// Etiket rozeti: renkli nokta + ad. `onDeleted` verilmişse rozete
+/// dokunmak silmez; önce sağa doğru bir "×" açılır, silme yalnızca ona
+/// basınca olur. Tekrar dokunmak "×"i kapatır.
+class LabelChip extends StatefulWidget {
   const LabelChip({
     super.key,
     required this.name,
@@ -252,46 +254,85 @@ class LabelChip extends StatelessWidget {
   final VoidCallback? onDeleted;
 
   @override
+  State<LabelChip> createState() => _LabelChipState();
+}
+
+class _LabelChipState extends State<LabelChip> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final tone = t.toneAt(toneIndex);
-    return Container(
-      padding: EdgeInsets.only(
-        left: Space.sm,
-        right: onDeleted == null ? Space.sm : 0,
-        top: onDeleted == null ? 2 : 0,
-        bottom: onDeleted == null ? 2 : 0,
-      ),
+    final tone = t.toneAt(widget.toneIndex);
+    final deletable = widget.onDeleted != null;
+    final expanded = deletable && _expanded;
+
+    final chip = Container(
+      padding: const EdgeInsets.only(left: Space.sm, right: Space.sm),
       decoration: BoxDecoration(
         color: tone.background,
-        borderRadius: BorderRadius.circular(Radii.xs),
+        borderRadius: BorderRadius.circular(Radii.full),
+        border: Border.all(color: tone.foreground.withValues(alpha: 0.18)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            name,
-            style: TextStyle(
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(
               color: tone.foreground,
-              fontSize: 11 * AppText.scale,
-              fontWeight: FontWeight.w600,
-              fontVariations: AppText.semibold,
-              height: 14 / 11,
+              shape: BoxShape.circle,
             ),
           ),
-          if (onDeleted != null) ...[
-            // Dokunma alanı simgeden geniş: 12px'lik "x" parmakla tutturulamaz.
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: onDeleted,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-                child: Icon(LucideIcons.x, size: 12, color: tone.foreground),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              widget.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: tone.foreground,
+                fontSize: 11 * AppText.scale,
+                fontWeight: FontWeight.w600,
+                fontVariations: AppText.semibold,
+                height: 14 / 11,
               ),
             ),
-          ],
+          ),
+          AnimatedSize(
+            duration: Motion.base,
+            curve: Motion.standard,
+            alignment: Alignment.centerLeft,
+            child: expanded
+                ? GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: widget.onDeleted,
+                    child: Padding(
+                      padding: const EdgeInsets.only(
+                        left: 6,
+                        top: 3,
+                        bottom: 3,
+                      ),
+                      child: Icon(
+                        LucideIcons.x,
+                        size: 12,
+                        color: tone.foreground,
+                        semanticLabel: 'Etiketi kaldır',
+                      ),
+                    ),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ],
       ),
+    );
+
+    if (!deletable) return chip;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _expanded = !_expanded),
+      child: chip,
     );
   }
 }
@@ -454,15 +495,19 @@ class SectionHeader extends StatelessWidget {
 class SettingsTile extends StatelessWidget {
   const SettingsTile({
     super.key,
-    required this.icon,
+    this.icon,
+    this.iconAsset,
     required this.title,
     this.subtitle,
     this.trailing,
     this.onTap,
     this.isDestructive = false,
-  });
+  }) : assert(icon != null || iconAsset != null);
 
-  final IconData icon;
+  final IconData? icon;
+
+  /// `icon` yerine kullanılacak PNG çizgi ikonu (tek renkli, tint'lenir).
+  final String? iconAsset;
   final String title;
   final String? subtitle;
   final Widget? trailing;
@@ -483,11 +528,20 @@ class SettingsTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(
-              icon,
-              size: IconSize.md,
-              color: isDestructive ? t.danger : t.textSecondary,
-            ),
+            if (iconAsset != null)
+              Image.asset(
+                iconAsset!,
+                width: IconSize.md,
+                height: IconSize.md,
+                color: isDestructive ? t.danger : t.textSecondary,
+                filterQuality: FilterQuality.medium,
+              )
+            else
+              Icon(
+                icon,
+                size: IconSize.md,
+                color: isDestructive ? t.danger : t.textSecondary,
+              ),
             const SizedBox(width: Space.md),
             Expanded(
               child: Column(
@@ -524,25 +578,54 @@ class SettingsTile extends StatelessWidget {
 
 /// Kart benzeri gruplama kutusu.
 class SettingsGroup extends StatelessWidget {
-  const SettingsGroup({super.key, required this.children});
+  const SettingsGroup({
+    super.key,
+    required this.children,
+    this.color,
+    this.dividerIndent = 0,
+    this.flat = false,
+  });
 
   final List<Widget> children;
+
+  /// Verilmezse `surface`. Gri sayfa zemininde beyaz kart için
+  /// `surfaceElevated` verilir.
+  final Color? color;
+
+  /// Ayırıcı çizginin soldan girintisi (ikonun hizasından başlatmak için).
+  final double dividerIndent;
+
+  /// Kartsız, kenardan kenara düz liste: zeminle bütünleşir; yalnızca
+  /// satırlar arasında ince ayırıcı çizgi vardır.
+  final bool flat;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    if (flat) {
+      return Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0)
+              Divider(height: 1, indent: dividerIndent, color: t.divider),
+            children[i],
+          ],
+        ],
+      );
+    }
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: Space.lg),
       decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(Radii.md),
+        color: color ?? t.surface,
+        borderRadius: BorderRadius.circular(Radii.lg),
         border: Border.all(color: t.divider),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
           for (var i = 0; i < children.length; i++) ...[
-            if (i > 0) Divider(height: 1, color: t.divider),
+            if (i > 0)
+              Divider(height: 1, indent: dividerIndent, color: t.divider),
             children[i],
           ],
         ],

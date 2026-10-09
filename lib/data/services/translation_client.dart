@@ -60,15 +60,6 @@ class TranslationResponse {
   final bool nearLimit;
 }
 
-/// Kaynak dil algılama sonucu.
-class LanguageDetection {
-  const LanguageDetection({required this.language, required this.nearLimit});
-
-  /// Azure dil kodu (`en`, `de`, `zh-Hans`…); metin yoksa/algılanamadıysa `null`.
-  final String? language;
-  final bool nearLimit;
-}
-
 /// Sunucunun çeviri yüzeyi (bkz. `backend/src/app.ts` `POST /v1/translate`
 /// ve `POST /v1/translate/detect`).
 ///
@@ -77,12 +68,6 @@ class LanguageDetection {
 /// Failure`, `TranslationNetworkFailure`, `TranslationUnavailableFailure`).
 abstract interface class TranslationApi {
   Future<Result<TranslationResponse>> translate(TranslationRequest request);
-
-  /// [sample]'ın dilini algılar (kısa bir örnek; sunucu ayrıca kırpar).
-  Future<Result<LanguageDetection>> detectLanguage({
-    required String userId,
-    required String sample,
-  });
 }
 
 /// `dart:io` üzerinden JSON konuşan istemci. Adres `https` olmak zorundadır;
@@ -123,28 +108,6 @@ class HttpTranslationClient implements TranslationApi {
           TranslationUnavailableFailure(detail: 'beklenmedik yanıt gövdesi'),
         );
       });
-
-  @override
-  Future<Result<LanguageDetection>> detectLanguage({
-    required String userId,
-    required String sample,
-  }) => _post('/v1/translate/detect', {'userId': userId, 'sample': sample}, (
-    json,
-  ) {
-    final language = json?['language'];
-    if (json != null && (language == null || language is String)) {
-      return Ok(
-        LanguageDetection(
-          language: language as String?,
-          nearLimit: json['nearLimit'] == true,
-        ),
-      );
-    }
-    return const Err(
-      TranslationUnavailableFailure(detail: 'beklenmedik yanıt gövdesi'),
-    );
-    // Dil algılama açılışta çalışır: takılırsa bekletmeden vazgeçilir.
-  }, timeout: const Duration(seconds: 10));
 
   /// JSON gönderir; ağ/HTTP hatalarını tipli [AppFailure]'a çevirir. Gövde
   /// metni loglanmaz/aktarılmaz.

@@ -55,8 +55,11 @@ void main() {
 
       final ops = SignatureFormatter.toDelta(signature).toList();
 
+      // Görsel gömülmez; metin tek satır olarak korunur. Delta art arda
+      // eklemeleri tek işlemde birleştirir, bu yüzden işlem sınırına değil
+      // birleşik metne bakılır.
       expect(ops.any((op) => op.data is Map), isFalse);
-      expect(ops.first.data, 'İyi çalışmalar,');
+      expect(ops.map((op) => op.data).join(), 'İyi çalışmalar,\n');
     });
 
     test('Remote image URL signature formats properly with top position', () {

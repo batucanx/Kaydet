@@ -241,6 +241,7 @@ class MailRepository {
     if (rows.any((row) => row.accountId != accountId)) return null;
     final target = await _db.mailboxById(targetMailboxId);
     if (target == null || target.accountId != accountId) return null;
+    if (target.specialUse == SpecialUse.drafts) return null;
     return _moveRowsToMailbox(rows, target, action: MailActionKind.move);
   }
 
@@ -421,9 +422,6 @@ class MailRepository {
     action: MailActionKind.archive,
     undoWindow: undoWindow,
   );
-
-  Future<void> markSpam(List<int> messageIds) =>
-      moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
 
   /// Çöp Kutusu/İstenmeyen'den Gelen Kutusu'na geri yükler — `archive()` ile
   /// aynı geri-alınabilir mekanizmayı (bkz. [moveToMailbox]) paylaşır.

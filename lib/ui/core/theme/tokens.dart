@@ -216,99 +216,90 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
 
   bool get isDark => brightness == Brightness.dark;
 
+  /// Yan menünün sol rayı — Magic Pattern `rail`: açık temada brand-950
+  /// (#03241F), koyu temada #06070A. Üzerindeki ikon/metin her iki temada
+  /// beyaz tabanlıdır (bkz. `FolderDrawer`).
+  Color get rail => isDark ? const Color(0xFF06070A) : const Color(0xFF03241F);
+
+  /// Üst çubuk (AppBar) zemini: tüm ekranlarda ve "Yeni ileti" düğmesinde
+  /// ortak. Açık temada marka tonunun koyu hali (`accentStrong`, rail kadar
+  /// koyu değil), koyu temada koyu yeşil (#062B24, siyah değil). Üzerindeki metin/ikon beyazdır.
+  Color get topBar => isDark ? const Color(0xFF062B24) : accentStrong;
+
   /// "Sabitlenmiş" ikonu: açık temada belirgin siyah, koyu temada altın sarısı.
   Color get pinIcon => isDark ? warning : const Color(0xFF000000);
 
-  /// Açık tema.
-  /// Outlook/Microsoft Mail'e yaklaşan kurumsal mavi-beyaz palet — kararlar
-  /// için bkz. kullanıcı referans ekran görüntüleri (2026-09-27).
+  /// Açık tema — Magic Pattern "tide-light" + "brand-jade" referansı.
+  ///
+  /// Zemin hiyerarşisi: üst çubuk `canvas` (#F7F8FA) üzerinde, liste/okuma
+  /// yüzeyi beyaz `surface`; alanlar ve pilller `sunken` (#F0F2F5).
   static const KaydetTokens light = KaydetTokens(
     brightness: Brightness.light,
     bg: Color(0xFFFFFFFF),
-    appBarBg: Color(0xFF1478C9),
+    appBarBg: Color(0xFFF7F8FA),
     readingBg: Color(0xFFFFFFFF),
-    surface: Color(0xFFF6F8F9),
+    surface: Color(0xFFF0F2F5),
     surfaceElevated: Color(0xFFFFFFFF),
-    surfaceDeep: Color(0xFFEEF2F4),
-    textPrimary: Color(0xFF202124),
-    textSecondary: Color(0xFF6B6F73),
-    textTertiary: Color(0xFF9AA0A6),
-    accent: Color(0xFF1478C9),
-    accentFill: Color(0xFF1478C9),
+    surfaceDeep: Color(0xFFF0F2F5),
+    textPrimary: Color(0xFF14171C),
+    textSecondary: Color(0xFF4B5361),
+    textTertiary: Color(0xFF737D8C),
+    accent: Color(0xFF0C8C76),
+    accentFill: Color(0xFF0C8C76),
     onAccentFill: Color(0xFFFFFFFF),
-    accentSubtle: Color(0x1F1478C9),
-    accentStrong: Color(0xFF075A9C),
-    danger: Color(0xFFC62A2F),
+    accentSubtle: Color(0xFFE7F8F4),
+    // brand-600 (accent pressed): `accentFill` üstünde ayrışan koyu ton.
+    accentStrong: Color(0xFF0A7564),
+    danger: Color(0xFFE5484D),
+    // Beyaz yazılı dolgularda kontrast için `danger`dan bir ton koyu.
     dangerFill: Color(0xFFC62A2F),
-    success: Color(0xFF1A7F4B),
-    warning: Color(0xFFB26A00),
-    divider: Color(0xFFE5E7EB),
-    border: Color(0xFFE5E7EB),
+    success: Color(0xFF12A575),
+    warning: Color(0xFFD98E04),
+    divider: Color(0xFFE6E9EE),
+    border: Color(0xFFE6E9EE),
     scrim: Color(0x73000000),
     avatarTones: _lightAvatarTones,
   );
 
-  /// Koyu tema — varsayılan.
+  /// Koyu tema — Magic Pattern "tide-dark" referansı, varsayılan.
   ///
-  /// Gmail'in Material 3 "tonal" koyu temasından esinlenen, hafif soğuk bir
-  /// nötr palet: saf siyah/beyaz yok, yüzeyler tek bir nötr rampada basamak
-  /// basamak açılır (yükseltilmiş = daha açık) ve derinliği gölge değil ton
-  /// farkı verir.
-  ///
-  /// Yüzey hiyerarşisi:
-  ///   bg (#131314)                    → Zemin, liste
-  ///   appBarBg / surface / surfaceDeep (#1E1F20) → Üst çubuk, drawer, alan ve
-  ///                                      kart zemini — kullanıcı isteğiyle üst
-  ///                                      çubuk artık `bg`'den değil drawer'la
-  ///                                      AYNI tondan (bkz. `FolderDrawer`).
-  ///   readingBg (#2A2A2A)             → Yalnızca mail okuma bölmesi (aşağı bkz.)
-  ///   surfaceElevated (#282A2C)       → Diyalog, alt sayfa, araç çubuğu
+  /// Saf siyah yok; yüzeyler soğuk-nötr bir rampada basamak basamak açılır:
+  ///   appBarBg (#0B0D11)               → canvas: üst çubuk
+  ///   bg / surfaceDeep'in drawer'ı (#13161B) → liste ve drawer yüzeyi
+  ///   readingBg / surface / surfaceElevated / surfaceDeep (#1A1E24)
+  ///                                    → sunken: alan, pill, kart, diyalog,
+  ///                                      alt sayfa ve mail okuma bölmesi
+  ///                                      (near-black zeminde halation'ı
+  ///                                      yumuşatmak için okuma da bunda).
   ///
   /// Vurgu ikiye ayrılır — koyu zeminde tek renk hem dolgu hem metin olamaz:
-  ///   accent (#A8C7FA)     → metin, ikon, gösterge; zeminde 10,8:1
-  ///   accentFill (#0B57D0) → dolgu (düğme, seçili avatar); üstünde beyaz 6,4:1
-  ///
-  /// Ölçülen kontrastlar (WCAG, bg üzerinde): ana metin 14,5:1, ikincil 10,9:1,
-  /// üçüncül 5,8:1 (yükseltilmiş yüzeyde 4,5:1), danger 7,8:1, success 9,5:1,
-  /// warning 13,2:1. `dangerFill` üzerinde beyaz 5,8:1.
+  ///   accent (#55C7AE, brand-300) → metin, ikon, gösterge
+  ///   accentFill (#0C8C76)        → dolgu; üstünde beyaz metin
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
-    bg: Color(0xFF131314),
-    // Drawer'la (`surface`/`surfaceDeep`) aynı gri — kullanıcı isteğiyle
-    // artık `bg`'nin near-black tonundan ayrışıp navigasyon çekmecesiyle
-    // birleşiyor.
-    appBarBg: Color(0xFF1E1F20),
-    // Uzun metin okunan tek yüzey: uygulamanın near-black zemininde açık
-    // renkli metin parlar (halation) ve uzun okumada yorar. Nötr, orta-koyu
-    // bir gri bunu yumuşatır. WebView zemini, iskelet ve mail renk dönüşümü
-    // (bkz. `MailHtmlDocument`, `mail_render.js`) bu token'a uyar. Üzerinde
-    // ana metin 11,2:1, ikincil 8,4:1, üçüncül 4,5:1 — bundan açık bir gri
-    // (#2E2E2E+) tarih/metadata metnini 4,5:1'in altına düşürür.
-    readingBg: Color(0xFF2A2A2A),
-    surface: Color(0xFF1E1F20),
-    surfaceElevated: Color(0xFF282A2C),
-    surfaceDeep: Color(0xFF1E1F20),
-    textPrimary: Color(0xFFE3E3E3),
-    textSecondary: Color(0xFFC4C7C5),
-    textTertiary: Color(0xFF8E918F),
-    accent: Color(0xFFA8C7FA),
-    accentFill: Color(0xFF0B57D0),
+    bg: Color(0xFF13161B),
+    appBarBg: Color(0xFF0B0D11),
+    readingBg: Color(0xFF1A1E24),
+    surface: Color(0xFF1A1E24),
+    surfaceElevated: Color(0xFF1A1E24),
+    surfaceDeep: Color(0xFF1A1E24),
+    textPrimary: Color(0xFFF2F4F7),
+    textSecondary: Color(0xFFB6BECA),
+    textTertiary: Color(0xFF7E8896),
+    accent: Color(0xFF55C7AE),
+    accentFill: Color(0xFF0C8C76),
     onAccentFill: Color(0xFFFFFFFF),
-    // Seçili klasör/liste satırının arka planı — bkz. `FolderDrawer`
-    // içindeki `_FolderTile` ve `listTileTheme.selectedColor`. Üzerinde
-    // `accent` 7,2:1, ana metin 9,7:1.
-    accentSubtle: Color(0xFF1A3556),
-    accentStrong: Color(0xFF0B57D0),
-    danger: Color(0xFFF28B82),
+    // Seçili klasör/liste satırı zemini (brand-950).
+    accentSubtle: Color(0xFF03241F),
+    accentStrong: Color(0xFF0C8C76),
+    danger: Color(0xFFFF6369),
     dangerFill: Color(0xFFC5221F),
-    success: Color(0xFF81C995),
-    warning: Color(0xFFFDD663),
-    // Yükseltilmiş yüzeyde de (diyalog, alt sayfa, araç çubuğu üst çizgisi)
-    // seçilebilsin diye zeminde 1,6:1 — daha koyusu (#2E3032) orada 1,1:1'e
-    // düşüp kayboluyordu.
-    divider: Color(0xFF37393B),
-    // Alan çerçevesi, onay kutusu, sheet tutamacı: ayraçtan bir basamak belirgin.
-    border: Color(0xFF444746),
+    success: Color(0xFF3DD68C),
+    warning: Color(0xFFFFB224),
+    divider: Color(0xFF242932),
+    // Alan çerçevesi, onay kutusu, sheet tutamacı: sunken (#1A1E24) üstünde
+    // görünsün diye ayraçtan (#242932) bir basamak belirgin.
+    border: Color(0xFF2F3641),
     scrim: Color(0x8C000000),
     avatarTones: _darkAvatarTones,
   );

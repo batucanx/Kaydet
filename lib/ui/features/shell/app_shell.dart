@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../app/navigation.dart';
 import '../../../app/providers.dart';
 import '../../../app/sync_controller.dart';
 import '../../../data/database/app_database.dart';
@@ -40,10 +41,12 @@ class _AppShellState extends ConsumerState<AppShell>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    appShellReady.value = true;
   }
 
   @override
   void dispose() {
+    appShellReady.value = false;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -104,6 +107,7 @@ class _AppShellState extends ConsumerState<AppShell>
         _popToInbox();
       },
       child: Scaffold(
+        key: shellScaffoldKey,
         // NOT: `Scaffold.drawerAnimationStyle` bu Flutter sürümünde
         // (3.44.8) yok — `Scaffold` kaynağında yalnızca `drawerScrimColor`/
         // `drawerEdgeDragWidth` var, drawer'ın kapanış süresi
@@ -314,10 +318,10 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
         _pendingHome ||
         (ref.watch(isAllAccountsProvider) && _pendingAccountId == null);
 
-    // Ray zemini (açık temada üst çubuk mavisi) güvenli alanların altına da
-    // uzanır: aksi hâlde durum çubuğu ve gezinme çubuğu bölgesinde ray
-    // kesilir, saat/ikonlar açık zeminde okunmaz hâle gelirdi.
-    final railBg = t.isDark ? t.surfaceDeep : t.appBarBg;
+    // Ray zemini (`rail`) güvenli alanların altına da uzanır: aksi hâlde
+    // durum çubuğu bölgesinde ray kesilir, saat/ikonlar açık zeminde okunmaz
+    // hâle gelirdi.
+    final railBg = t.rail;
     final padding = MediaQuery.paddingOf(context);
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: SystemUiOverlayStyle(
@@ -325,88 +329,93 @@ class _FolderDrawerState extends ConsumerState<FolderDrawer> {
         // Durum çubuğu ray/üst çubuk zemininde: her iki temada açık ikonlar.
         statusBarIconBrightness: Brightness.light,
         statusBarBrightness: Brightness.dark,
-        systemNavigationBarColor: t.surfaceDeep,
+        systemNavigationBarColor: t.bg,
         systemNavigationBarDividerColor: Colors.transparent,
         systemNavigationBarIconBrightness: t.isDark
             ? Brightness.light
             : Brightness.dark,
       ),
       child: Drawer(
-      backgroundColor: t.surfaceDeep,
-      child: Stack(
-        children: [
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 76,
-            child: ColoredBox(color: railBg),
-          ),
-          Positioned(
-            left: 0,
-            right: 0,
-            top: 0,
-            height: padding.top,
-            child: ColoredBox(color: railBg),
-          ),
-          SafeArea(
-        child: Column(
+        backgroundColor: t.bg,
+        child: Stack(
           children: [
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 76,
+              child: ColoredBox(color: railBg),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              height: padding.top,
+              child: ColoredBox(color: railBg),
+            ),
+            SafeArea(
+              child: Column(
                 children: [
-                  _SideRail(
-                    accounts: accounts,
-                    activeAccountId: activeAccount?.id,
-                    pendingAccountId: _pendingAccountId,
-                    isAllAccounts: showAllAccounts,
-                    onSelectAllAccounts: _selectAllAccounts,
-                    onSelectAccount: _selectAccountAndOpenInbox,
-                    onAddAccount: _addAccount,
-                    activeTab: activeTab,
-                    onSelectTab: _selectTab,
-                  ),
-                  VerticalDivider(color: t.divider, width: 1),
                   Expanded(
-                    child: !showAllAccounts && activeAccount == null
-                        ? const SizedBox.shrink()
-                        : _AccountFolderPanel(
-                            account: showAllAccounts ? null : activeAccount,
-                            onChooseFolder: _choose,
-                            onManageFolders: _manageFolders,
-                          ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _SideRail(
+                          accounts: accounts,
+                          activeAccountId: activeAccount?.id,
+                          pendingAccountId: _pendingAccountId,
+                          isAllAccounts: showAllAccounts,
+                          onSelectAllAccounts: _selectAllAccounts,
+                          onSelectAccount: _selectAccountAndOpenInbox,
+                          onAddAccount: _addAccount,
+                          activeTab: activeTab,
+                          onSelectTab: _selectTab,
+                        ),
+                        VerticalDivider(color: t.divider, width: 1),
+                        Expanded(
+                          child: !showAllAccounts && activeAccount == null
+                              ? const SizedBox.shrink()
+                              : _AccountFolderPanel(
+                                  account: showAllAccounts
+                                      ? null
+                                      : activeAccount,
+                                  onChooseFolder: _choose,
+                                  onManageFolders: _manageFolders,
+                                ),
+                        ),
+                      ],
+                    ),
                   ),
+
+                  if (pending > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: Space.lg,
+                        vertical: Space.sm,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(
+                            LucideIcons.clock,
+                            size: 14,
+                            color: t.textTertiary,
+                          ),
+                          const SizedBox(width: Space.sm),
+                          Expanded(
+                            child: Text(
+                              '$pending işlem gönderilmeyi bekliyor',
+                              style: Theme.of(context).textTheme.labelSmall
+                                  ?.copyWith(color: t.textTertiary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               ),
             ),
-
-            if (pending > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Space.lg,
-                  vertical: Space.sm,
-                ),
-                child: Row(
-                  children: [
-                    Icon(LucideIcons.clock, size: 14, color: t.textTertiary),
-                    const SizedBox(width: Space.sm),
-                    Expanded(
-                      child: Text(
-                        '$pending işlem gönderilmeyi bekliyor',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
           ],
         ),
-      ),
-        ],
-      ),
       ),
     );
   }
@@ -450,23 +459,13 @@ class _SideRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    // Açık temada rayın zemini artık üst çubukla aynı mavi (kullanıcı
-    // isteğiyle) — bu yüzden üzerindeki ikon/halka/ayraç renkleri de beyaza
-    // döner, aksi hâlde `accent` gibi tonlar zeminle aynı maviye karışıp
-    // görünmez olurdu. Koyu tema dokunulmadan (`surfaceDeep` + mevcut
-    // renkler) kalır.
-    final isLight = !t.isDark;
-    final railBg = isLight ? t.appBarBg : t.surfaceDeep;
-    final railIndicator = isLight
-        ? t.onAccentFill.withValues(alpha: 0.22)
-        : t.accentSubtle;
-    final railSelected = isLight ? t.onAccentFill : t.accent;
-    final railUnselected = isLight
-        ? t.onAccentFill.withValues(alpha: 0.75)
-        : t.textSecondary;
-    final railDivider = isLight
-        ? t.onAccentFill.withValues(alpha: 0.3)
-        : t.divider;
+    // Ray her iki temada da koyu (`rail`) olduğundan ikon/halka/ayraç
+    // renkleri beyaz tabanlıdır (Magic Pattern: rail-ink / rail-active).
+    final railBg = t.rail;
+    final railIndicator = t.onAccentFill.withValues(alpha: 0.12);
+    final railSelected = t.onAccentFill;
+    final railUnselected = t.onAccentFill.withValues(alpha: 0.64);
+    final railDivider = t.onAccentFill.withValues(alpha: 0.16);
     // Aktif hesap (optimistik seçim varsa o) her zaman şeridin en üstünde
     // görünür — kullanıcı hangi hesapta olduğunu ilk bakışta anlasın diye.
     // Yalnızca görüntü sırası değişir; `accounts`'un kendi kaynağı
@@ -602,17 +601,10 @@ class _RailIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final duration = context.motion(Motion.fast);
-    // `_SideRail` ile aynı gerekçe: açık temada ray artık mavi zeminli,
-    // bu yüzden bu düğme de (yalnızca `_SideRail.trailing`de kullanılır)
-    // beyaz tabanlı renklere döner; koyu tema dokunulmaz.
-    final isLight = !t.isDark;
-    final indicatorColor = isLight
-        ? t.onAccentFill.withValues(alpha: 0.22)
-        : t.accentSubtle;
-    final selectedColor = isLight ? t.onAccentFill : t.accent;
-    final unselectedColor = isLight
-        ? t.onAccentFill.withValues(alpha: 0.75)
-        : t.textSecondary;
+    // `_SideRail` ile aynı renkler (yalnızca `_SideRail.trailing`de kullanılır).
+    final indicatorColor = t.onAccentFill.withValues(alpha: 0.12);
+    final selectedColor = t.onAccentFill;
+    final unselectedColor = t.onAccentFill.withValues(alpha: 0.64);
     return Tooltip(
       message: tooltip,
       child: InkWell(
@@ -655,11 +647,9 @@ class _AllAccountsButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final ringColor = t.isDark ? t.accent : t.onAccentFill;
-    final circleColor = t.isDark
-        ? t.accentSubtle
-        : t.onAccentFill.withValues(alpha: 0.22);
-    final iconColor = t.isDark ? t.accent : t.onAccentFill;
+    final ringColor = t.onAccentFill;
+    final circleColor = t.onAccentFill.withValues(alpha: 0.12);
+    final iconColor = t.onAccentFill;
     return Semantics(
       button: true,
       selected: isActive,
@@ -727,13 +717,11 @@ class _AccountAvatarButton extends ConsumerWidget {
         (s) => s.unreachableAccounts.containsKey(account.id),
       ),
     );
-    // `_SideRail` ile aynı gerekçe: açık temada ray mavi zeminli olduğundan
-    // `accent` halkası zeminle karışıp görünmez olurdu — beyaz halkaya döner.
-    // Koyu temada dokunulmaz.
-    final ringColor = t.isDark ? t.accent : t.onAccentFill;
+    // Ray koyu zeminli olduğundan etkin halka beyazdır.
+    final ringColor = t.onAccentFill;
     // Rozetin kesim rengi (`border`) rayın kendi zeminiyle eşleşmeli, aksi
     // hâlde avatarla rozet arasında görünür bir kare/daire sınırı kalır.
-    final railBg = t.isDark ? t.surfaceDeep : t.appBarBg;
+    final railBg = t.rail;
     return Tooltip(
       message: unreachable
           ? '${account.email} · Sunucuya ulaşılamıyor'
@@ -1165,93 +1153,94 @@ class _FolderTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = context.tokens;
     final duration = context.motion(Motion.fast);
-    return InkWell(
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: duration,
-        curve: Motion.standard,
-        constraints: const BoxConstraints(minHeight: Dimens.touchTarget),
-        padding: EdgeInsets.only(
-          // Seçim göstergesi sol kenara yapışık — indent sol padding'e eklenir.
-          left: Space.lg + indent,
-          right: Space.lg,
-          top: Space.md,
-          bottom: Space.md,
-        ),
-        decoration: BoxDecoration(
-          color: isSelected ? t.accentSubtle : Colors.transparent,
-          border: Border(
-            left: BorderSide(
-              color: isSelected ? t.accent : Colors.transparent,
-              width: 3,
-            ),
+    // Seçili satır yumuşak, yuvarlatılmış bir hap (Magic Pattern): kenarlardan
+    // `Space.sm` içeride durur; girinti ve dolgu, içeriğin eski hizasını
+    // koruyacak şekilde `Space.sm` azaltılmıştır.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: Space.sm),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(Radii.md),
+        child: AnimatedContainer(
+          duration: duration,
+          curve: Motion.standard,
+          constraints: const BoxConstraints(minHeight: Dimens.touchTarget),
+          padding: EdgeInsets.only(
+            left: Space.md + indent,
+            right: Space.md,
+            top: Space.md,
+            bottom: Space.md,
           ),
-        ),
-        child: Row(
-          children: [
-            TweenAnimationBuilder<Color?>(
-              tween: ColorTween(end: isSelected ? t.accent : t.textSecondary),
-              duration: duration,
-              curve: Motion.standard,
-              builder: (context, color, _) =>
-                  Icon(icon, size: IconSize.md, color: color),
-            ),
-            const SizedBox(width: Space.md),
-            Expanded(
-              child: AnimatedDefaultTextStyle(
+          decoration: BoxDecoration(
+            color: isSelected ? t.accentSubtle : Colors.transparent,
+            borderRadius: BorderRadius.circular(Radii.md),
+          ),
+          child: Row(
+            children: [
+              TweenAnimationBuilder<Color?>(
+                tween: ColorTween(end: isSelected ? t.accent : t.textSecondary),
                 duration: duration,
                 curve: Motion.standard,
-                style: Theme.of(context).textTheme.bodyMedium!.copyWith(
-                  color: isSelected ? t.textPrimary : t.textSecondary,
-                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
-                ),
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
+                builder: (context, color, _) =>
+                    Icon(icon, size: IconSize.md, color: color),
               ),
-            ),
-            if (expanded != null)
-              InkWell(
-                onTap: onToggle,
-                borderRadius: BorderRadius.circular(Radii.full),
-                child: Padding(
-                  padding: const EdgeInsets.all(Space.xs),
-                  child: AnimatedRotation(
-                    turns: expanded! ? 0.25 : 0,
-                    duration: duration,
-                    curve: Motion.standard,
-                    child: Icon(
-                      LucideIcons.chevronRight,
-                      size: IconSize.sm,
-                      color: t.textTertiary,
-                    ),
-                  ),
-                ),
-              ),
-            if (badge != null && badge! > 0)
-              AnimatedContainer(
-                duration: duration,
-                curve: Motion.standard,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: Space.sm,
-                  vertical: 1,
-                ),
-                decoration: BoxDecoration(
-                  color: isSelected ? t.accentSubtle : t.surface,
-                  borderRadius: BorderRadius.circular(Radii.full),
-                ),
+              const SizedBox(width: Space.md),
+              Expanded(
                 child: AnimatedDefaultTextStyle(
                   duration: duration,
                   curve: Motion.standard,
-                  style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                    color: isSelected ? t.accent : t.textSecondary,
+                  style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                    color: isSelected ? t.textPrimary : t.textSecondary,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
                   ),
-                  child: Text('${badge!}'),
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ),
-          ],
+              if (expanded != null)
+                InkWell(
+                  onTap: onToggle,
+                  borderRadius: BorderRadius.circular(Radii.full),
+                  child: Padding(
+                    padding: const EdgeInsets.all(Space.xs),
+                    child: AnimatedRotation(
+                      turns: expanded! ? 0.25 : 0,
+                      duration: duration,
+                      curve: Motion.standard,
+                      child: Icon(
+                        LucideIcons.chevronRight,
+                        size: IconSize.sm,
+                        color: t.textTertiary,
+                      ),
+                    ),
+                  ),
+                ),
+              if (badge != null && badge! > 0)
+                AnimatedContainer(
+                  duration: duration,
+                  curve: Motion.standard,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: Space.sm,
+                    vertical: 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isSelected ? t.accentFill : t.surface,
+                    borderRadius: BorderRadius.circular(Radii.full),
+                  ),
+                  child: AnimatedDefaultTextStyle(
+                    duration: duration,
+                    curve: Motion.standard,
+                    style: Theme.of(context).textTheme.labelSmall!.copyWith(
+                      color: isSelected ? t.onAccentFill : t.textSecondary,
+                    ),
+                    child: Text('${badge!}'),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

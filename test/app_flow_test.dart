@@ -17,6 +17,7 @@ import 'package:kaydet/ui/features/mail_list/mail_row.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers/fake_services.dart';
+import 'helpers/fake_webview_platform.dart';
 import 'helpers/test_db.dart';
 
 /// Uçtan uca arayüz testleri.
@@ -37,6 +38,10 @@ void appTest(String description, Future<void> Function(WidgetTester) body) {
     // Süre verilmeden çağrılan pump() sahte saati ilerletmez; sıfır süreli
     // zamanlayıcı ancak saat ilerleyince tetiklenir.
     await tester.pump(const Duration(milliseconds: 50));
+    // `WebViewPool` her ekran açılışından sonra 1,5 sn'lik statik bir yedek
+    // kurma zamanlayıcısı bırakır; bitmeden kalırsa test "Timer is still
+    // pending" ile düşer.
+    await tester.pump(const Duration(seconds: 2));
   });
 }
 
@@ -46,6 +51,7 @@ void main() {
   late FakeSmtpService smtp;
   late SecureStore secureStore;
   late AppSettingsStore settingsStore;
+  late FakeWebViewPlatform webView;
 
   setUp(() async {
     // Sağa kaydırmanın varsayılanı "Ayarla" (ilk kaydırmada eylem seçtirir);
@@ -58,6 +64,9 @@ void main() {
     smtp = FakeSmtpService();
     secureStore = InMemorySecureStore();
     settingsStore = await AppSettingsStore.create();
+    // İleti gövdesi WebView ile çizilir; testte gerçek WebView yoktur.
+    webView = FakeWebViewPlatform.install();
+    mockPluginChannels();
   });
 
   tearDown(() async {
@@ -439,7 +448,7 @@ void main() {
         reason: 'komutlar: ${imap.commandLog}',
       );
       expect(
-        imap.commandLog.any((c) => c.startsWith('expunge')),
+        imap.messageExpunges.isNotEmpty,
         isFalse,
       );
     });
@@ -474,7 +483,7 @@ void main() {
       expect(imap.store['INBOX.Archive']?.length, 1);
       expect(imap.store['INBOX']?.length, 1);
       // Kalıcı silme değil.
-      expect(imap.commandLog.any((c) => c.startsWith('expunge')), isFalse);
+      expect(imap.messageExpunges.isNotEmpty, isFalse);
 
       // Yerelde Gelen Kutusu'ndan çıkmış, gerçek bir taşıma olmuştur.
       final rows = await db.select(db.messages).get();
@@ -712,7 +721,12 @@ void main() {
       await tester.tap(rowText('Fiyat teklifi'));
       await settle(tester);
 
-      expect(find.text('Teklifimiz ektedir, iyi çalışmalar.'), findsOneWidget);
+      // Gövde WebView'a yüklenen belgededir (düz metin de WebView'da çizilir).
+      await webView.untilMessageLoaded(tester);
+      expect(
+        webView.lastMessageHtml,
+        contains('Teklifimiz ektedir, iyi çalışmalar.'),
+      );
       expect(find.byTooltip('Yanıtla'), findsOneWidget);
       expect(find.byTooltip('İlet'), findsOneWidget);
     });
@@ -1312,6 +1326,8 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Sil'));
       await settle(tester);
+      // Silme bildirimi ("Geri al") alttaki seçim çubuğunu örtmesin.
+      await pastUndoWindow(tester);
 
       // Çöp Kutusu'na geç.
       await tester.tap(find.byTooltip('Klasörler'));
@@ -1353,6 +1369,8 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Sil'));
       await settle(tester);
+      // Silme bildirimi ("Geri al") alttaki seçim çubuğunu örtmesin.
+      await pastUndoWindow(tester);
 
       await tester.tap(find.byTooltip('Klasörler'));
       await settle(tester);
@@ -1368,7 +1386,7 @@ void main() {
 
       expect(find.text('Gidecek ileti'), findsNothing);
       expect(
-        imap.commandLog.any((c) => c.startsWith('expunge')),
+        imap.messageExpunges.isNotEmpty,
         isTrue,
         reason: 'komutlar: ${imap.commandLog}',
       );

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'attachment_files.dart';
+import 'inline_image_collector.dart';
 import 'mail_text_decoder.dart';
 import 'package:enough_mail/enough_mail.dart' as em;
 import 'package:synchronized/synchronized.dart';
@@ -579,6 +580,14 @@ class EnoughMailImapService implements ImapService {
     try {
       html = MailTextDecoder.html(message);
     } catch (_) {}
+    if (html != null) {
+      try {
+        // WebView `cid:` şemasını bilmez: gömülü görseller `data:` olur.
+        html = InlineImageCollector.resolve(message, html);
+      } catch (_) {
+        // Çözülemedi: gövde `cid:` başvurularıyla gösterilir (görsel kırık).
+      }
+    }
     if (plain == null && html == null) {
       try {
         plain = message.decodeContentText();
@@ -786,16 +795,17 @@ class EnoughMailImapService implements ImapService {
   });
 
   @override
-  Future<Result<void>> unsubscribeMailbox(String encodedPath) => _guard(() async {
-    await _requireClient.unsubscribeMailbox(
-      em.Mailbox(
-        encodedName: encodedPath,
-        encodedPath: encodedPath,
-        flags: const [],
-        pathSeparator: '/',
-      ),
-    );
-  });
+  Future<Result<void>> unsubscribeMailbox(String encodedPath) =>
+      _guard(() async {
+        await _requireClient.unsubscribeMailbox(
+          em.Mailbox(
+            encodedName: encodedPath,
+            encodedPath: encodedPath,
+            flags: const [],
+            pathSeparator: '/',
+          ),
+        );
+      });
 
   @override
   Future<Result<void>> deleteMailbox({

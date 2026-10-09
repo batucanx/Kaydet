@@ -194,8 +194,12 @@ class AccountRepository {
       accountId = existing.id;
     } else {
       accountId = await _db.insertAccount(companion);
-      await _seedDefaultLabels(accountId);
-      await _seedDefaultSignature(accountId, displayName);
+      // Ayar eşitlemesi varsayılanları kendisi oluşturur (yalnızca sunucuda ayar belgesi yoksa): burada
+      // oluşturulsaydı hesabı silip yeniden ekleyen kullanıcıda silinmiş varsayılanlar geri dönerdi.
+      if (_settingsSync?.seedsDefaults != true) {
+        await _seedDefaultLabels(accountId);
+        await _seedDefaultSignature(accountId, displayName);
+      }
     }
 
     try {
@@ -252,13 +256,7 @@ class AccountRepository {
   }
 
   Future<void> _seedDefaultLabels(int accountId) async {
-    const defaults = [
-      ('İş', 10),
-      ('Kişisel', 6),
-      ('Tasarım', 12),
-      ('Finans', 3),
-    ];
-    for (final (name, tone) in defaults) {
+    for (final (name, tone) in SettingsSyncService.defaultLabelSeeds) {
       await _db.insertLabel(
         LabelsCompanion.insert(
           accountId: accountId,
@@ -304,10 +302,112 @@ class AccountRepository {
     _settingsSync?.schedule(accountId);
   }
 
-  Future<void> deleteLabel(int labelId) async {
-    final accountId = (await _db.labelById(labelId))?.accountId;
-    await _db.deleteLabel(labelId);
-    if (accountId != null) _settingsSync?.schedule(accountId);
+  /// Etiketi yeniden adlandırır.
+  ///
+  /// Sunucudaki kimlik `imapKeyword`'dür (IMAP anahtar kelimeleri boşluk ve
+  /// Türkçe karakter taşıyamaz) ve DEĞİŞMEZ: iletilerdeki bayraklar ve
+  /// [SyncEngine]'in anahtar kelime → ad eşlemesi bu sayede olduğu gibi çalışır,
+  /// eşitleme eski adı geri getirmez. Görünen ad sunucuda ayar belgesinde
+  /// (anahtar kelime → ad/renk) tutulur; burada o belge güncellenir.
+  ///
+  /// Yerel değişiklik önce yapılır, ardından ayar belgesi AWAIT edilerek
+  /// eşitlenir; başarısızsa yerel ad ve ileti etiketleri eski hâline döner.
+  Future<Result<void>> renameLabel({
+    required int labelId,
+    required String newName,
+  }) async {
+    final name = newName.trim();
+    if (name.isEmpty) return const Err(InvalidLabelNameFailure());
+    final label = await _db.labelById(labelId);
+    if (label == null) return const Err(StorageFailure(detail: 'etiket yok'));
+    if (label.name == name) return okVoid;
+
+    final folded = foldForSearch(name);
+    final clash = (await _db.labelsOf(
+      label.accountId,
+    )).any((l) => l.id != labelId && foldForSearch(l.name) == folded);
+    if (clash) return const Err(InvalidLabelNameFailure(duplicate: true));
+
+    late Map<int, String> previous;
+    try {
+      await _db.transaction(() async {
+        await _db.updateLabelRow(labelId, LabelsCompanion(name: Value(name)));
+        previous = await _db.rewriteLabelNames(
+          label.accountId,
+          label.name,
+          name,
+        );
+      });
+    } on Object catch (error) {
+      return Err(StorageFailure(detail: '$error'));
+    }
+
+    final synced = await _pushLabelChange(label.accountId);
+    if (synced is Err<void>) {
+      await _db.transaction(() async {
+        await _db.updateLabelRow(
+          labelId,
+          LabelsCompanion(name: Value(label.name)),
+        );
+        await _db.restoreMessageLabels(previous);
+      });
+      return synced;
+    }
+    return okVoid;
+  }
+
+  /// Etiketi siler: satır ve iletilerdeki ad kaldırılır, ayar belgesi
+  /// eşitlenir; eşitleme başarısızsa her şey geri yüklenir.
+  ///
+  /// Sunucudaki iletilerde kalmış `kaydet_*` bayrakları temizlenmez: eşlemesi
+  /// olmayan anahtar kelimeler eşitlemede yok sayılır.
+  Future<Result<void>> deleteLabel(int labelId) async {
+    final label = await _db.labelById(labelId);
+    if (label == null) return okVoid;
+
+    late Map<int, String> previous;
+    try {
+      await _db.transaction(() async {
+        previous = await _db.rewriteLabelNames(
+          label.accountId,
+          label.name,
+          null,
+        );
+        await _db.deleteLabel(labelId);
+      });
+    } on Object catch (error) {
+      return Err(StorageFailure(detail: '$error'));
+    }
+
+    final synced = await _pushLabelChange(label.accountId);
+    if (synced is Err<void>) {
+      await _db.transaction(() async {
+        await _db.insertLabel(
+          LabelsCompanion.insert(
+            id: Value(label.id),
+            accountId: label.accountId,
+            name: label.name,
+            toneIndex: Value(label.toneIndex),
+            imapKeyword: Value(label.imapKeyword),
+          ),
+        );
+        await _db.restoreMessageLabels(previous);
+      });
+      return synced;
+    }
+    return okVoid;
+  }
+
+  /// Ayar belgesini hemen (zamanlayıcıyı beklemeden) eşitler. Eşitleme servisi
+  /// yoksa (ör. testler) yerel işlem yeterlidir.
+  Future<Result<void>> _pushLabelChange(int accountId) async {
+    final sync = _settingsSync;
+    if (sync == null) return okVoid;
+    final result = await sync.sync(accountId, force: true);
+    if (result case Err(:final failure)) {
+      return Err(LabelSyncFailure(detail: failure.detail ?? '$failure'));
+    }
+    return okVoid;
   }
 
   // Folder mutations live in FolderRepository. These forwarding methods keep
@@ -359,7 +459,7 @@ class AccountRepository {
         SignaturesCompanion.insert(
           accountId: accountId,
           name: 'İmza 1',
-          body: Value('\n\n--\n$displayName\nKaydet ile gönderildi'),
+          body: Value(SettingsSyncService.defaultSignatureBody(displayName)),
           isDefault: const Value(true),
         ),
       );

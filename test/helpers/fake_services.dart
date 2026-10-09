@@ -78,6 +78,13 @@ class FakeImapService implements ImapService {
   int uidValidity = 1000;
   final List<String> commandLog = [];
 
+  /// Kullanıcının iletilerine yönelik kalıcı silmeler. Arka plandaki ayar
+  /// eşitlemesi `Kaydet-Settings` klasöründeki eski ayar belgesini de siler;
+  /// o, ileti silme davranışının testlerini ilgilendirmez.
+  Iterable<String> get messageExpunges => commandLog.where(
+    (c) => c.startsWith('expunge:') && !c.contains('Kaydet-Settings'),
+  );
+
   /// Teste hazır bir gelen kutusu doldurur.
   void seedInbox(List<FetchedEnvelope> envelopes) {
     final box = store.putIfAbsent('INBOX', () => {});
@@ -283,7 +290,7 @@ class FakeImapService implements ImapService {
 
   @override
   Future<Result<void>> deletePermanently(List<int> uids) async {
-    commandLog.add('expunge:$uids');
+    commandLog.add('expunge:${selectedPath ?? 'INBOX'}:$uids');
     final box = _box(selectedPath ?? 'INBOX');
     for (final uid in uids) {
       box.remove(uid);

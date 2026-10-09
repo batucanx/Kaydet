@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/core/result.dart';
 import 'package:kaydet/data/database/app_database.dart';
@@ -126,17 +129,20 @@ void main() {
       smtpSecurity: SocketSecurity.ssl,
     );
 
-    test('yeni hesap denenirken etkin hesabın canlı oturumu kapanmaz', () async {
-      await connection.ensureConnected(accountId);
-      expect(imap.isConnected, isTrue);
+    test(
+      'yeni hesap denenirken etkin hesabın canlı oturumu kapanmaz',
+      () async {
+        await connection.ensureConnected(accountId);
+        expect(imap.isConnected, isTrue);
 
-      final result = await repository.signIn(request('yeni@ornek.com'));
+        final result = await repository.signIn(request('yeni@ornek.com'));
 
-      expect(result.isOk, isTrue);
-      // Doğrulama ayrı, geçici bir bağlantıyla yapıldı.
-      expect(imap.commandLog.any((c) => c.startsWith('verify:')), isTrue);
-      expect(imap.isConnected, isTrue);
-    });
+        expect(result.isOk, isTrue);
+        // Doğrulama ayrı, geçici bir bağlantıyla yapıldı.
+        expect(imap.commandLog.any((c) => c.startsWith('verify:')), isTrue);
+        expect(imap.isConnected, isTrue);
+      },
+    );
 
     test('hatalı bilgiyle giriş hesap oluşturmaz', () async {
       imap.failOnConnect = const AuthFailure();
@@ -149,51 +155,154 @@ void main() {
   });
 
   group('etiketler', () {
-    test('aynı ASCII karşılığına düşen adlar ayrı anahtar kelime alır', () async {
+    test(
+      'aynı ASCII karşılığına düşen adlar ayrı anahtar kelime alır',
+      () async {
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Kişisel',
+          toneIndex: 1,
+        );
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Kisisel',
+          toneIndex: 2,
+        );
+
+        final labels = await db.labelsOf(accountId);
+        final keywords = labels.map((l) => l.imapKeyword).toSet();
+
+        expect(labels, hasLength(2));
+        expect(keywords, hasLength(2));
+        expect(keywords, contains('kaydet_kisisel'));
+      },
+    );
+
+    test(
+      'mevcut etiket yeniden oluşturulunca anahtar kelimesi korunur',
+      () async {
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Kişisel',
+          toneIndex: 1,
+        );
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Kisisel',
+          toneIndex: 2,
+        );
+        final before = (await db.labelsOf(
+          accountId,
+        )).firstWhere((l) => l.name == 'Kisisel').imapKeyword;
+
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Kisisel',
+          toneIndex: 7,
+        );
+
+        final after = (await db.labelsOf(
+          accountId,
+        )).firstWhere((l) => l.name == 'Kisisel');
+        expect(after.imapKeyword, before);
+        expect(after.toneIndex, 7);
+      },
+    );
+
+    Future<int> taggedMessage(List<String> names) async {
+      final mailboxId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: accountId,
+          path: 'INBOX',
+          name: 'Gelen Kutusu',
+        ),
+      );
+      return db.insertLocalMessage(
+        MessagesCompanion.insert(
+          accountId: accountId,
+          mailboxId: mailboxId,
+          dateUtc: DateTime.utc(2026, 9, 14),
+          labelsJson: Value(jsonEncode(names)),
+        ),
+      );
+    }
+
+    test(
+      'yeniden adlandırma anahtar kelimeyi korur, iletileri günceller',
+      () async {
+        await repository.createLabel(
+          accountId: accountId,
+          name: 'Finans',
+          toneIndex: 1,
+        );
+        final label = (await db.labelsOf(accountId)).single;
+        final messageId = await taggedMessage(['Finans', 'Diğer']);
+
+        final result = await repository.renameLabel(
+          labelId: label.id,
+          newName: '  Finans 2026 ',
+        );
+
+        expect(result.isOk, isTrue);
+        final renamed = (await db.labelsOf(accountId)).single;
+        expect(renamed.name, 'Finans 2026');
+        expect(renamed.imapKeyword, label.imapKeyword);
+        final message = await (db.select(
+          db.messages,
+        )..where((m) => m.id.equals(messageId))).getSingle();
+        expect(jsonDecode(message.labelsJson), ['Finans 2026', 'Diğer']);
+      },
+    );
+
+    test('boş ya da çakışan ad reddedilir, ad değişmez', () async {
       await repository.createLabel(
         accountId: accountId,
-        name: 'Kişisel',
+        name: 'Finans',
         toneIndex: 1,
       );
       await repository.createLabel(
         accountId: accountId,
-        name: 'Kisisel',
+        name: 'İş',
         toneIndex: 2,
       );
+      final finans = (await db.labelsOf(
+        accountId,
+      )).firstWhere((l) => l.name == 'Finans');
 
-      final labels = await db.labelsOf(accountId);
-      final keywords = labels.map((l) => l.imapKeyword).toSet();
+      final empty = await repository.renameLabel(
+        labelId: finans.id,
+        newName: '   ',
+      );
+      final duplicate = await repository.renameLabel(
+        labelId: finans.id,
+        newName: 'iş',
+      );
 
-      expect(labels, hasLength(2));
-      expect(keywords, hasLength(2));
-      expect(keywords, contains('kaydet_kisisel'));
+      expect(empty, isA<Err<void>>());
+      expect(duplicate, isA<Err<void>>());
+      expect((await db.labelsOf(accountId)).map((l) => l.name).toSet(), {
+        'Finans',
+        'İş',
+      });
     });
 
-    test('mevcut etiket yeniden oluşturulunca anahtar kelimesi korunur', () async {
+    test('silme etiketi iletilerden de kaldırır', () async {
       await repository.createLabel(
         accountId: accountId,
-        name: 'Kişisel',
+        name: 'Finans',
         toneIndex: 1,
       );
-      await repository.createLabel(
-        accountId: accountId,
-        name: 'Kisisel',
-        toneIndex: 2,
-      );
-      final before = (await db.labelsOf(accountId))
-          .firstWhere((l) => l.name == 'Kisisel')
-          .imapKeyword;
+      final label = (await db.labelsOf(accountId)).single;
+      final messageId = await taggedMessage(['Finans', 'Diğer']);
 
-      await repository.createLabel(
-        accountId: accountId,
-        name: 'Kisisel',
-        toneIndex: 7,
-      );
+      final result = await repository.deleteLabel(label.id);
 
-      final after = (await db.labelsOf(accountId))
-          .firstWhere((l) => l.name == 'Kisisel');
-      expect(after.imapKeyword, before);
-      expect(after.toneIndex, 7);
+      expect(result.isOk, isTrue);
+      expect(await db.labelsOf(accountId), isEmpty);
+      final message = await (db.select(
+        db.messages,
+      )..where((m) => m.id.equals(messageId))).getSingle();
+      expect(jsonDecode(message.labelsJson), ['Diğer']);
     });
   });
 }

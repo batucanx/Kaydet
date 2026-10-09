@@ -55,30 +55,6 @@ final translationRepositoryProvider = Provider<TranslationRepository>(
   ),
 );
 
-/// İletinin kaynak dili (`en`, `de`…). `null`: bilinmiyor (metin yok, çevrimdışı
-/// ve önbellekte yok, sunucu yok/limit dolu) — arayüz yine de "Türkçeye Çevir"
-/// gösterir, Türkçe olduğu kesin olan iletide ise hiçbir şey göstermez.
-///
-/// Girdi ORİJİNAL gövdedir; algılama yerelde önbelleklenir. Hata sessizce
-/// `null`a düşer (orijinal ileti her durumda okunur kalır). Gövde inene kadar
-/// beklenir (gövde yoksa `null`).
-final messageLanguageProvider = FutureProvider.autoDispose.family<String?, int>(
-  (ref, messageId) async {
-    final message = await ref.watch(messageProvider(messageId).future);
-    final body = await ref.watch(messageBodyProvider(messageId).future);
-    if (message == null || body == null) return null;
-    final result = await ref
-        .read(translationRepositoryProvider)
-        .detectLanguage(
-          messageId: messageId,
-          subject: message.subject,
-          html: body.html,
-          plainText: body.plainText,
-        );
-    return result.valueOrNull;
-  },
-);
-
 enum TranslationPhase { idle, loading, shown }
 
 class TranslationUiState {
@@ -107,12 +83,13 @@ class TranslationController extends Notifier<TranslationUiState> {
   @override
   TranslationUiState build() => const TranslationUiState();
 
-  /// [sourceLanguage]: algılanmışsa dil kodu, bilinmiyorsa `auto`.
+  /// Yalnızca kullanıcı "Çevir"e bastığında çağrılır; açılışta hiçbir ağ
+  /// isteği yapılmaz. Kaynak dil her zaman `auto`: tüm gövde gönderilir ve
+  /// sağlayıcı her parçanın dilini kendisi algılar.
   Future<void> translate({
     required String subject,
     required String? html,
     required String? plainText,
-    String sourceLanguage = 'auto',
   }) async {
     if (state.phase == TranslationPhase.loading) return;
     state = const TranslationUiState(phase: TranslationPhase.loading);
@@ -123,7 +100,6 @@ class TranslationController extends Notifier<TranslationUiState> {
           subject: subject,
           html: html,
           plainText: plainText,
-          sourceLanguage: sourceLanguage,
         );
     if (!ref.mounted) return;
     state = switch (result) {

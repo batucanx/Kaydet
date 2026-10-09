@@ -1,0 +1,15 @@
+<!-- expect: CSS yoğun | Mutlak konumlu | vh birimi -->
+<style>
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden;font-family:Georgia,serif;position:relative}
+body{background:linear-gradient(#fff,#ddd);min-height:100vh}
+.hero{height:60vh;background:#223;color:#fff;padding:24px;position:relative}
+.badge{position:absolute;top:8px;right:8px;background:red;color:#fff;padding:2px 6px}
+.card{float:left;width:48%;margin:1%;padding:10px;border:2px solid #333;border-radius:8px}
+.clear{clear:both}
+table{width:900px}
+td{white-space:nowrap}
+</style>
+<div class="hero"><h1 style="margin:0">CSS yoğun</h1><span class="badge">Mutlak konumlu</span><p>vh birimi ile yükseklik</p></div>
+<div class="card">Kart bir</div><div class="card">Kart iki</div><div class="clear"></div>
+<table border="1"><tr><td>Geniş tablo hücresi bir</td><td>Geniş tablo hücresi iki</td><td>Geniş tablo hücresi üç</td><td>Dördüncü</td></tr></table>

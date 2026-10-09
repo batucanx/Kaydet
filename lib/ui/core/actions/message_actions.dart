@@ -64,6 +64,7 @@ Future<void> restoreMessagesToInbox(
 }) async {
   if (messageIds.isEmpty) return;
   final overlay = Overlay.of(context, rootOverlay: true);
+  if (!await confirmJunkRestore(context, ref, messageIds)) return;
   final handle = await ref
       .read(mailRepositoryProvider)
       .restoreToInbox(messageIds, undoWindow: ref.read(mailUndoWindowProvider));
@@ -76,6 +77,133 @@ Future<void> restoreMessagesToInbox(
     handle: handle,
     bottomInset: bottomInset,
   );
+}
+
+/// İstenmeyen'deki bir ileti Gelen Kutusu'na alınırken göndericisi hâlâ "istenmeyen" listesindeyse
+/// sorar: liste durursa sonraki tarama iletiyi yeniden İstenmeyen'e iterdi. "İstenmeyen Durumunu
+/// Kaldır" göndericiyi listeden çıkarıp taşımaya izin verir; "Vazgeç" hiçbir şeye dokunmaz (`false`).
+/// Soru gerekmiyorsa doğrudan `true`.
+Future<bool> confirmJunkRestore(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds,
+) async {
+  final blocking = ref.read(blockedSenderRepositoryProvider);
+  if (!await blocking.hasListedSenderInJunk(messageIds)) return true;
+  if (!context.mounted) return false;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('İstenmeyen durumu kaldırılsın mı?'),
+      content: const Text(
+        'Bu gönderici istenmeyen olarak işaretlenmiş. Bu göndericinin '
+        'istenmeyen durumunu kaldırmak istiyor musunuz?',
+      ),
+      actionsAlignment: MainAxisAlignment.center,
+      actions: [
+        DialogActions(
+          cancelLabel: 'Vazgeç',
+          onCancel: () => Navigator.of(context).pop(false),
+          confirmLabel: 'İstenmeyen Durumunu Kaldır',
+          onConfirm: () => Navigator.of(context).pop(true),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return false;
+  await blocking.unlistSendersOf(messageIds);
+  return true;
+}
+
+/// "İstenmeyen olarak işaretle": gönderici listeye girer, ileti İstenmeyen'e taşınır (zaten
+/// oradaysa yerinde kalır, yalnızca gönderici listelenir). Dönüş: ileti klasöründen ayrıldı mı.
+Future<bool> markMessagesAsSpam(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (messageIds.isEmpty) return false;
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final moved = await ref
+      .read(blockedSenderRepositoryProvider)
+      .markSpam(messageIds);
+  if (overlay.mounted) {
+    final one = messageIds.length == 1;
+    KaydetNotice.show(
+      overlay,
+      message: moved
+          ? (one
+                ? 'İleti İstenmeyen klasörüne taşındı'
+                : '${messageIds.length} ileti İstenmeyen klasörüne taşındı')
+          : (one
+                ? 'Gönderici istenmeyen olarak işaretlendi'
+                : 'Gönderenler istenmeyen olarak işaretlendi'),
+      bottomInset: bottomInset,
+    );
+  }
+  return moved;
+}
+
+/// "İstenmeyen değil olarak işaretle": gönderici listeden çıkar; İstenmeyen'deki ileti Gelen
+/// Kutusu'na döner ("Geri al" ile geri alınabilir). Dönüş: ileti klasöründen ayrıldı mı.
+Future<bool> markMessagesAsNotSpam(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds, {
+  double bottomInset = 0,
+}) async {
+  if (messageIds.isEmpty) return false;
+  final overlay = Overlay.of(context, rootOverlay: true);
+  final result = await ref
+      .read(blockedSenderRepositoryProvider)
+      .markNotSpam(messageIds, undoWindow: ref.read(mailUndoWindowProvider));
+  if (!overlay.mounted) return result.restored;
+  final one = messageIds.length == 1;
+  final message = result.restored
+      ? (one
+            ? 'İleti Gelen Kutusuna taşındı, gönderici istenmeyen değil'
+            : '${messageIds.length} ileti Gelen Kutusuna taşındı, '
+                  'gönderenler istenmeyen değil')
+      : (one
+            ? 'Gönderici istenmeyen değil olarak işaretlendi'
+            : 'Gönderenler istenmeyen değil olarak işaretlendi');
+  final handle = result.handle;
+  if (handle != null) {
+    _showUndoNotice(
+      overlay,
+      message: message,
+      handle: handle,
+      bottomInset: bottomInset,
+    );
+  } else {
+    KaydetNotice.show(overlay, message: message, bottomInset: bottomInset);
+  }
+  return result.restored;
+}
+
+/// Seçili klasöre taşır. İstenmeyen'e taşımak "İstenmeyen olarak işaretle"dir (gönderici de
+/// listelenir); İstenmeyen'den Gelen Kutusu'na taşımak listedeki göndericiyi önce sorar (bkz.
+/// [confirmJunkRestore]). Dönüş: taşıma yapıldı mı (`false`: kullanıcı vazgeçti ya da taşınamadı).
+Future<bool> moveMessagesToFolder(
+  BuildContext context,
+  WidgetRef ref,
+  List<int> messageIds,
+  MailboxRow target,
+) async {
+  if (messageIds.isEmpty) return false;
+  if (target.specialUse == SpecialUse.junk) {
+    await markMessagesAsSpam(context, ref, messageIds);
+    return true;
+  }
+  if (target.specialUse == SpecialUse.inbox &&
+      !await confirmJunkRestore(context, ref, messageIds)) {
+    return false;
+  }
+  await ref
+      .read(mailRepositoryProvider)
+      .moveToFolder(messageIds: messageIds, targetMailboxId: target.id);
+  return true;
 }
 
 /// Siler: kalıcı silme gerektiren klasörlerde (Çöp Kutusu/İstenmeyen/
@@ -253,7 +381,10 @@ List<Widget> folderMenuItems(
       excludeMailboxId ?? ref.watch(currentMailboxProvider)?.id;
   return [
     for (final node in tree)
-      if (node.mailbox.id != currentMailboxId)
+      // Taslaklar yalnızca yazma ekranından oluşur; diğer mobil istemciler
+      // gibi bir ileti buraya taşınamaz.
+      if (node.mailbox.id != currentMailboxId &&
+          node.mailbox.specialUse != SpecialUse.drafts)
         MenuItemButton(
           leadingIcon: Icon(
             folderIcon(node.mailbox.specialUse),

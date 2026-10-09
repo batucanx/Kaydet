@@ -156,6 +156,7 @@ final settingsSyncServiceProvider = Provider<SettingsSyncService>((ref) {
     database: ref.watch(databaseProvider),
     connection: ref.watch(mailConnectionProvider),
     state: ref.watch(settingsSyncStateStoreProvider),
+    seedsDefaults: true,
     templates: ref.watch(quickTemplatesStoreProvider),
     senderFilter: ref.watch(senderFilterSyncProvider),
     onTemplatesChanged: () =>

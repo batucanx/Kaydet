@@ -18,12 +18,10 @@ import '../../../app/translation_providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
-import '../../../data/repositories/blocked_sender_repository.dart';
 import '../../../data/repositories/translation_repository.dart'
     show MailTranslation;
 import '../../../domain/models/mail_models.dart';
 import '../../../domain/use_cases/attachment_type.dart';
-import '../../../domain/use_cases/text_extraction.dart';
 import '../../core/actions/attachment_actions.dart';
 import '../../core/actions/message_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
@@ -409,7 +407,6 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
                                   ],
                                   TranslateBar(
                                     messageId: _messageId,
-                                    subject: message.subject,
                                     body: body,
                                     noticeBottomInset: _ActionBar.height,
                                   ),
@@ -1405,7 +1402,7 @@ class _BodyView extends StatelessWidget {
       // Düz metin de WebView'dan geçer: pinch-zoom, yerel kaydırma ve
       // seçim HTML iletilerle birebir aynı olsun.
       return _HtmlWebView(
-        html: _plainTextToHtml(plain),
+        html: MailHtmlDocument.fromPlainText(plain),
         onMailto: onMailto,
         topInset: topInset,
         onScrollY: onScrollY,
@@ -1445,18 +1442,6 @@ class _BodyView extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(Space.lg, Space.md, Space.lg, Space.xxl),
     child: child,
   );
-}
-
-/// Düz metin gövdeyi WebView'ın göstereceği HTML'e çevirir: kaçışlar,
-/// satır sonları ve uzun satırlar korunur; http(s) adresleri bağlantı olur.
-String _plainTextToHtml(String plain) {
-  final escaped = const HtmlEscape(HtmlEscapeMode.element).convert(plain);
-  final linked = escaped.replaceAllMapped(
-    RegExp(r'https?://[^\s<>"]+', caseSensitive: false),
-    (m) => '<a href="${m[0]}">${m[0]}</a>',
-  );
-  return '<div style="white-space:pre-wrap;overflow-wrap:anywhere;">'
-      '$linked</div>';
 }
 
 /// Gövde metninin geleceği alanda hayalet ekran (shimmer) efekti.
@@ -1773,27 +1758,7 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     final cached = _preparedCache.remove(cacheKey);
     final (body, emailSupportsDark) =
         cached ??
-        await Isolate.run(() {
-          // Kaynağın kendi viewport etiketi kaldırılır ki `MailHtmlDocument`in
-          // yazdığı etiket çakışmasız, belgedeki TEK viewport etiketi olsun (bkz.
-          // `stripViewportMeta` dokümantasyonu — aksi hâlde bülten e-postalarında
-          // sessizce ezilip düzeltme hiç uygulanmamış görünüyordu).
-          final noConflictingViewport =
-              TextExtraction.stripMetaRefresh(
-                TextExtraction.stripViewportMeta(html),
-              ).replaceAllMapped(
-                // Görsel çözme (decode) ana iş parçacığını tutmasın: `decoding=async`.
-                RegExp(r'<img\b(?![^>]*\bdecoding\s*=)', caseSensitive: false),
-                (m) => '<img decoding="async"',
-              );
-          return (
-            TextExtraction.resolveColorSchemeQueries(
-              noConflictingViewport,
-              dark: dark,
-            ),
-            TextExtraction.supportsDarkScheme(noConflictingViewport),
-          );
-        });
+        await Isolate.run(() => MailHtmlDocument.prepare(html, dark: dark));
     // Son kullanılan başa yazılır (LRU): aynı iletiye önceki/sonraki ile geri
     // dönüldüğünde regex temizliği ve isolate açılışı yeniden yapılmaz.
     _preparedCache[cacheKey] = (body, emailSupportsDark);
@@ -2041,58 +2006,6 @@ class _ActionBar extends ConsumerWidget {
   }
 }
 
-/// "Göndericiyi engelle": adres engellenir, iletileri sunucuda İstenmeyen'e taşınır ve ekran
-/// kapanır; "Geri al" engeli yeniden kaldırır (iletiler Gelen Kutusu'na döner).
-Future<void> _blockSender(
-  BuildContext context,
-  WidgetRef ref,
-  MessageRow message,
-) async {
-  final overlay = Overlay.of(context);
-  final navigator = Navigator.of(context);
-  final repository = ref.read(blockedSenderRepositoryProvider);
-  final result = await repository.block(
-    accountId: message.accountId,
-    email: message.fromEmail,
-    name: message.fromName,
-  );
-  switch (result.outcome) {
-    case BlockOutcome.blocked:
-      if (navigator.mounted) navigator.pop();
-      final id = result.row?.id;
-      KaydetNotice.show(
-        overlay,
-        message: '${message.fromEmail} engellendi.',
-        actionLabel: id == null ? null : 'Geri al',
-        onAction: id == null ? null : () => unawaited(repository.unblock(id)),
-        duration: const Duration(seconds: 6),
-      );
-    case BlockOutcome.alreadyBlocked:
-      KaydetNotice.show(
-        overlay,
-        message: '${message.fromEmail} zaten engelli.',
-      );
-    case BlockOutcome.ownAddress:
-      KaydetNotice.show(
-        overlay,
-        message: 'Kendi adresinizi engelleyemezsiniz.',
-      );
-    case BlockOutcome.invalidAddress:
-      KaydetNotice.show(overlay, message: 'Geçerli bir e-posta adresi girin.');
-  }
-}
-
-/// "Göndericinin engelini kaldır": adres listeden çıkar, iletileri Gelen Kutusu'na döner.
-Future<void> _unblockSender(
-  BuildContext context,
-  WidgetRef ref,
-  BlockedSenderRow sender,
-) async {
-  final overlay = Overlay.of(context);
-  await ref.read(blockedSenderRepositoryProvider).unblock(sender.id);
-  KaydetNotice.show(overlay, message: '${sender.email} için engel kaldırıldı.');
-}
-
 /// Okuma ekranının "..." menüsü — alt eylem çubuğunun sağ ucunda yaşıyor
 /// (bkz. `_ActionBar`), eskiden üst `AppBar`'daydı: üst kısmın sade kalması
 /// için taşındı. "Etiketle"/"Klasöre taşı" ayrı bir alttan panel
@@ -2106,19 +2019,20 @@ class _MoreMenu extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final repository = ref.read(mailRepositoryProvider);
-    final inJunk =
-        (ref.watch(mailboxesForAccountProvider(message.accountId)).value ??
-                const <MailboxRow>[])
-            .any(
-              (m) =>
-                  m.id == message.mailboxId && m.specialUse == SpecialUse.junk,
-            );
     final fromKey = message.fromEmail.trim().toLowerCase();
-    final blockedRow =
+    final listed =
         (ref.watch(blockedSendersOfAccountProvider(message.accountId)).value ??
                 const <BlockedSenderRow>[])
-            .where((b) => b.email == fromKey)
-            .firstOrNull;
+            .any((b) => b.email == fromKey);
+
+    // Çeviri: her iletide ayrı bir düğme yerine bu menüden başlatılır
+    // (durum çubuğu için bkz. `TranslateBar`).
+    final translationProvider = translationControllerProvider(message.id);
+    final translationPhase = ref.watch(translationProvider).phase;
+    final body = ref.watch(messageBodyProvider(message.id)).value;
+    final canTranslate =
+        (body?.html?.trim().isNotEmpty ?? false) ||
+        (body?.plainText?.trim().isNotEmpty ?? false);
 
     return MenuAnchor(
       animated: true,
@@ -2171,45 +2085,72 @@ class _MoreMenu extends ConsumerWidget {
           menuChildren: folderMenuItems(
             ref,
             (target) async {
-              await repository.moveToFolder(
-                messageIds: [message.id],
-                targetMailboxId: target.id,
-              );
-              if (context.mounted) Navigator.of(context).pop();
+              final moved = await moveMessagesToFolder(context, ref, [
+                message.id,
+              ], target);
+              if (moved && context.mounted) Navigator.of(context).pop();
             },
             accountId: message.accountId,
             excludeMailboxId: message.mailboxId,
           ),
           child: const Text('Klasöre taşı'),
         ),
-        const Divider(height: 1),
-        if (!inJunk)
+        if (canTranslate)
           MenuItemButton(
-            leadingIcon: const Icon(
-              LucideIcons.octagonAlert,
-              size: IconSize.sm,
-            ),
-            onPressed: () async {
-              await repository.markSpam([message.id]);
-              if (context.mounted) Navigator.of(context).pop();
+            leadingIcon: const Icon(LucideIcons.languages, size: IconSize.sm),
+            onPressed: switch (translationPhase) {
+              TranslationPhase.loading => null,
+              TranslationPhase.shown =>
+                ref.read(translationProvider.notifier).showOriginal,
+              TranslationPhase.idle => () => unawaited(
+                ref
+                    .read(translationProvider.notifier)
+                    .translate(
+                      subject: message.subject,
+                      html: body?.html,
+                      plainText: body?.plainText,
+                    ),
+              ),
             },
-            child: const Text('İstenmeyen olarak bildir'),
+            child: Text(switch (translationPhase) {
+              TranslationPhase.loading => 'Çevriliyor...',
+              TranslationPhase.shown => 'Orijinali göster',
+              TranslationPhase.idle => 'Türkçeye çevir',
+            }),
           ),
+        const Divider(height: 1),
+        // Web ile aynı kural: göndericinin durumuna göre TEK seçenek. Listede değilse
+        // "İstenmeyen olarak işaretle", listedeyse "İstenmeyen değil olarak işaretle".
         if (message.fromEmail.isNotEmpty && !message.isLocalOnly)
-          if (blockedRow != null)
+          if (listed)
             MenuItemButton(
               leadingIcon: const Icon(
-                LucideIcons.circleCheck,
+                LucideIcons.shieldCheck,
                 size: IconSize.sm,
               ),
-              onPressed: () => _unblockSender(context, ref, blockedRow),
-              child: const Text('Göndericinin engelini kaldır'),
+              onPressed: () async {
+                // İstenmeyen'deyse Gelen Kutusu'na döner ve ekran kapanır.
+                final left = await markMessagesAsNotSpam(context, ref, [
+                  message.id,
+                ]);
+                if (left && context.mounted) Navigator.of(context).pop();
+              },
+              child: const Text('İstenmeyen değil olarak işaretle'),
             )
           else
             MenuItemButton(
-              leadingIcon: const Icon(LucideIcons.ban, size: IconSize.sm),
-              onPressed: () => _blockSender(context, ref, message),
-              child: const Text('Göndericiyi engelle'),
+              leadingIcon: const Icon(
+                LucideIcons.octagonAlert,
+                size: IconSize.sm,
+              ),
+              onPressed: () async {
+                // Zaten İstenmeyen'deyse ileti yerinde kalır, yalnızca gönderici listelenir.
+                final left = await markMessagesAsSpam(context, ref, [
+                  message.id,
+                ]);
+                if (left && context.mounted) Navigator.of(context).pop();
+              },
+              child: const Text('İstenmeyen olarak işaretle'),
             ),
       ],
       builder: (context, controller, child) => IconButton(

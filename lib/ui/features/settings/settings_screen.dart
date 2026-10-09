@@ -43,6 +43,8 @@ class SettingsScreen extends ConsumerWidget {
 
     final themeLabel = settings.themeMode.label;
 
+    const dividerIndent = Space.lg + IconSize.md + Space.md;
+
     return Scaffold(
       appBar: AppBar(
         // Bu ekranın kendi `Scaffold`u `AppShell`'in klasör/modül menüsünü
@@ -60,46 +62,64 @@ class SettingsScreen extends ConsumerWidget {
         children: [
           const SectionHeader('HESAP'),
           SettingsGroup(
+            flat: true,
+            dividerIndent: dividerIndent,
             children: [
               SettingsTile(
-                icon: LucideIcons.users,
+                iconAsset: 'assets/icons/settings_account.png',
                 title: 'Hesaplar',
                 subtitle: account?.email ?? 'Hesap eklenmedi',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
-                onTap: () =>
-                    context.pushScreen(const AccountsSettingsScreen()),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
+                onTap: () => context.pushScreen(const AccountsSettingsScreen()),
               ),
             ],
           ),
 
           const SectionHeader('GENEL'),
           SettingsGroup(
+            flat: true,
+            dividerIndent: dividerIndent,
             children: [
               SettingsTile(
                 icon: LucideIcons.palette,
                 title: 'Görünüm',
                 subtitle: themeLabel,
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
-                onTap: () =>
-                    context.pushScreen(const AppearanceSettingsScreen()),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
+                onTap: () => showAppearanceSheet(context),
               ),
               SettingsTile(
-                icon: LucideIcons.bell,
+                iconAsset: 'assets/icons/settings_notifications.png',
                 title: 'Bildirimler',
                 subtitle: settings.notificationsEnabled
                     ? settings.syncFrequency.label
                     : 'Kapalı',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () =>
                     context.pushScreen(const NotificationsSettingsScreen()),
               ),
               SettingsTile(
-                icon: LucideIcons.shieldAlert,
+                iconAsset: 'assets/icons/settings_privacy.png',
                 title: 'Gizlilik',
                 subtitle: settings.confirmBeforeDelete
                     ? 'Silmeden önce sor açık'
                     : 'Silmeden önce sor kapalı',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () => context.pushScreen(const PrivacySettingsScreen()),
               ),
               SettingsTile(
@@ -108,25 +128,37 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle:
                     'Sağa: ${settings.swipeRight.label} · '
                     'Sola: ${settings.swipeLeft.label}',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () => context.pushScreen(const SwipeSettingsScreen()),
               ),
               SettingsTile(
-                icon: LucideIcons.tag,
+                iconAsset: 'assets/icons/settings_labels.png',
                 title: 'Etiketler',
                 subtitle: labels.isEmpty
                     ? 'Henüz etiket yok'
                     : '${labels.length} etiket',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () => context.pushScreen(const LabelsSettingsScreen()),
               ),
               SettingsTile(
-                icon: LucideIcons.penLine,
+                iconAsset: 'assets/icons/settings_signatures.png',
                 title: 'İmzalar',
                 subtitle: signatures.isEmpty
                     ? 'Henüz imza yok'
                     : '${signatures.length} imza',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () =>
                     context.pushScreen(const SignaturesSettingsScreen()),
               ),
@@ -136,7 +168,11 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle: blocked.isEmpty
                     ? 'Kimse engellenmedi'
                     : '${blocked.length} kullanıcı',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () =>
                     context.pushScreen(const BlockedSendersSettingsScreen()),
               ),
@@ -146,7 +182,11 @@ class SettingsScreen extends ConsumerWidget {
                 subtitle: sync.lastSyncAt == null
                     ? 'Henüz eşitlenmedi'
                     : 'Son: ${formatRelative(sync.lastSyncAt!)}',
-                trailing: const Icon(LucideIcons.chevronRight, size: 18),
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
                 onTap: () =>
                     context.pushScreen(const MaintenanceSettingsScreen()),
               ),

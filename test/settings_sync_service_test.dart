@@ -7,9 +7,11 @@ import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/data/repositories/mail_connection.dart';
 import 'package:kaydet/data/repositories/settings_sync_service.dart';
 import 'package:kaydet/data/repositories/sync_engine.dart';
+import 'package:kaydet/data/services/quick_templates_store.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/data/services/settings_sync_state_store.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
+import 'package:kaydet/domain/models/quick_template.dart';
 import 'package:kaydet/domain/use_cases/settings_document.dart';
 import 'package:kaydet/domain/use_cases/settings_merge.dart';
 
@@ -62,6 +64,8 @@ class _Device {
     _SettingsImap imap, {
     DateTime Function()? now,
     String writer = 'mobile',
+    bool seedsDefaults = false,
+    QuickTemplatesStore? templates,
   }) async {
     final db = createTestDatabase();
     final accountId = await db.insertAccount(
@@ -86,6 +90,8 @@ class _Device {
       state: MemorySettingsSyncStateStore(),
       writer: writer,
       now: now,
+      seedsDefaults: seedsDefaults,
+      templates: templates,
     );
     return _Device(imap, accountId, db, service);
   }
@@ -168,6 +174,112 @@ void main() {
     expect(doc.data.labels['kaydet_kisisel'], {'name': 'Kişisel', 'tone': 6});
     expect(doc.data.signatures['İmza 1'], containsPair('body', 'Saygılarımla'));
     expect(doc.data.signatures['İmza 1'], containsPair('isDefault', true));
+  });
+
+  group('yeni hesabın varsayılanları', () {
+    test('belge yoksa varsayılan etiket ve imza oluşur ve belgeye yazılır', () async {
+      final a = await _Device.create(imap, seedsDefaults: true);
+      await a.sync();
+
+      expect(await a.labels(), ['Finans:3', 'Kişisel:6', 'Tasarım:12', 'İş:10']);
+      expect((await a.signatures()).single, startsWith('İmza 1:'));
+      expect(a.latestDocument()!.data.labels, hasLength(4));
+    });
+
+    test('sunucuda belge varsa varsayılanlar geri gelmez (hesabı silip yeniden ekleme)', () async {
+      // Web'de kullanıcı varsayılanları silip yalnızca kendi etiketini bırakmış.
+      final web = await _Device.create(imap, writer: 'web');
+      await web.addLabel('Proje', 4, keyword: 'kaydet_proje');
+      await web.sync();
+
+      // Telefonda hesap silinip yeniden eklendi: yerel veri boş, durum sıfır.
+      final phone = await _Device.create(imap, seedsDefaults: true);
+      await phone.sync();
+
+      expect(await phone.labels(), ['Proje:4']);
+      expect(await phone.signatures(), isEmpty);
+      expect(web.latestDocument()!.data.labels, hasLength(1)); // belge telefonun yazdığıyla bozulmadı
+    });
+
+    test('yalnızca ilk karşılaşmada: kullanıcı hepsini silince geri gelmez', () async {
+      final a = await _Device.create(imap, seedsDefaults: true);
+      await a.sync();
+      for (final label in await a.db.labelsOf(a.accountId)) {
+        await a.db.deleteLabel(label.id);
+      }
+      await a.sync();
+      await a.sync();
+
+      expect(await a.labels(), isEmpty);
+    });
+
+    test('hesabın zaten etiketi varsa varsayılan eklenmez', () async {
+      final a = await _Device.create(imap, seedsDefaults: true);
+      await a.addLabel('Benim', 2, keyword: 'kaydet_benim');
+      await a.sync();
+
+      expect(await a.labels(), ['Benim:2']);
+    });
+  });
+
+  group('yeni kurulumda hazır şablonlar', () {
+    test('web hepsini silmişse yerleşik şablonlar geri gelmez', () async {
+      // Web: belge var (etiketi var), şablonu yok.
+      final web = await _Device.create(imap, writer: 'web');
+      await web.addLabel('Proje', 4, keyword: 'kaydet_proje');
+      await web.sync();
+      expect(web.latestDocument()!.data.templates, isEmpty);
+
+      final store = QuickTemplatesStore(); // dokunulmamış: read() yerleşik 5'i döner
+      expect(store.isPristine, isTrue);
+      expect(store.read(), hasLength(5));
+      final phone = await _Device.create(imap, templates: store);
+      await phone.sync();
+
+      expect(store.read(), isEmpty);
+      expect(store.isPristine, isFalse);
+      expect(phone.latestDocument()!.data.templates, isEmpty);
+    });
+
+    test('belgedeki şablonlar yerleşiklerin yerine geçer, kopya çıkmaz', () async {
+      final webStore = QuickTemplatesStore();
+      await webStore.replaceAll([
+        const QuickTemplate(id: 'builtin-1', title: 'Düzenlenmiş', content: 'x', isBuiltIn: true),
+      ]);
+      final web = await _Device.create(imap, writer: 'web', templates: webStore);
+      await web.sync();
+
+      final store = QuickTemplatesStore();
+      final phone = await _Device.create(imap, templates: store);
+      await phone.sync();
+
+      expect(store.read().map((t) => '${t.id}:${t.title}'), ['builtin-1:Düzenlenmiş']);
+    });
+
+    test('belge yoksa yerleşik şablonlar belgeye yazılır (ilk telefon)', () async {
+      final store = QuickTemplatesStore();
+      final phone = await _Device.create(imap, templates: store);
+      await phone.sync();
+
+      expect(phone.latestDocument()!.data.templates.keys.toSet(), {
+        'builtin-1', 'builtin-2', 'builtin-3', 'builtin-4', 'builtin-5',
+      });
+    });
+
+    test('kullanıcı şablonlarına dokunmuşsa belge onları ezmez (birleştirme sürer)', () async {
+      final web = await _Device.create(imap, writer: 'web');
+      await web.addLabel('Proje', 4, keyword: 'kaydet_proje');
+      await web.sync();
+
+      final store = QuickTemplatesStore();
+      await store.replaceAll([
+        const QuickTemplate(id: 'mine', title: 'Benim', content: 'y', isBuiltIn: false),
+      ]);
+      final phone = await _Device.create(imap, templates: store);
+      await phone.sync();
+
+      expect(store.read().map((t) => t.id), ['mine']);
+    });
   });
 
   test('yazma sonrası eski sürümler silinir: sunucuda hep tek ileti kalır', () async {

@@ -17,6 +17,7 @@ import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/data/services/app_settings.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/data/services/share_intake_service.dart';
+import 'package:kaydet/domain/models/mail_models.dart' show SpecialUse;
 import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -194,10 +195,10 @@ void main() {
           find.descendant(of: wrap, matching: find.byType(Text)),
         )
         .map((t) => t.data ?? '')
-        .where((text) =>
-            text.isNotEmpty &&
-            !text.contains('•') &&
-            !text.endsWith('B'));
+        .where(
+          (text) =>
+              text.isNotEmpty && !text.contains('•') && !text.endsWith('B'),
+        );
   }
 
   int callCount(String method) => calls.where((c) => c.method == method).length;
@@ -238,11 +239,29 @@ void main() {
           'foto.jpg': [1, 2, 3],
         },
       );
-      await addAccount();
+      final accountId = await addAccount();
+      // Gerçek uygulamada klasörler giriş sırasında eşitlenmiştir. Hesap burada doğrudan
+      // eklendiği için ilk eşitleme turu otomatik kayıttan (3 sn) sonra biter; klasörsüz
+      // `saveDraft` taslağı kaydetmeden döner. Taslak klasörü önceden hazır olsun.
+      for (final (path, name, use) in [
+        ('INBOX', 'INBOX', SpecialUse.inbox),
+        ('INBOX.Drafts', 'Drafts', SpecialUse.drafts),
+      ]) {
+        await db.upsertMailbox(
+          MailboxesCompanion.insert(
+            accountId: accountId,
+            path: path,
+            name: name,
+            specialUse: Value(use),
+          ),
+        );
+      }
 
       await pumpApp(tester);
       // Otomatik kaydetme 3 sn sonra.
       await tester.pump(const Duration(seconds: 4));
+      // Zamanlayıcı yazımı başlatır; veritabanı yazımının bitmesi beklenir.
+      await settle(tester);
 
       final drafts = await (db.select(
         db.messages,
@@ -490,13 +509,13 @@ void main() {
         'önceki ekran ve içeriği bozulmaz', (tester) async {
       await addAccount();
       await pumpApp(tester);
+      // Açılış animasyonu (`LaunchSplash`, 1,5 sn) bitmeden liste ve "Yeni ileti" düğmesi yok.
+      await tester.pump(const Duration(milliseconds: 1600));
+      await settle(tester);
 
       await tester.tap(find.byTooltip('Yeni ileti'));
       await settle(tester);
-      await tester.enterText(
-        find.byType(TextField).first,
-        'ilk@ornek.com,',
-      );
+      await tester.enterText(find.byType(TextField).first, 'ilk@ornek.com,');
       await settle(tester);
       expect(composeTitle(), findsOneWidget);
 

@@ -1,0 +1,13 @@
+<!-- expect: Merhaba Ayşe Hanım | Çağrı Merkezi | https://www.ornek.com.tr/destek -->
+Merhaba Ayşe Hanım,
+
+Siparişiniz hazırlandı. İzlemek için: https://www.ornek.com.tr/destek?no=12345&ref=mail
+<script>window.__pwned='plain'</script>
+
+Çok uzun tek satır (bölünmeden sığmalı): ŞuUzunBirKelimeKiBoşlukİçermiyorVeEkranınDışınaTaşmamalıdırÇünküAksiHaldeYatayKaydırmaOluşur1234567890
+
+> Alıntı satırı
+> ikinci alıntı
+
+--
+Çağrı Merkezi 0850 000 00 00

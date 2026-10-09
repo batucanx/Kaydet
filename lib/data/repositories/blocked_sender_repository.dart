@@ -36,7 +36,7 @@ class BlockResult {
 ///
 /// Engellemek: adres listeye girer, Gelen Kutusu'ndaki iletileri İstenmeyen'e taşınır ve
 /// bundan sonra gelenler de oraya gider (bkz. `SyncEngine`, SUNUCUDA taşır). Engeli kaldırmak:
-/// adres listeden çıkar, İstenmeyen'deki iletileri Gelen Kutusu'na taşınır. Liste, ayar belgesi
+/// adres listeden çıkar, yeni iletiler Gelen Kutusu'na düşer; İstenmeyen'dekiler yerinde kalır. Liste, ayar belgesi
 /// üzerinden web ve diğer cihazlarla eşitlenir (bkz. `SettingsSyncService`).
 class BlockedSenderRepository {
   BlockedSenderRepository({
@@ -90,20 +90,97 @@ class BlockedSenderRepository {
     return BlockResult(BlockOutcome.blocked, row: inserted.row, handle: handle);
   }
 
-  /// Engeli kaldırır; `false`: böyle bir kayıt yok.
-  Future<bool> unblock(int blockedSenderId) async {
-    final row = await _db.blockedSenderById(blockedSenderId);
-    if (row == null) return false;
-    await _db.deleteBlockedSender(blockedSenderId);
+  /// "İstenmeyen olarak işaretle" (web ile aynı kural): göndericiler listeye girer, Gelen Kutusu'ndaki
+  /// iletileri İstenmeyen'e taşınır ve bundan sonra gelenler de oraya gider. Verilen iletiler
+  /// hangi klasördeyse İstenmeyen'e taşınır; zaten İstenmeyen'dekiler yerinde kalır, yalnızca
+  /// göndericisi listelenir. Dönüş: en az bir ileti İstenmeyen'e taşındı mı.
+  Future<bool> markSpam(List<int> messageIds) async {
+    final rows = await _db.messagesByIds(messageIds);
+    if (rows.isEmpty) return false;
+
+    final listed = <(int, String)>{};
+    for (final row in rows) {
+      final email = row.fromEmail.trim().toLowerCase();
+      if (row.isLocalOnly || email.isEmpty) continue;
+      if (!listed.add((row.accountId, email))) continue;
+      await block(accountId: row.accountId, email: email, name: row.fromName);
+    }
+
+    final movedAny = (await _rowsInJunk(rows)).length < rows.length;
+    await _mail.moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
+    return movedAny;
+  }
+
+  /// "İstenmeyen değil olarak işaretle": göndericiler listeden çıkar (sunucu kuralı da). İstenmeyen'deki
+  /// iletiler Gelen Kutusu'na döner; başka klasördekilerde yalnızca gönderici listeden çıkar.
+  Future<({bool restored, MailActionHandle? handle})> markNotSpam(
+    List<int> messageIds, {
+    Duration undoWindow = Duration.zero,
+  }) async {
+    final rows = await _db.messagesByIds(messageIds);
+    if (rows.isEmpty) return (restored: false, handle: null);
+    await _unlistSendersOf(rows);
+    final inJunk = await _rowsInJunk(rows);
+    if (inJunk.isEmpty) return (restored: false, handle: null);
+    final handle = await _mail.restoreToInbox([
+      for (final row in inJunk) row.id,
+    ], undoWindow: undoWindow);
+    return (restored: true, handle: handle);
+  }
+
+  /// İstenmeyen'deki bu iletilerden birinin göndericisi hâlâ listede mi? Öyleyse iletiyi Gelen Kutusu'na
+  /// almadan önce kullanıcıya sorulur (liste durursa sonraki tarama iletiyi yeniden İstenmeyen'e iterdi).
+  Future<bool> hasListedSenderInJunk(List<int> messageIds) async {
+    final inJunk = await _rowsInJunk(await _db.messagesByIds(messageIds));
+    final blocked = <int, Set<String>>{};
+    for (final row in inJunk) {
+      final listed = blocked[row.accountId] ??= await _db.blockedEmails(
+        row.accountId,
+      );
+      if (listed.contains(row.fromEmail.trim().toLowerCase())) return true;
+    }
+    return false;
+  }
+
+  /// Bu iletilerin göndericilerini listeden çıkarır (iletilere dokunmaz).
+  Future<void> unlistSendersOf(List<int> messageIds) async =>
+      _unlistSendersOf(await _db.messagesByIds(messageIds));
+
+  Future<void> _unlistSendersOf(List<MessageRow> rows) async {
+    final seen = <(int, String)>{};
+    for (final row in rows) {
+      final email = row.fromEmail.trim().toLowerCase();
+      if (email.isEmpty || !seen.add((row.accountId, email))) continue;
+      for (final entry in await _db.blockedSendersOf(row.accountId)) {
+        if (entry.email == email) await _unlist(entry);
+      }
+    }
+  }
+
+  Future<List<MessageRow>> _rowsInJunk(List<MessageRow> rows) async {
+    final junkByAccount = <int, int?>{};
+    final out = <MessageRow>[];
+    for (final row in rows) {
+      final junkId = junkByAccount[row.accountId] ??=
+          (await _db.mailboxBySpecialUse(row.accountId, SpecialUse.junk))?.id;
+      if (junkId != null && junkId == row.mailboxId) out.add(row);
+    }
+    return out;
+  }
+
+  Future<void> _unlist(BlockedSenderRow row) async {
+    await _db.deleteBlockedSender(row.id);
     _settingsSync?.schedule(row.accountId);
     // Sunucu kuralı da gitmeli, yoksa ileti İstenmeyen'e düşmeye devam eder.
     _senderFilter?.request(row.accountId, force: true);
-    await _moveMessages(
-      accountId: row.accountId,
-      from: SpecialUse.junk,
-      to: SpecialUse.inbox,
-      email: row.email,
-    );
+  }
+
+  /// Ayarlar'daki listeden çıkarır (web ile aynı): yalnızca yeni iletiler Gelen Kutusu'na ulaşır,
+  /// İstenmeyen'deki mevcut iletiler yerinde kalır. `false`: böyle bir kayıt yok.
+  Future<bool> unblock(int blockedSenderId) async {
+    final row = await _db.blockedSenderById(blockedSenderId);
+    if (row == null) return false;
+    await _unlist(row);
     return true;
   }
 

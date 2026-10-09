@@ -101,21 +101,15 @@ flutter:
     - assets/web/mail_render.js
     - assets/icons/
   fonts:
-    # 400/500/700 statik (tek ağırlıklı) dosyalardan gelir — motorun
-    # (Skia/Impeller) her platformda aynı glifi seçeceği garanti.
-    # Satoshi'nin statik seti SemiBold (600) içermediği için yalnızca 600,
-    # değişken font dosyasından `wght` ekseni AÇIKÇA istenerek (bkz.
-    # `AppText` içindeki `fontVariations`) elde edilir — bu, motorun
-    # kayıtlı ağırlıklar arasından örtük tahmin yapmasına bağlı olan ve
-    # iOS/Android arasında farklı sonuç verebilen eski yönteme göre
-    # platformdan bağımsız, deterministik bir sonuç verir.
-    - family: Satoshi
+    # Geist (SIL OFL) — 400/500/600/700 dört ayrı statik dosyadan gelir; motor
+    # (Skia/Impeller) her platformda aynı glifi seçer, ağırlık tahmini yok.
+    - family: Geist
       fonts:
-        - asset: assets/fonts/Satoshi-Regular.otf
+        - asset: assets/fonts/Geist-Regular.otf
           weight: 400
-        - asset: assets/fonts/Satoshi-Medium.otf
+        - asset: assets/fonts/Geist-Medium.otf
           weight: 500
-        - asset: assets/fonts/Satoshi-Variable.ttf
+        - asset: assets/fonts/Geist-SemiBold.otf
           weight: 600
-        - asset: assets/fonts/Satoshi-Bold.otf
+        - asset: assets/fonts/Geist-Bold.otf
           weight: 700

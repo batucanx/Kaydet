@@ -1,0 +1,13 @@
+<!-- expect: Duyarlı e-posta | Sütun A | Sütun B -->
+<style>
+.container{max-width:600px;margin:0 auto}
+.two{display:flex;flex-wrap:wrap;gap:8px}
+.two>div{flex:1 1 240px;background:#f5f5f5;padding:12px}
+@media (max-width:480px){.hide-m{display:none!important}.pad{padding:8px!important}}
+img.fluid{max-width:100%;height:auto}
+</style>
+<div class="container"><h2 class="pad">Duyarlı e-posta</h2>
+<div class="two"><div>Sütun A: esnek kutu</div><div>Sütun B: esnek kutu</div></div>
+<p class="hide-m">Yalnızca masaüstünde görünen satır</p>
+<img class="fluid" width="600" height="80" alt="" src="{{png:600x80:0a3d62}}">
+</div>

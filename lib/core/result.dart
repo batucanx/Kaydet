@@ -74,6 +74,30 @@ final class DuplicateFolderFailure extends AppFailure {
   bool get isActionable => true;
 }
 
+/// Etiket adı boş ya da başka bir etiketle çakışıyor.
+final class InvalidLabelNameFailure extends AppFailure {
+  const InvalidLabelNameFailure({super.detail, this.duplicate = false});
+
+  final bool duplicate;
+
+  @override
+  String get userMessage => duplicate
+      ? 'Bu adda bir etiket zaten var.'
+      : 'Etiket adı boş bırakılamaz.';
+
+  @override
+  bool get isActionable => true;
+}
+
+/// Etiket sunucuya eşitlenemedi; yerel değişiklik geri alındı.
+final class LabelSyncFailure extends AppFailure {
+  const LabelSyncFailure({super.detail});
+
+  @override
+  String get userMessage =>
+      'Etiket sunucuyla eşitlenemedi. Bağlantınızı kontrol edip tekrar deneyin.';
+}
+
 /// Klasör adı geçersiz (boş ya da hiyerarşi ayırıcısı içeriyor).
 final class InvalidFolderNameFailure extends AppFailure {
   const InvalidFolderNameFailure({super.detail});

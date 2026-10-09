@@ -200,10 +200,12 @@ class AppDatabase extends _$AppDatabase {
       }
       // v15 → v16: Görsel imza desteği — yerel/uzak görsel alanları.
       if (from < 16) {
-        final existingColumns =
-            await customSelect('PRAGMA table_info("signatures")').get();
-        final columnNames =
-            existingColumns.map((row) => row.data['name'] as String).toSet();
+        final existingColumns = await customSelect(
+          'PRAGMA table_info("signatures")',
+        ).get();
+        final columnNames = existingColumns
+            .map((row) => row.data['name'] as String)
+            .toSet();
 
         if (!columnNames.contains('image_type')) {
           await m.addColumn(signatures, signatures.imageType);
@@ -473,12 +475,12 @@ class AppDatabase extends _$AppDatabase {
 
   /// Tüm hesapların klasörleri — "Tüm Hesaplar" görünümü, hangi klasörlerin
   /// aynı özel kullanıma (gelen/taslak/…) denk geldiğini bununla bulur.
-  Stream<List<MailboxRow>> watchAllMailboxes() => (select(mailboxes)
-        ..orderBy([
-          (m) => OrderingTerm(expression: m.accountId),
-          (m) => OrderingTerm(expression: m.sortOrder),
-        ]))
-      .watch();
+  Stream<List<MailboxRow>> watchAllMailboxes() =>
+      (select(mailboxes)..orderBy([
+            (m) => OrderingTerm(expression: m.accountId),
+            (m) => OrderingTerm(expression: m.sortOrder),
+          ]))
+          .watch();
 
   Future<List<MailboxRow>> mailboxesOf(int accountId) =>
       (select(mailboxes)
@@ -606,10 +608,9 @@ class AppDatabase extends _$AppDatabase {
   /// klasörün kendisi artık yok, geride bırakılacak bir sunucu karşılığı
   /// da yok.
   Future<void> deleteMailboxWithMessages(int mailboxId) async {
-    final ids =
-        await (select(
-          messages,
-        )..where((m) => m.mailboxId.equals(mailboxId))).map((m) => m.id).get();
+    final ids = await (select(
+      messages,
+    )..where((m) => m.mailboxId.equals(mailboxId))).map((m) => m.id).get();
     final files = await _downloadedAttachmentPaths(ids);
     await transaction(() async {
       if (ids.isNotEmpty) {
@@ -720,12 +721,17 @@ class AppDatabase extends _$AppDatabase {
                   m.accountId.equals(accountId) &
                   m.mailboxId.equals(mailboxId) &
                   m.isDeleted.equals(false) &
-                  (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
+                  (excludeDrafts
+                      ? m.isDraft.equals(false)
+                      : const Constant(true)),
             )
             ..orderBy([
               (m) => orderById
                   ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
-                  : OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+                  : OrderingTerm(
+                      expression: m.dateUtc,
+                      mode: OrderingMode.desc,
+                    ),
             ])
             ..limit(limit))
           .watch();
@@ -744,7 +750,9 @@ class AppDatabase extends _$AppDatabase {
               (m) =>
                   m.mailboxId.isIn(mailboxIds) &
                   m.isDeleted.equals(false) &
-                  (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
+                  (excludeDrafts
+                      ? m.isDraft.equals(false)
+                      : const Constant(true)),
             )
             ..orderBy([
               (m) =>
@@ -883,7 +891,7 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.mailboxId.equals(mailboxId) &
                 messages.isSeen.equals(false) &
-                    messages.isDraft.equals(false) &
+                messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
@@ -898,7 +906,7 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.mailboxId.isIn(mailboxIds) &
                 messages.isSeen.equals(false) &
-                    messages.isDraft.equals(false) &
+                messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
@@ -914,7 +922,8 @@ class AppDatabase extends _$AppDatabase {
           ..addColumns([count])
           ..where(
             messages.isSeen.equals(false) &
-                    messages.isDraft.equals(false) & messages.isDeleted.equals(false),
+                messages.isDraft.equals(false) &
+                messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
         .watchSingle();
@@ -1093,11 +1102,9 @@ class AppDatabase extends _$AppDatabase {
     final result = <int, MessageRow>{};
     for (var i = 0; i < all.length; i += _sqlChunk) {
       final chunk = all.sublist(i, min(i + _sqlChunk, all.length));
-      final rows =
-          await (select(messages)..where(
-                (m) => m.mailboxId.equals(mailboxId) & m.uid.isIn(chunk),
-              ))
-              .get();
+      final rows = await (select(
+        messages,
+      )..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isIn(chunk))).get();
       for (final row in rows) {
         final uid = row.uid;
         if (uid != null) result[uid] = row;
@@ -1228,7 +1235,10 @@ class AppDatabase extends _$AppDatabase {
     return transaction(() async {
       final candidates =
           await (select(messageBodies).join([
-                innerJoin(messages, messages.id.equalsExp(messageBodies.messageId)),
+                innerJoin(
+                  messages,
+                  messages.id.equalsExp(messageBodies.messageId),
+                ),
               ])..where(
                 messageBodies.fetchedAt.isSmallerThanValue(cutoff) &
                     messages.uid.isNotNull() &
@@ -1291,10 +1301,9 @@ class AppDatabase extends _$AppDatabase {
   /// bağlı dizinleri silmemek için kullanır (bkz.
   /// `ShareIntakeService.sweep`).
   Future<Set<String>> outgoingAttachmentPaths() async {
-    final rows =
-        await (select(attachments)
-              ..where((a) => a.isOutgoing.equals(true) & a.localPath.isNotNull()))
-            .get();
+    final rows = await (select(
+      attachments,
+    )..where((a) => a.isOutgoing.equals(true) & a.localPath.isNotNull())).get();
     return {for (final row in rows) row.localPath!};
   }
 
@@ -1304,21 +1313,21 @@ class AppDatabase extends _$AppDatabase {
   /// olanlar. Bunların dışındakiler sahipsizdir ve süpürülebilir (bkz.
   /// `OutgoingAttachmentStore.sweep`).
   Future<Set<String>> activeOutgoingAttachmentPaths() async {
-    final query = select(attachments).join([
-      innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
-    ])
-      ..where(
-        attachments.isOutgoing.equals(true) &
-            attachments.localPath.isNotNull() &
-            (messages.isDraft.equals(true) |
-                messages.isLocalOnly.equals(true) |
-                messages.uid.isNull() |
-                messages.outboxState.isIn([
-                  OutboxState.queued.index,
-                  OutboxState.sending.index,
-                  OutboxState.failed.index,
-                ])),
-      );
+    final query =
+        select(attachments).join([
+          innerJoin(messages, messages.id.equalsExp(attachments.messageId)),
+        ])..where(
+          attachments.isOutgoing.equals(true) &
+              attachments.localPath.isNotNull() &
+              (messages.isDraft.equals(true) |
+                  messages.isLocalOnly.equals(true) |
+                  messages.uid.isNull() |
+                  messages.outboxState.isIn([
+                    OutboxState.queued.index,
+                    OutboxState.sending.index,
+                    OutboxState.failed.index,
+                  ])),
+        );
     final rows = await query.get();
     return {for (final row in rows) row.read(attachments.localPath)!};
   }
@@ -1374,6 +1383,58 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteLabel(int id) =>
       (delete(labels)..where((l) => l.id.equals(id))).go();
+
+  /// Hesaptaki iletilerin `labelsJson` listesinde [oldName]'i [newName] ile
+  /// değiştirir ([newName] `null` ise listeden çıkarır). İleti satırları
+  /// etiketi ADIYLA tuttuğundan ad değişince/etiket silinince burada da
+  /// güncellenmelidir. Değişen satırların ESKİ değerini döner
+  /// ([restoreMessageLabels] ile geri alınabilsin diye).
+  Future<Map<int, String>> rewriteLabelNames(
+    int accountId,
+    String oldName,
+    String? newName,
+  ) async {
+    final tagged =
+        await (select(messages)..where(
+              (m) =>
+                  m.accountId.equals(accountId) &
+                  m.labelsJson.equals('[]').not(),
+            ))
+            .get();
+    final previous = <int, String>{};
+    for (final message in tagged) {
+      List<String> names;
+      try {
+        final parsed = jsonDecode(message.labelsJson);
+        if (parsed is! List) continue;
+        names = parsed.whereType<String>().toList();
+      } on FormatException {
+        continue;
+      }
+      if (!names.contains(oldName)) continue;
+      final rewritten = <String>[];
+      for (final name in names) {
+        final mapped = name == oldName ? newName : name;
+        if (mapped != null && !rewritten.contains(mapped)) {
+          rewritten.add(mapped);
+        }
+      }
+      previous[message.id] = message.labelsJson;
+      await (update(messages)..where((m) => m.id.equals(message.id))).write(
+        MessagesCompanion(labelsJson: Value(jsonEncode(rewritten))),
+      );
+    }
+    return previous;
+  }
+
+  /// [rewriteLabelNames]'in döndürdüğü eski değerleri geri yazar.
+  Future<void> restoreMessageLabels(Map<int, String> previous) async {
+    for (final entry in previous.entries) {
+      await (update(messages)..where((m) => m.id.equals(entry.key))).write(
+        MessagesCompanion(labelsJson: Value(entry.value)),
+      );
+    }
+  }
 
   Future<LabelRow?> labelById(int id) =>
       (select(labels)..where((l) => l.id.equals(id))).getSingleOrNull();
@@ -1439,13 +1500,17 @@ class AppDatabase extends _$AppDatabase {
       (select(blockedSenders)
             ..where((b) => b.accountId.equals(accountId))
             ..orderBy([
-              (b) => OrderingTerm(expression: b.createdAt, mode: OrderingMode.desc),
+              (b) => OrderingTerm(
+                expression: b.createdAt,
+                mode: OrderingMode.desc,
+              ),
               (b) => OrderingTerm(expression: b.id, mode: OrderingMode.desc),
             ]))
           .watch();
 
-  Future<List<BlockedSenderRow>> blockedSendersOf(int accountId) =>
-      (select(blockedSenders)..where((b) => b.accountId.equals(accountId))).get();
+  Future<List<BlockedSenderRow>> blockedSendersOf(int accountId) => (select(
+    blockedSenders,
+  )..where((b) => b.accountId.equals(accountId))).get();
 
   Future<BlockedSenderRow?> blockedSenderById(int id) =>
       (select(blockedSenders)..where((b) => b.id.equals(id))).getSingleOrNull();
@@ -1500,7 +1565,10 @@ class AppDatabase extends _$AppDatabase {
     // SQLite değişken sınırının çok altında kalmak için gruplanır.
     final list = wanted.toList();
     for (var i = 0; i < list.length; i += 200) {
-      final group = list.sublist(i, i + 200 > list.length ? list.length : i + 200);
+      final group = list.sublist(
+        i,
+        i + 200 > list.length ? list.length : i + 200,
+      );
       out.addAll(
         await (select(messages)..where(
               (m) =>
@@ -1703,9 +1771,7 @@ class AppDatabase extends _$AppDatabase {
 
     for (final row in labelRows) {
       if (row.imapKeyword != null) continue;
-      await (update(
-        labels,
-      )..where((l) => l.id.equals(row.id))).write(
+      await (update(labels)..where((l) => l.id.equals(row.id))).write(
         LabelsCompanion(imapKeyword: Value(labelImapKeyword(row.name))),
       );
     }
@@ -1744,9 +1810,7 @@ class AppDatabase extends _$AppDatabase {
 
       final newJson = jsonEncode(mapped);
       if (newJson == message.labelsJson) continue;
-      await (update(
-        messages,
-      )..where((m) => m.id.equals(message.id))).write(
+      await (update(messages)..where((m) => m.id.equals(message.id))).write(
         MessagesCompanion(labelsJson: Value(newJson)),
       );
     }
@@ -1925,8 +1989,7 @@ class AppDatabase extends _$AppDatabase {
   Future<int> cancelPendingOperations(List<int> ids) {
     if (ids.isEmpty) return Future.value(0);
     return (delete(pendingOperations)..where(
-          (p) =>
-              p.id.isIn(ids) & p.status.equalsValue(PendingOpStatus.pending),
+          (p) => p.id.isIn(ids) & p.status.equalsValue(PendingOpStatus.pending),
         ))
         .go();
   }
@@ -1935,13 +1998,13 @@ class AppDatabase extends _$AppDatabase {
   Future<List<PendingOperationRow>> pendingSendOperationsFor(
     int messageId,
   ) async {
-    final ops = await (select(pendingOperations)
-          ..where(
-            (p) =>
-                p.type.equalsValue(PendingOpType.send) &
-                p.status.equalsValue(PendingOpStatus.pending),
-          ))
-        .get();
+    final ops =
+        await (select(pendingOperations)..where(
+              (p) =>
+                  p.type.equalsValue(PendingOpType.send) &
+                  p.status.equalsValue(PendingOpStatus.pending),
+            ))
+            .get();
 
     final result = <PendingOperationRow>[];
     for (final op in ops) {

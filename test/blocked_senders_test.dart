@@ -163,7 +163,7 @@ void main() {
       expect(await db.blockedSendersOf(accountId), isEmpty);
     });
 
-    test('engeli kaldırmak İstenmeyen\'deki iletileri Gelen Kutusu\'na taşır ve adresi listeden siler', () async {
+    test('engeli kaldırmak adresi listeden siler; İstenmeyen\'deki mevcut iletiler yerinde kalır (web ile aynı)', () async {
       imap.store['INBOX.Junk'] = {
         5: envelope(uid: 5, fromEmail: noisy),
         6: envelope(uid: 6, fromEmail: 'baska@spam.example'),
@@ -176,9 +176,91 @@ void main() {
       await repository.waitForQueue();
 
       expect(await db.blockedSendersOf(accountId), isEmpty);
-      expect(imap.store['INBOX.Junk']!.keys, [6]); // başka göndericiye dokunulmaz
-      expect(imap.store['INBOX']!.values.map((e) => e.from!.email), [noisy]);
+      expect(imap.store['INBOX.Junk']!.keys, unorderedEquals([5, 6]));
+      expect(imap.store['INBOX']?.values ?? const [], isEmpty);
       expect(await blocking.unblock(blocked.row!.id), isFalse);
+    });
+  });
+
+  group('istenmeyen olarak işaretle / istenmeyen değil', () {
+    test('Gelen Kutusu\'ndaki iletiyi İstenmeyen\'e taşır, göndericiyi listeler ve göndericinin diğer iletilerini de götürür', () async {
+      imap.seedInbox([
+        envelope(uid: 1, fromEmail: noisy),
+        envelope(uid: 2, fromEmail: noisy),
+        envelope(uid: 3, fromEmail: 'dost@musteri.com'),
+      ]);
+      await syncBox(inbox);
+      final first = (await db.messagesFromSenders(mailboxId: inbox.id, emails: [noisy])).first;
+
+      expect(await blocking.markSpam([first.id]), isTrue);
+      await repository.waitForQueue();
+
+      expect((await db.blockedSendersOf(accountId)).map((b) => b.email), [noisy]);
+      expect(imap.store['INBOX']!.keys, [3]);
+      expect(imap.store['INBOX.Junk']!.keys, hasLength(2));
+    });
+
+    test('zaten İstenmeyen\'deki iletide yalnızca göndericiyi listeler, iletiyi taşımaz', () async {
+      imap.store['INBOX.Junk'] = {5: envelope(uid: 5, fromEmail: noisy)};
+      await syncBox(junk);
+      final row = (await db.messagesFromSenders(mailboxId: junk.id, emails: [noisy])).single;
+
+      expect(await blocking.markSpam([row.id]), isFalse);
+      await repository.waitForQueue();
+
+      expect((await db.blockedSendersOf(accountId)).map((b) => b.email), [noisy]);
+      expect(imap.store['INBOX.Junk']!.keys, [5]);
+      expect(imap.commandLog.where((c) => c.startsWith('move:')), isEmpty);
+    });
+
+    test('istenmeyen değil: gönderici listeden çıkar, İstenmeyen\'deki ileti Gelen Kutusu\'na döner, başka gönderici kalır', () async {
+      imap.store['INBOX.Junk'] = {
+        5: envelope(uid: 5, fromEmail: noisy),
+        6: envelope(uid: 6, fromEmail: 'baska@spam.example'),
+      };
+      await syncBox(junk);
+      final row = (await db.messagesFromSenders(mailboxId: junk.id, emails: [noisy])).single;
+      await blocking.markSpam([row.id]);
+      await blocking.block(accountId: accountId, email: 'baska@spam.example');
+
+      final result = await blocking.markNotSpam([row.id]);
+      await repository.waitForQueue();
+
+      expect(result.restored, isTrue);
+      expect((await db.blockedSendersOf(accountId)).map((b) => b.email), ['baska@spam.example']);
+      expect(imap.store['INBOX']!.values.map((e) => e.from!.email), [noisy]);
+      expect(imap.store['INBOX.Junk']!.keys, [6]);
+    });
+
+    test('istenmeyen değil: İstenmeyen dışındaki iletide yalnızca gönderici listeden çıkar, ileti yerinde kalır', () async {
+      imap.seedInbox([envelope(uid: 1, fromEmail: noisy)]);
+      await syncBox(inbox);
+      await db.insertBlockedSender(accountId: accountId, email: noisy);
+      final row = (await db.messagesFromSenders(mailboxId: inbox.id, emails: [noisy])).single;
+
+      final result = await blocking.markNotSpam([row.id]);
+
+      expect(result.restored, isFalse);
+      expect(await db.blockedSendersOf(accountId), isEmpty);
+      expect(imap.store['INBOX']!.keys, [1]);
+    });
+
+    test('İstenmeyen\'den çıkarken yalnızca listedeki gönderici sorulur', () async {
+      imap.store['INBOX.Junk'] = {
+        5: envelope(uid: 5, fromEmail: noisy),
+        6: envelope(uid: 6, fromEmail: 'baska@spam.example'),
+      };
+      await syncBox(junk);
+      await db.insertBlockedSender(accountId: accountId, email: noisy);
+      final listed = (await db.messagesFromSenders(mailboxId: junk.id, emails: [noisy])).single;
+      final unlisted = (await db.messagesFromSenders(mailboxId: junk.id, emails: ['baska@spam.example'])).single;
+
+      expect(await blocking.hasListedSenderInJunk([listed.id]), isTrue);
+      expect(await blocking.hasListedSenderInJunk([unlisted.id]), isFalse);
+
+      await blocking.unlistSendersOf([listed.id]);
+      expect(await blocking.hasListedSenderInJunk([listed.id]), isFalse);
+      expect(imap.store['INBOX.Junk']!.keys, unorderedEquals([5, 6])); // ileti yerinde
     });
   });
 }

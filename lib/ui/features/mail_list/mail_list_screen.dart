@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
-import 'package:flutter/services.dart' show HapticFeedback;
+import 'package:flutter/gestures.dart' show HitTestResult;
+import 'package:flutter/rendering.dart' show RenderMetaData, ScrollCacheExtent;
+import 'package:flutter/scheduler.dart' show Ticker;
+import 'package:flutter/services.dart'
+    show HapticFeedback, SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -57,7 +61,8 @@ class _UnreachableBanner extends ConsumerWidget {
     final String message;
     if (isAllAccounts) {
       final emails = [
-        for (final a in ref.watch(allAccountsProvider).value ?? const <AccountRow>[])
+        for (final a
+            in ref.watch(allAccountsProvider).value ?? const <AccountRow>[])
           if (unreachable.containsKey(a.id)) a.email,
       ];
       if (emails.isEmpty) return const SizedBox.shrink();
@@ -157,8 +162,53 @@ class MailListScreen extends ConsumerStatefulWidget {
   ConsumerState<MailListScreen> createState() => _MailListScreenState();
 }
 
-class _MailListScreenState extends ConsumerState<MailListScreen> {
+/// Satırın ekranda hangi iletiye ait olduğunu hit-test ile bulmak için
+/// satırın üzerine konan etiket (bkz. `_SwipeRowState.build`).
+@immutable
+class _MailRowTag {
+  const _MailRowTag(this.id);
+  final int id;
+}
+
+/// Bir satırda uzun basma başladığında listeye "sürükleyerek seç" modunu
+/// başlatması için bildirilir (bkz. `_MailListScreenState._onDragSelectStart`).
+class _DragSelectStartNotification extends Notification {
+  const _DragSelectStartNotification(this.originId);
+
+  /// Uzun basılan (sürüklemenin başladığı) iletinin kimliği.
+  final int originId;
+}
+
+class _MailListScreenState extends ConsumerState<MailListScreen>
+    with SingleTickerProviderStateMixin {
   final ScrollController _scroll = ScrollController();
+
+  // ── Uzun bas + sürükle ile çoklu seçim (Outlook benzeri) ───────────────
+  // Ham işaretçi olayları `Listener` ile izlenir: jest arenasına girmez, bu
+  // yüzden kaydırma ve yana kaydırma (`Dismissible`) davranışları değişmez.
+  // Uzun basma satırın kendi `onLongPress`ı ile algılanır (kazanınca liste
+  // kaydırması zaten iptal olur).
+  //
+  // Seçim "iki yönlü aralık"tır: sürükleme sırasında seçim =
+  // (sürükleme başlamadan önceki seçim) ∪ (başlangıç satırı ile parmağın
+  // altındaki satır arasındaki tüm satırlar). Parmak geri döndükçe aralık
+  // daralır, ileri gittikçe genişler; sürüklemeden ÖNCE seçili olanlara
+  // asla dokunulmaz. Aralık iki uç noktadan hesaplandığı için hızlı
+  // sürüklemede ara satırlar atlanmaz.
+  static const double _edgeZone = 80;
+  static const double _maxAutoScrollSpeed = 1100; // dp/sn
+
+  late final Ticker _autoScroll = createTicker(_onAutoScrollTick);
+  int? _pointer;
+  Offset? _pointerPos;
+  bool _dragSelecting = false;
+  // Sürüklemenin başladığı andaki görünür satır sırası (id → sıra no).
+  List<int> _dragOrder = const [];
+  Map<int, int> _dragIndex = const {};
+  Set<int> _dragBase = const {};
+  int _dragOriginIdx = 0;
+  int _dragLastIdx = 0;
+  Duration _lastTick = Duration.zero;
 
   // Liste en üstteyken "Yeni ileti" FAB'ı genişler (ikon + yazı); aşağı
   // kaydırılınca daralıp sadece ikon kalır (Gmail'deki gibi).
@@ -179,6 +229,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
   @override
   void dispose() {
     _scroll.removeListener(_onScroll);
+    _autoScroll.dispose();
     _scroll.dispose();
     _isAtTop.dispose();
     super.dispose();
@@ -193,6 +244,197 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
   void _onScroll() {
     if (!_scroll.hasClients) return;
     _isAtTop.value = _scroll.position.pixels <= 8;
+  }
+
+  void _onPointerDown(PointerDownEvent e) {
+    if (_pointer != null) return; // yalnızca ilk parmak izlenir
+    _pointer = e.pointer;
+    _pointerPos = e.position;
+  }
+
+  void _onPointerMove(PointerMoveEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointerPos = e.position;
+    if (_dragSelecting) _updateDragSelection(e.position);
+  }
+
+  void _onPointerEnd(PointerEvent e) {
+    if (e.pointer != _pointer) return;
+    _pointer = null;
+    _pointerPos = null;
+    _endDragSelect();
+  }
+
+  bool _onDragSelectStart(_DragSelectStartNotification n) {
+    // Parmak zaten kalktıysa (ör. erişilebilirlik eylemi) mod başlatılmaz.
+    if (_pointer == null || _dragSelecting) return true;
+    final order = _visibleOrder();
+    final origin = order.indexOf(n.originId);
+    if (origin < 0) return true;
+    _dragOrder = order;
+    _dragIndex = {for (var i = 0; i < order.length; i++) order[i]: i};
+    _dragBase = {...ref.read(selectionProvider)};
+    _dragOriginIdx = origin;
+    _dragLastIdx = origin;
+    _dragSelecting = true;
+    _lastTick = Duration.zero;
+    _autoScroll.start();
+    return true;
+  }
+
+  void _endDragSelect() {
+    if (!_dragSelecting) return;
+    _dragSelecting = false;
+    _dragOrder = const [];
+    _dragIndex = const {};
+    _dragBase = const {};
+    _autoScroll.stop();
+  }
+
+  /// Ekranda görünen iletilerin yukarıdan aşağı sırası: önce (açıksa)
+  /// Sabitlenenler bölümü, sonra ana liste.
+  List<int> _visibleOrder() {
+    final ids = <int>[];
+    final items =
+        ref.read(mailListItemsProvider).value ?? const <MailListItem>[];
+    for (final item in items) {
+      if (item is PinnedSectionItem) {
+        final pinned = ref.read(pinnedMessagesProvider).value ?? const [];
+        final expanded =
+            pinned.length <= _PinnedSectionState._collapseThreshold ||
+            ref.read(pinnedSectionExpandedProvider);
+        if (expanded) ids.addAll(pinned.map((m) => m.id));
+      } else if (item is MessageItem) {
+        ids.add(item.message.id);
+      }
+    }
+    return ids;
+  }
+
+  /// Listenin ekrandaki dikdörtgeni (kaydırılabilir alanın kendisi).
+  Rect? _listRect() {
+    if (!_scroll.hasClients) return null;
+    final box = _scroll.positions.last.context.storageContext
+        .findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
+  }
+
+  int? _rowIdAt(Offset global) {
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(
+      result,
+      global,
+      View.of(context).viewId,
+    );
+    for (final entry in result.path) {
+      final target = entry.target;
+      if (target is RenderMetaData) {
+        final tag = target.metaData;
+        if (tag is _MailRowTag) return tag.id;
+      }
+    }
+    return null;
+  }
+
+  /// Parmağın altındaki satıra göre seçimi günceller: başlangıç satırı ile o
+  /// satır arasındaki aralık seçilir, aralığın dışına çıkan satırlar (sürükleme
+  /// öncesinde seçili olmayanlar) seçimden çıkar. Liste dışına taşan konumlar
+  /// liste sınırına sıkıştırılır (parmak üst/alt çubuğun üzerindeyken de en
+  /// uçtaki satır esas alınır).
+  void _updateDragSelection(Offset pos) {
+    final rect = _listRect();
+    if (rect == null) return;
+    final x = pos.dx.clamp(rect.left + 1, rect.right - 1).toDouble();
+    final y = pos.dy.clamp(rect.top + 1, rect.bottom - 1).toDouble();
+    final id = _rowIdAt(Offset(x, y));
+    // Satır olmayan bir yerdeyse (tarih başlığı vb.) son aralık korunur.
+    final idx = id == null ? null : _dragIndex[id];
+    if (idx == null || idx == _dragLastIdx) return;
+    _dragLastIdx = idx;
+
+    final lo = idx < _dragOriginIdx ? idx : _dragOriginIdx;
+    final hi = idx < _dragOriginIdx ? _dragOriginIdx : idx;
+    // Parmağın altındaki satır sona eklenir: sonraki "aralık seç" ondan başlar.
+    final next = {
+      ..._dragBase,
+      for (var i = lo; i <= hi; i++)
+        if (i != idx) _dragOrder[i],
+      _dragOrder[idx],
+    };
+    final current = ref.read(selectionProvider);
+    if (next.length == current.length && next.containsAll(current)) return;
+    ref.read(selectionProvider.notifier).selectAll(next);
+    HapticFeedback.selectionClick();
+  }
+
+  /// Seçim modundayken (ve satır henüz seçili değilken) uzun basış, son
+  /// seçilen iletiyle bu ileti ARASINDAKİ tüm iletileri seçer ("aralık
+  /// seç"). Aksi hâlde (seçim yok, satır zaten seçili, ya da iki uçtan biri
+  /// görünür listede değil) eski davranış korunur: satırın seçimi değişir.
+  void _onRowLongPress(int id) {
+    final notifier = ref.read(selectionProvider.notifier);
+    final selection = ref.read(selectionProvider);
+    if (selection.isEmpty || selection.contains(id)) {
+      notifier.toggle(id);
+      return;
+    }
+    final ids = _visibleOrder();
+    final from = ids.indexOf(selection.last);
+    final to = ids.indexOf(id);
+    if (from < 0 || to < 0) {
+      notifier.toggle(id);
+      return;
+    }
+    final lo = from < to ? from : to;
+    final hi = from < to ? to : from;
+    // Hedef sona eklenir: sonraki aralık seçimi ondan başlar.
+    notifier.selectAll({
+      ...selection,
+      for (final other in ids.sublist(lo, hi + 1))
+        if (other != id) other,
+      id,
+    });
+    HapticFeedback.selectionClick();
+  }
+
+  void _onAutoScrollTick(Duration elapsed) {
+    final dt = ((elapsed - _lastTick).inMicroseconds / 1e6)
+        .clamp(0.0, 0.032)
+        .toDouble();
+    _lastTick = elapsed;
+    final pos = _pointerPos;
+    final rect = _listRect();
+    if (!_dragSelecting || pos == null || rect == null || dt == 0) return;
+
+    final top = rect.top + _edgeZone;
+    final bottom = rect.bottom - _edgeZone;
+    final double speed;
+    if (pos.dy < top) {
+      speed =
+          -_maxAutoScrollSpeed * ((top - pos.dy) / _edgeZone).clamp(0.0, 1.0);
+    } else if (pos.dy > bottom) {
+      speed =
+          _maxAutoScrollSpeed * ((pos.dy - bottom) / _edgeZone).clamp(0.0, 1.0);
+    } else {
+      return;
+    }
+
+    final position = _scroll.positions.last;
+    final target = (position.pixels + speed * dt)
+        .clamp(position.minScrollExtent, position.maxScrollExtent)
+        .toDouble();
+    final delta = target - position.pixels;
+    if (delta == 0) return;
+    position.jumpTo(target);
+    // Yeni yerleşim bu karenin sonunda oluşur; parmağın altındaki satır
+    // kare bittikten sonra yeniden okunur.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_dragSelecting) return;
+      final current = _pointerPos;
+      if (current == null) return;
+      _updateDragSelection(current);
+    });
   }
 
   @override
@@ -211,12 +453,18 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     // izlenir: her eşitleme turu `isSyncing`/`lastSyncAt`'i değiştirir ve tüm
     // `SyncState` izlenseydi ekran (AppBar ve liste dahil) her turda baştan
     // kurulurdu.
-    final isOffline = ref.watch(syncControllerProvider.select((s) => s.isOffline));
-    final syncError = ref.watch(syncControllerProvider.select((s) => s.lastError));
+    final isOffline = ref.watch(
+      syncControllerProvider.select((s) => s.isOffline),
+    );
+    final syncError = ref.watch(
+      syncControllerProvider.select((s) => s.lastError),
+    );
     final isLoadingMore = ref.watch(
       syncControllerProvider.select((s) => s.isLoadingMore),
     );
-    final hasMoreLocal = ref.watch(syncControllerProvider.select((s) => s.hasMore));
+    final hasMoreLocal = ref.watch(
+      syncControllerProvider.select((s) => s.hasMore),
+    );
     final mailbox = ref.watch(currentMailboxProvider);
     final folder = ref.watch(selectedFolderProvider);
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
@@ -398,7 +646,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
     // altta sayfalama kontrolü gösterilmez: ortada hâlâ bir ileti yok.
     final hasMessages = items.any((i) => i is MessageItem);
     final showLoadMore = hasMessages && (hasMore || isLoadingMore);
-    return ListView.builder(
+    final list = ListView.builder(
       key: const PageStorageKey('mail-list'),
       controller: _scroll,
       // Boş olsa da aşağı çekerek yenileme çalışmalı.
@@ -439,11 +687,21 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
             onTap: () => _onRowTap(message),
             onAvatarTap: () =>
                 ref.read(selectionProvider.notifier).toggle(message.id),
-            onLongPress: () =>
-                ref.read(selectionProvider.notifier).toggle(message.id),
+            onLongPress: () => _onRowLongPress(message.id),
           ),
         };
       },
+    );
+    return NotificationListener<_DragSelectStartNotification>(
+      onNotification: _onDragSelectStart,
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: _onPointerDown,
+        onPointerMove: _onPointerMove,
+        onPointerUp: _onPointerEnd,
+        onPointerCancel: _onPointerEnd,
+        child: list,
+      ),
     );
   }
 
@@ -509,7 +767,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen> {
         // Seçim moduna geçişte üst çubuk zıplamasın diye normal moddaki
         // `_InboxAppBar._barHeight` ile aynı yükseklik kullanılır.
         toolbarHeight: _InboxAppBar._barHeight,
-        backgroundColor: t.accentFill,
+        backgroundColor: t.topBar,
         foregroundColor: t.onAccentFill,
         leading: IconButton(
           icon: const Icon(LucideIcons.x),
@@ -593,9 +851,9 @@ class _PushStubsSection extends ConsumerWidget {
                 const SizedBox(width: Space.sm),
                 Text(
                   'Yeni iletiler alınıyor',
-                  style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: t.textTertiary,
-                  ),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelMedium?.copyWith(color: t.textTertiary),
                 ),
               ],
             ),
@@ -632,7 +890,7 @@ class _ComposeFab extends StatelessWidget {
     return Tooltip(
       message: 'Yeni ileti',
       child: Material(
-        color: t.accentFill,
+        color: t.topBar,
         elevation: 3,
         shape: const StadiumBorder(),
         clipBehavior: Clip.antiAlias,
@@ -833,26 +1091,17 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 
     switch (effective) {
       case EffectiveSwipe.archive:
-        await archiveMessages(
-          context,
-          ref,
-          [id],
-          bottomInset: _ComposeFab.footprint,
-        );
+        await archiveMessages(context, ref, [
+          id,
+        ], bottomInset: _ComposeFab.footprint);
       case EffectiveSwipe.moveToInbox:
-        await restoreMessagesToInbox(
-          context,
-          ref,
-          [id],
-          bottomInset: _ComposeFab.footprint,
-        );
+        await restoreMessagesToInbox(context, ref, [
+          id,
+        ], bottomInset: _ComposeFab.footprint);
       case EffectiveSwipe.delete:
-        await deleteMessagesWithUndo(
-          context,
-          ref,
-          [id],
-          bottomInset: _ComposeFab.footprint,
-        );
+        await deleteMessagesWithUndo(context, ref, [
+          id,
+        ], bottomInset: _ComposeFab.footprint);
       default:
         break;
     }
@@ -895,7 +1144,8 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 
     final SpecialUse? folder;
     if (widget.useOwnFolder) {
-      final boxes = ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
+      final boxes =
+          ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
       folder = boxes
           .where((b) => b.id == widget.message.mailboxId)
           .firstOrNull
@@ -917,49 +1167,52 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
 
     Widget pane(SwipeStyle? style, Alignment alignment) => style == null
         ? const SizedBox.shrink()
-        : _SwipeBackground(
-            style: style,
-            alignment: alignment,
-            armed: _armed,
-          );
+        : _SwipeBackground(style: style, alignment: alignment, armed: _armed);
     // Sağa çekince eylem alanı SOLDAN açılır (ve tersi).
     final rightPane = pane(rightStyle, Alignment.centerLeft);
     final leftPane = pane(leftStyle, Alignment.centerRight);
 
     final message = widget.message;
-    return BoundedDismissible(
-      key: ValueKey('swipe-${message.id}'),
-      direction: direction,
-      dismissThresholds: {
-        rightDirection: _threshold,
-        leftDirection: _threshold,
-      },
-      resizeDuration: context.motion(Motion.slow),
-      movementDuration: context.motion(Motion.base),
-      // `background` startToEnd, `secondaryBackground` endToStart içindir.
-      background: ltr ? rightPane : leftPane,
-      secondaryBackground: ltr ? leftPane : rightPane,
-      onUpdate: _onUpdate,
-      confirmDismiss: (dir) => _confirm(
-        dir == rightDirection ? rightEffective : leftEffective,
-      ),
-      onDismissed: (dir) => dir == rightDirection
-          ? _onDismissed(rightSelected, rightEffective)
-          : _onDismissed(leftSelected, leftEffective),
-      child: MailRow(
-        message: message,
-        labels: widget.labels,
-        isSelected: isSelected,
-        isSentFolder: widget.isSentFolder,
-        account: widget.account,
-        onTap: widget.onTap,
-        onAvatarTap: widget.onAvatarTap,
-        onLongPress: widget.onLongPress,
-        onUnpin: () =>
-            ref.read(mailRepositoryProvider).setFlagged([message.id], false),
-        onRemoveLabel: (name) => ref
-            .read(mailRepositoryProvider)
-            .setLabel(messageIds: [message.id], labelName: name, add: false),
+    return MetaData(
+      metaData: _MailRowTag(message.id),
+      behavior: HitTestBehavior.translucent,
+      child: BoundedDismissible(
+        key: ValueKey('swipe-${message.id}'),
+        direction: direction,
+        dismissThresholds: {
+          rightDirection: _threshold,
+          leftDirection: _threshold,
+        },
+        resizeDuration: context.motion(Motion.slow),
+        movementDuration: context.motion(Motion.base),
+        // `background` startToEnd, `secondaryBackground` endToStart içindir.
+        background: ltr ? rightPane : leftPane,
+        secondaryBackground: ltr ? leftPane : rightPane,
+        onUpdate: _onUpdate,
+        confirmDismiss: (dir) =>
+            _confirm(dir == rightDirection ? rightEffective : leftEffective),
+        onDismissed: (dir) => dir == rightDirection
+            ? _onDismissed(rightSelected, rightEffective)
+            : _onDismissed(leftSelected, leftEffective),
+        child: MailRow(
+          message: message,
+          labels: widget.labels,
+          isSelected: isSelected,
+          isSentFolder: widget.isSentFolder,
+          account: widget.account,
+          onTap: widget.onTap,
+          onAvatarTap: widget.onAvatarTap,
+          onLongPress: () {
+            widget.onLongPress();
+            // Parmak basılı kalıp sürüklenirse liste satırları seçmeye devam eder.
+            _DragSelectStartNotification(message.id).dispatch(context);
+          },
+          onUnpin: () =>
+              ref.read(mailRepositoryProvider).setFlagged([message.id], false),
+          onRemoveLabel: (name) => ref
+              .read(mailRepositoryProvider)
+              .setLabel(messageIds: [message.id], labelName: name, add: false),
+        ),
       ),
     );
   }
@@ -1058,9 +1311,8 @@ class _PinnedSectionState extends ConsumerState<_PinnedSection> {
           // Yalnızca eşiği aşan sayıda ileti varken daraltılabilir olur.
           isCollapsible
               ? InkWell(
-                  onTap: () => ref
-                      .read(pinnedSectionExpandedProvider.notifier)
-                      .toggle(),
+                  onTap: () =>
+                      ref.read(pinnedSectionExpandedProvider.notifier).toggle(),
                   child: SectionHeader(
                     'SABİTLENENLER (${pinned.length})',
                     trailing: AnimatedRotation(
@@ -1173,8 +1425,9 @@ class _SelectionActionBar extends ConsumerWidget {
     // çalışır (arşivle/sil/okundu/sabitle her hesabı kendi içinde işler).
     final selectionAccounts = {for (final m in selected) m.accountId};
     final mixedAccounts = selectionAccounts.length > 1;
-    final selectionAccountId =
-        selectionAccounts.length == 1 ? selectionAccounts.single : null;
+    final selectionAccountId = selectionAccounts.length == 1
+        ? selectionAccounts.single
+        : null;
 
     void done() => ref.read(selectionProvider.notifier).clear();
 
@@ -1229,25 +1482,39 @@ class _SelectionActionBar extends ConsumerWidget {
               _BarAction(
                 icon: LucideIcons.folderInput,
                 label: 'Taşı',
-                menuChildren: folderMenuItems(ref, (target) async {
-                  await repository.moveToFolder(
-                    messageIds: ids,
-                    targetMailboxId: target.id,
-                  );
-                  done();
-                }, accountId: selectionAccountId, mixedAccounts: mixedAccounts),
+                menuChildren: folderMenuItems(
+                  ref,
+                  (target) async {
+                    if (await moveMessagesToFolder(context, ref, ids, target)) {
+                      done();
+                    }
+                  },
+                  accountId: selectionAccountId,
+                  mixedAccounts: mixedAccounts,
+                ),
               ),
               _BarAction(
                 icon: LucideIcons.tag,
                 label: 'Etiket',
-                menuChildren: labelMenuItems(context, ref, (label) async {
-                  await repository.setLabel(
+                // Etiket eklemek/kaldırmak seçimi bozmaz: kullanıcı art arda
+                // etiketleyebilir; ortak etiketler onay işaretiyle görünür.
+                menuChildren: labelMenuItems(
+                  context,
+                  ref,
+                  (label) => repository.setLabel(
                     messageIds: ids,
                     labelName: label,
                     add: true,
-                  );
-                  done();
-                }, accountId: selectionAccountId, mixedAccounts: mixedAccounts),
+                  ),
+                  accountId: selectionAccountId,
+                  mixedAccounts: mixedAccounts,
+                  applied: _commonLabels(selected),
+                  onRemoved: (label) => repository.setLabel(
+                    messageIds: ids,
+                    labelName: label,
+                    add: false,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1255,6 +1522,22 @@ class _SelectionActionBar extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Seçili iletilerin TÜMÜNDE bulunan etiket adları.
+Set<String> _commonLabels(List<MessageRow> messages) {
+  Set<String>? common;
+  for (final m in messages) {
+    var names = <String>{};
+    try {
+      final decoded = jsonDecode(m.labelsJson);
+      if (decoded is List) names = decoded.whereType<String>().toSet();
+    } on FormatException {
+      // Bozuk etiket verisi menüyü engellemez.
+    }
+    common = common == null ? names : common.intersection(names);
+  }
+  return common ?? const {};
 }
 
 /// Seçim çubuğundaki tek eylem. Ya doğrudan bir eylem yapar ([onTap]) ya da
@@ -1432,10 +1715,7 @@ class _ListSkeletonRow extends StatelessWidget {
           Container(
             width: Dimens.avatarSize,
             height: Dimens.avatarSize,
-            decoration: BoxDecoration(
-              color: t.surface,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: t.surface, shape: BoxShape.circle),
           ),
           const SizedBox(width: Space.md),
           Expanded(
@@ -1556,16 +1836,13 @@ class _FilterMenuButton extends ConsumerWidget {
         ],
       ],
       builder: (context, controller, child) {
-        // Üst çubuğun kendi ana metin rengi (`onAppBar`) — açık temada beyaz,
-        // koyu temada `textPrimary`. Pilin zemini bilerek üst çubuktan
-        // (`appBarBg`) ayrışan `accentStrong` tonundadır, aksi halde referans
-        // görseldeki gibi düğme header'ın içinde görünmez olurdu.
-        final onAppBar =
-            Theme.of(context).appBarTheme.foregroundColor ?? t.textPrimary;
+        // Gelen Kutusu üst çubuğu `rail` (koyu yeşil) zeminli olduğundan
+        // metin beyazdır; pilin zemini şeffaf beyazdır.
+        final onAppBar = t.onAccentFill;
         return Padding(
           padding: const EdgeInsets.only(right: Space.xs),
           child: Material(
-            color: t.accentStrong,
+            color: t.onAccentFill.withValues(alpha: 0.12),
             shape: const StadiumBorder(),
             clipBehavior: Clip.antiAlias,
             child: InkWell(
@@ -1700,7 +1977,10 @@ class _FilterRadioMark extends StatelessWidget {
                 child: Container(
                   width: _dotDiameter,
                   height: _dotDiameter,
-                  decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color,
+                  ),
                 ),
               )
             : const SizedBox.shrink(key: ValueKey(false)),
@@ -1761,129 +2041,123 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
     final theme = Theme.of(context);
     final account = this.account;
 
-    return Material(
-      color: t.appBarBg,
-      elevation: theme.appBarTheme.elevation ?? 0,
-      shadowColor: theme.appBarTheme.shadowColor,
-      surfaceTintColor: theme.appBarTheme.surfaceTintColor,
-      child: SafeArea(
-        bottom: false,
-        child: SizedBox(
-          height: _barHeight,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              // ── Hesap avatarı (drawer tetikleyici) ───────────────────────
-              // Outlook'taki gibi: avatar'a dokunmak hamburger menünün
-              // yerini alır. InkWell doğrudan avatar etrafında — circular
-              // splash, Material inkwell üstüne yazılır.
-              Semantics(
-                button: true,
-                label: 'Klasörleri göster',
-                child: Tooltip(
-                  message: 'Klasörler',
-                  child: InkWell(
-                    onTap: onMenuTap,
-                    borderRadius: BorderRadius.circular(Radii.full),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: Space.md,
-                        vertical: Space.sm,
+    // Üst çubuk yan menü rayıyla aynı koyu yeşil (`rail`) zeminde durur;
+    // metin/ikonlar beyaz, durum çubuğu ikonları açık renklidir.
+    final ink = t.onAccentFill;
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.light.copyWith(
+        statusBarColor: Colors.transparent,
+      ),
+      child: Material(
+        color: t.topBar,
+        elevation: theme.appBarTheme.elevation ?? 0,
+        shadowColor: theme.appBarTheme.shadowColor,
+        surfaceTintColor: theme.appBarTheme.surfaceTintColor,
+        child: SafeArea(
+          bottom: false,
+          child: SizedBox(
+            height: _barHeight,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // ── Hesap avatarı (drawer tetikleyici) ───────────────────────
+                // Outlook'taki gibi: avatar'a dokunmak hamburger menünün
+                // yerini alır. InkWell doğrudan avatar etrafında — circular
+                // splash, Material inkwell üstüne yazılır.
+                Semantics(
+                  button: true,
+                  label: 'Klasörleri göster',
+                  child: Tooltip(
+                    message: 'Klasörler',
+                    child: InkWell(
+                      onTap: onMenuTap,
+                      borderRadius: BorderRadius.circular(Radii.full),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: Space.md,
+                          vertical: Space.sm,
+                        ),
+                        child: isAllAccounts
+                            ? Container(
+                                width: _avatarSize,
+                                height: _avatarSize,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: t.onAccentFill.withValues(alpha: 0.22),
+                                ),
+                                child: ImageIcon(
+                                  const AssetImage('assets/icons/home.png'),
+                                  size: IconSize.lg,
+                                  color: ink,
+                                ),
+                              )
+                            : account != null
+                            ? KaydetAvatar(
+                                name: account.displayName,
+                                email: account.email,
+                                size: _avatarSize,
+                              )
+                            // Hesap yüklenmemişse sade bir yer tutucu ikon.
+                            : Icon(
+                                LucideIcons.menu,
+                                size: _avatarSize,
+                                color: ink,
+                              ),
                       ),
-                      child: isAllAccounts
-                          ? Container(
-                              width: _avatarSize,
-                              height: _avatarSize,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: t.onAccentFill.withValues(alpha: 0.22),
-                              ),
-                              child: ImageIcon(
-                                const AssetImage('assets/icons/home.png'),
-                                size: IconSize.lg,
-                                color:
-                                    theme.appBarTheme.iconTheme?.color ??
-                                    theme.appBarTheme.foregroundColor ??
-                                    t.onAccentFill,
-                              ),
-                            )
-                          : account != null
-                          ? KaydetAvatar(
-                              name: account.displayName,
-                              email: account.email,
-                              size: _avatarSize,
-                            )
-                          // Hesap yüklenmemişse sade bir yer tutucu ikon.
-                          : Icon(
-                              LucideIcons.menu,
-                              size: _avatarSize,
-                              color:
-                                  theme.appBarTheme.iconTheme?.color ??
-                                  theme.appBarTheme.foregroundColor ??
-                                  t.textPrimary,
-                            ),
                     ),
                   ),
                 ),
-              ),
 
-              // ── Başlık + email adresi ─────────────────────────────────
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppText.titleMedium.copyWith(
-                        fontSize: 17 * AppText.scale,
-                        fontWeight: FontWeight.w700,
-                        color:
-                            theme.appBarTheme.titleTextStyle?.color ??
-                            t.textPrimary,
-                      ),
-                    ),
-                    if (isAllAccounts || account != null)
+                // ── Başlık + email adresi ─────────────────────────────────
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
                       Text(
-                        isAllAccounts ? 'Tüm Hesaplar' : account!.email,
+                        title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: AppText.bodyMedium.copyWith(
-                          fontSize: 13 * AppText.scale,
-                          fontWeight: FontWeight.w500,
-                          // Üst çubuğun kendi ana metin rengi (`onAppBar`)
-                          // hafif saydamlaştırılır — başlıkla aynı beyaz
-                          // yerine ikincil bir hiyerarşi kalsın diye.
-                          color:
-                              (theme.appBarTheme.titleTextStyle?.color ??
-                                      t.textSecondary)
-                                  .withValues(alpha: 0.82),
+                        style: AppText.titleMedium.copyWith(
+                          fontSize: 17 * AppText.scale,
+                          fontWeight: FontWeight.w700,
+                          color: ink,
                         ),
                       ),
-                  ],
+                      if (isAllAccounts || account != null)
+                        Text(
+                          isAllAccounts ? 'Tüm Hesaplar' : account!.email,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: AppText.bodyMedium.copyWith(
+                            fontSize: 13 * AppText.scale,
+                            fontWeight: FontWeight.w500,
+                            // Başlıktan ayrışan ikincil/üçüncül metin tonu.
+                            color: ink.withValues(alpha: 0.64),
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
-              ),
 
-              // ── Arama butonu ──────────────────────────────────────────
-              IconButton(
-                icon: const Icon(LucideIcons.search),
-                tooltip: 'Ara',
-                color:
-                    theme.appBarTheme.actionsIconTheme?.color ??
-                    theme.appBarTheme.iconTheme?.color ??
-                    theme.appBarTheme.foregroundColor ??
-                    t.textPrimary,
-                onPressed: onSearchTap,
-              ),
+                // ── Arama butonu ──────────────────────────────────────────
+                IconButton(
+                  icon: const Icon(LucideIcons.search),
+                  tooltip: 'Ara',
+                  style: IconButton.styleFrom(
+                    backgroundColor: ink.withValues(alpha: 0.12),
+                  ),
+                  color: ink,
+                  onPressed: onSearchTap,
+                ),
 
-              // ── Filtre butonu ─────────────────────────────────────────
-              filterButton,
+                // ── Filtre butonu ─────────────────────────────────────────
+                filterButton,
 
-              const SizedBox(width: Space.xs),
-            ],
+                const SizedBox(width: Space.xs),
+              ],
+            ),
           ),
         ),
       ),

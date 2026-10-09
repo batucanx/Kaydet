@@ -48,98 +48,13 @@ class TranslationRepository {
   final TranslationApi? _api;
   final Future<String> Function() _userId;
 
-  /// Kaynak dil örneğinin en çok uzunluğu (kod birimi). Sunucu da kırpar;
-  /// algılama isteği de kota harcadığından kısa tutulur.
-  static const detectSampleChars = 400;
-
-  /// İletinin kaynak dilini döndürür (`en`, `de`…); metin yoksa `Ok(null)`.
-  ///
-  /// Önce yerel önbellek (aynı ileti bir daha algılanmaz, çevrimdışı da
-  /// çalışır), yoksa sunucu. Hata durumunda arayüz düğmeyi yine gösterir; bu
-  /// yüzden hata bilgilendirme olarak kullanıcıya iletilmez.
-  Future<Result<String?>> detectLanguage({
-    required int messageId,
-    required String subject,
-    required String? html,
-    required String? plainText,
-  }) async {
-    try {
-      final cached = await _db.getMessageLanguage(messageId);
-      if (cached != null) return Ok(cached);
-    } catch (e) {
-      return Err(StorageFailure(detail: '$e'));
-    }
-
-    final sample = _sample(subject: subject, html: html, plainText: plainText);
-    if (sample.isEmpty) return const Ok(null);
-
-    final api = _api;
-    if (api == null) {
-      return const Err(
-        TranslationUnavailableFailure(detail: 'sunucu yapılandırılmamış'),
-      );
-    }
-    final String userId;
-    try {
-      userId = await _userId();
-    } catch (e) {
-      return Err(TranslationUnavailableFailure(detail: '$e'));
-    }
-    final result = await api.detectLanguage(userId: userId, sample: sample);
-    final detection = result.valueOrNull;
-    if (detection == null) {
-      return Err(result.failureOrNull ?? const TranslationUnavailableFailure());
-    }
-    final language = detection.language;
-    if (language != null) {
-      try {
-        await _db.saveMessageLanguage(messageId, language);
-      } catch (_) {
-        // Yazılamadıysa bir sonraki açılışta yeniden algılanır.
-      }
-    }
-    return Ok(language);
-  }
-
-  /// Algılama örneği: gövdenin ilk metin parçaları (etiketsiz); gövde yoksa
-  /// konu. Harf içermiyorsa boş.
-  String _sample({
-    required String subject,
-    required String? html,
-    required String? plainText,
-  }) {
-    final List<String> segments;
-    if (html != null && html.trim().isNotEmpty) {
-      segments = TranslatableHtml.parse(html).segments;
-    } else if (plainText != null && plainText.trim().isNotEmpty) {
-      segments = TranslatablePlainText.parse(plainText).segments;
-    } else {
-      segments = const [];
-    }
-    // Kısa satırlar (iletilen iletilerin "Gönderen:/Konu:" başlıkları, imza,
-    // menü, buton metinleri) genelde iletinin asıl dilinde değildir; algılama
-    // örneği gerçek cümlelerden alınır. Hiç uzun metin yoksa hepsi kullanılır.
-    final sentences = segments.where((s) => s.length >= 30).toList();
-    final buffer = StringBuffer();
-    for (final s in sentences.isNotEmpty ? sentences : segments) {
-      if (buffer.length >= detectSampleChars) break;
-      buffer
-        ..write(s)
-        ..write(' ');
-    }
-    var text = buffer.toString().trim();
-    if (text.isEmpty) text = subject.trim();
-    if (!RegExp(r'\p{L}', unicode: true).hasMatch(text)) return '';
-    return text.length > detectSampleChars
-        ? text.substring(0, detectSampleChars)
-        : text;
-  }
-
   Future<Result<MailTranslation>> translate({
     required int messageId,
     required String subject,
     required String? html,
     required String? plainText,
+    // Kaynak dil ASLA önceden algılanmaz/örneklenmez: tüm gövde `auto` ile
+    // gönderilir, böylece karışık dilli iletiler de eksiksiz çevrilir.
     String sourceLanguage = 'auto',
     String targetLanguage = 'tr',
   }) async {

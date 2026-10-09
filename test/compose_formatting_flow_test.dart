@@ -111,7 +111,17 @@ void main() {
     await settle(tester);
     await tester.tap(find.byTooltip('Biçimlendir'));
     await settle(tester);
-    return tester.widget<QuillEditor>(find.byType(QuillEditor)).controller;
+    final controller =
+        tester.widget<QuillEditor>(find.byType(QuillEditor)).controller;
+    // Yeni hesaba otomatik eklenen varsayılan imza ("-- / ad / Kaydet ile gönderildi") burada
+    // sınanan biçimlendirmeyle ilgisizdir; editör boş sayfayla başlar. İmzanın kendisi
+    // `visual_signature_test` ve eşitleme testlerinde sınanır.
+    final length = controller.document.length - 1;
+    if (length > 0) {
+      controller.replaceText(0, length, '', const TextSelection.collapsed(offset: 0));
+      await tester.pump();
+    }
+    return controller;
   }
 
   /// Menü düğmesine dokunup seçeneği seçer — gerçek kullanıcı yolu.
