@@ -617,8 +617,11 @@ class EnoughMailImapService implements ImapService {
         'application/vnd.ms-powerpoint' => '.ppt',
         'text/plain' => '.txt',
         'text/csv' => '.csv',
-        'image/png' => '.png',
-        'image/jpeg' => '.jpg',
+        'message/rfc822' ||
+        'application/eml' ||
+        'application/x-eml' ||
+        'message/global' =>
+          '.eml',
         'application/zip' => '.zip',
         _ => '',
       };
@@ -627,7 +630,20 @@ class EnoughMailImapService implements ImapService {
 
     final attachments = <FetchedAttachment>[];
     try {
-      for (final info in message.findContentInfo()) {
+      final infos = message.findContentInfo();
+      // `enough_mail`, iletilen bir iletinin (message/rfc822) İÇİNDEKİ ekleri
+      // dış parçayla AYNI parça numarasıyla listeler; indirilince hepsi dış
+      // .eml'i getirirdi. Yalnızca dış rfc822 parçası gerçek ektir.
+      final rfc822Ids = {
+        for (final i in infos)
+          if (i.contentType?.mediaType.sub == em.MediaSubtype.messageRfc822)
+            i.fetchId,
+      };
+      for (final info in infos) {
+        if (rfc822Ids.contains(info.fetchId) &&
+            info.contentType?.mediaType.sub != em.MediaSubtype.messageRfc822) {
+          continue;
+        }
         final mime =
             info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(
@@ -647,7 +663,7 @@ class EnoughMailImapService implements ImapService {
       for (final info in message.findContentInfo(
         disposition: em.ContentDisposition.inline,
       )) {
-        if (info.isText) continue;
+        if (info.isText || rfc822Ids.contains(info.fetchId)) continue;
         final mime =
             info.contentType?.mediaType.text ?? 'application/octet-stream';
         attachments.add(

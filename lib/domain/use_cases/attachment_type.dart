@@ -21,6 +21,10 @@ enum AttachmentKind {
   audio,
   video,
 
+  /// E-posta dosyası (.eml, message/rfc822, application/eml) — uygulama içi
+  /// mail okuyucu arayüzüyle önizlenir.
+  email,
+
   /// Yürütülebilir/kurulum dosyası — önizlenemez, sadece open-with/kaydet/
   /// paylaş sunulur (bkz. `ShareAttachmentPolicy.blockedExtensions`).
   executable,
@@ -121,6 +125,12 @@ abstract final class AttachmentType {
     // ekleyebilir. Kararı parametresiz MIME türü üzerinden ver; özellikle
     // uzantısı olmayan Office eklerinin yine de önizlemeye ulaşması gerekir.
     final mime = mimeType.toLowerCase().split(';').first.trim();
+
+    // 1. EML (RFC 822) e-posta dosyası tespiti
+    if (isEml(mimeType: mime, fileName: fileName)) {
+      return AttachmentKind.email;
+    }
+
     // CSV bazı sunucularda `text/csv` gelir ama kullanıcı için bir e-tablodur;
     // uzantı burada MIME'dan önce sorulur.
     if (extension == '.csv') return AttachmentKind.spreadsheet;
@@ -180,11 +190,34 @@ abstract final class AttachmentType {
     return AttachmentKind.unknown;
   }
 
-  /// Kart/önizlemede gösterilen kısa tür etiketi: `PDF`, `XML`, `DOCX`…
+  /// Verilen ek bilgilerinin bir .eml iletisi olup olmadığını belirler.
+  static bool isEml({required String mimeType, required String fileName}) {
+    final ext = p.extension(fileName).toLowerCase().replaceAll('"', '').trim();
+    final mime = mimeType.toLowerCase().replaceAll('"', '').split(';').first.trim();
+    return ext == '.eml' ||
+        ext == '.nws' ||
+        ext == '.msg' ||
+        ext == '.rfc822' ||
+        mime == 'message/rfc822' ||
+        mime == 'application/eml' ||
+        mime == 'application/x-eml' ||
+        mime == 'message/global' ||
+        mime == 'message/news' ||
+        mime == 'text/rfc822-headers';
+  }
+
+  /// Kart/önizlemede gösterilen kısa tür etiketi: `PDF`, `XML`, `DOCX`, `EML`…
   /// Uzantısız dosyada `DOSYA`.
-  static String label(String fileName) {
+  static String label(String fileName, [String? mimeType]) {
     final extension = p.extension(fileName);
-    if (extension.isEmpty) return 'DOSYA';
-    return extension.substring(1).toUpperCase();
+    if (extension.isNotEmpty) {
+      final ext = extension.substring(1).toUpperCase();
+      if (ext == 'EML' || ext == 'NWS' || ext == 'RFC822') return 'EML';
+      return ext;
+    }
+    if (mimeType != null && isEml(mimeType: mimeType, fileName: fileName)) {
+      return 'EML';
+    }
+    return 'DOSYA';
   }
 }

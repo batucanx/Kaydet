@@ -13,12 +13,14 @@ import '../../../app/providers.dart';
 import '../../../core/date_format.dart';
 import '../../../core/result.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/services/eml_parser_service.dart';
 import '../../../domain/use_cases/attachment_type.dart';
 import '../../core/actions/attachment_actions.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import 'docx_viewer.dart';
+import 'eml_preview_widget.dart';
 import 'pdf_preview_widget.dart';
 import 'spreadsheet_viewer.dart';
 
@@ -308,7 +310,10 @@ class _PreviewBody extends StatelessWidget {
         path: path,
         onZoomChanged: onZoomChanged,
       ),
-      AttachmentKind.text => _TextPreview(path: path),
+      AttachmentKind.text => _TextPreview(
+        path: path,
+        attachment: attachment,
+      ),
       AttachmentKind.audio => _AudioPreview(path: path),
       AttachmentKind.video => _VideoPreview(path: path),
       AttachmentKind.document => _buildDocumentPreview(
@@ -317,6 +322,10 @@ class _PreviewBody extends StatelessWidget {
         onZoomChanged,
       ),
       AttachmentKind.spreadsheet => _buildSpreadsheetPreview(path, attachment),
+      AttachmentKind.email => EmlPreviewWidget(
+        path: path,
+        attachment: attachment,
+      ),
       AttachmentKind.presentation ||
       AttachmentKind.archive ||
       AttachmentKind.executable ||
@@ -510,9 +519,10 @@ class _ImagePreview extends StatelessWidget {
 /// `WebView`de RENDER edilmez (bkz. `AttachmentType` belgesi: script çalıştırma
 /// riski).
 class _TextPreview extends StatefulWidget {
-  const _TextPreview({required this.path});
+  const _TextPreview({required this.path, required this.attachment});
 
   final String path;
+  final AttachmentRow attachment;
 
   @override
   State<_TextPreview> createState() => _TextPreviewState();
@@ -554,6 +564,16 @@ class _TextPreviewState extends State<_TextPreview> {
           );
         }
         final data = snapshot.data!;
+
+        // Eğer metin aslında bir EML / RFC 822 e-postası ise, ham başlıkları (Return-Path vb.)
+        // düz metin olarak göstermek yerine doğrudan gerçek EML Önizlemesi olarak render et.
+        if (EmlParserService.looksLikeEmlText(data.content)) {
+          return EmlPreviewWidget(
+            path: widget.path,
+            attachment: widget.attachment,
+          );
+        }
+
         return Column(
           children: [
             if (data.truncated)

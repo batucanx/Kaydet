@@ -89,7 +89,12 @@ class ComposeScreen extends ConsumerStatefulWidget {
     this.initialAttachmentPaths = const [],
     this.initialSubject,
     this.initialBody,
+    this.initialAccountId,
   });
+
+  /// Yeni iletide "Gönderen" olarak önceden seçilecek hesap (ör. toplu iletmede
+  /// seçilen iletilerin hesabı). Verilmezse genel aktif hesap kullanılır.
+  final int? initialAccountId;
 
   /// Var olan taslağı düzenlemek için.
   final int? draftId;
@@ -200,7 +205,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _replyToMessageId = widget.replyToId;
     // `_prefill` taslak/yanıt ise gerçek sahibiyle değiştirecek (aşağı bkz.);
     // yeni bir iletide bu, ilk karede gösterilecek tek değerdir.
-    _fromAccountId = ref.read(accountIdProvider);
+    _fromAccountId = widget.initialAccountId ?? ref.read(accountIdProvider);
     _hasRecipientChips = ValueNotifier<bool>(
       EmailAddress.parseInput(_to.text).any((a) => a.isValid),
     );
@@ -2583,23 +2588,47 @@ class _AttachmentList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final emlCount =
+        paths.where((p) => p.toLowerCase().endsWith('.eml')).length;
     return Container(
       padding: const EdgeInsets.all(Space.lg),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: t.divider)),
       ),
-      child: Wrap(
-        spacing: Space.sm,
-        runSpacing: Space.sm,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          for (final item in pending) _PendingAttachmentCard(name: item.name),
-          for (var i = 0; i < paths.length; i++)
-            _AttachmentCard(
-              path: paths[i],
-              justUploaded: justUploaded.contains(paths[i]),
-              onTap: () => _openPreview(context, i),
-              onRemove: () => onRemove(paths[i]),
+          if (emlCount >= 2) ...[
+            Row(
+              children: [
+                Icon(LucideIcons.mail, size: 14, color: t.accent),
+                const SizedBox(width: Space.xs),
+                Text(
+                  '$emlCount ileti ek olarak iletilecek',
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: t.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+              ],
             ),
+            const SizedBox(height: Space.sm),
+          ],
+          Wrap(
+            spacing: Space.sm,
+            runSpacing: Space.sm,
+            children: [
+              for (final item in pending) _PendingAttachmentCard(name: item.name),
+              for (var i = 0; i < paths.length; i++)
+                _AttachmentCard(
+                  path: paths[i],
+                  justUploaded: justUploaded.contains(paths[i]),
+                  onTap: () => _openPreview(context, i),
+                  onRemove: () => onRemove(paths[i]),
+                ),
+            ],
+          ),
         ],
       ),
     );

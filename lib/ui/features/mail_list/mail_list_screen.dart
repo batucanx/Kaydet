@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show HitTestResult;
 import 'package:flutter/rendering.dart' show RenderMetaData, ScrollCacheExtent;
@@ -25,8 +24,11 @@ import '../../core/widgets/swipe_action_style.dart';
 import '../settings/swipe_settings_screen.dart';
 import '../../../domain/use_cases/swipe_action_resolver.dart';
 import '../../../data/services/app_settings.dart';
+import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../compose/compose_launcher.dart';
+import '../compose/compose_screen.dart' show ComposeMode;
+import '../../../data/services/eml_export_service.dart';
 import '../mail_detail/mail_detail_screen.dart';
 import '../search/search_screen.dart';
 import 'bounded_dismissible.dart';
@@ -1444,6 +1446,64 @@ class _SelectionActionBar extends ConsumerWidget {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _BarAction(
+                icon: LucideIcons.forward,
+                label: 'İlet',
+                onTap: () async {
+                  if (selected.isEmpty) return;
+                  if (selected.length == 1) {
+                    await openCompose(
+                      context,
+                      ref,
+                      replyToId: selected.first.id,
+                      mode: ComposeMode.forward,
+                    );
+                    done();
+                    return;
+                  }
+
+                  // Toplu İletme (>= 2 ileti): Her iletiyi ayrı bir .eml eki olarak hazırla
+                  final overlay = Overlay.of(context, rootOverlay: true);
+                  if (overlay.mounted) {
+                    KaydetNotice.show(
+                      overlay,
+                      message: '${selected.length} ileti ek olarak hazırlanıyor…',
+                    );
+                  }
+
+                  try {
+                    final paths = await EmlExportService.prepareBulkForwardEmls(
+                      messages: selected,
+                      db: ref.read(databaseProvider),
+                      ensureBody: (id) async {
+                        await repository.ensureBody(id);
+                      },
+                    );
+                    if (context.mounted) {
+                      // `replyToId` VERİLMEZ: verilirse yazma ekranı yanıt
+                      // dalına girer ve ekleri/konuyu/gövdeyi hiç uygulamaz.
+                      await openCompose(
+                        context,
+                        ref,
+                        mode: ComposeMode.newMessage,
+                        initialAccountId: selected.first.accountId,
+                        initialSubject: 'İlet: ${selected.length} ileti',
+                        initialBody:
+                            '${selected.length} ileti ek (.eml) olarak iletildi.\n\n',
+                        initialAttachmentPaths: paths,
+                      );
+                      done();
+                    }
+                  } catch (e) {
+                    if (overlay.mounted) {
+                      KaydetNotice.show(
+                        overlay,
+                        message: 'İletiler hazırlanamadı: $e',
+                      );
+                    }
+                  }
+                },
+              ),
+              _BarAction(
                 icon: LucideIcons.archive,
                 label: 'Arşivle',
                 onTap: () async {
@@ -1493,51 +1553,12 @@ class _SelectionActionBar extends ConsumerWidget {
                   mixedAccounts: mixedAccounts,
                 ),
               ),
-              _BarAction(
-                icon: LucideIcons.tag,
-                label: 'Etiket',
-                // Etiket eklemek/kaldırmak seçimi bozmaz: kullanıcı art arda
-                // etiketleyebilir; ortak etiketler onay işaretiyle görünür.
-                menuChildren: labelMenuItems(
-                  context,
-                  ref,
-                  (label) => repository.setLabel(
-                    messageIds: ids,
-                    labelName: label,
-                    add: true,
-                  ),
-                  accountId: selectionAccountId,
-                  mixedAccounts: mixedAccounts,
-                  applied: _commonLabels(selected),
-                  onRemoved: (label) => repository.setLabel(
-                    messageIds: ids,
-                    labelName: label,
-                    add: false,
-                  ),
-                ),
-              ),
             ],
           ),
         ),
       ),
     );
   }
-}
-
-/// Seçili iletilerin TÜMÜNDE bulunan etiket adları.
-Set<String> _commonLabels(List<MessageRow> messages) {
-  Set<String>? common;
-  for (final m in messages) {
-    var names = <String>{};
-    try {
-      final decoded = jsonDecode(m.labelsJson);
-      if (decoded is List) names = decoded.whereType<String>().toSet();
-    } on FormatException {
-      // Bozuk etiket verisi menüyü engellemez.
-    }
-    common = common == null ? names : common.intersection(names);
-  }
-  return common ?? const {};
 }
 
 /// Seçim çubuğundaki tek eylem. Ya doğrudan bir eylem yapar ([onTap]) ya da

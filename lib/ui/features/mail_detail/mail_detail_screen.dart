@@ -1115,14 +1115,18 @@ class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    widget.attachment.fileName,
+                    kind == AttachmentKind.email
+                        ? widget.attachment.fileName.replaceAll(RegExp(r'\.eml$', caseSensitive: false), '')
+                        : widget.attachment.fileName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                   Text(
-                    '${AttachmentType.label(widget.attachment.fileName)} · '
-                    '${formatBytes(widget.attachment.sizeBytes)}',
+                    kind == AttachmentKind.email
+                        ? formatBytes(widget.attachment.sizeBytes)
+                        : '${AttachmentType.label(widget.attachment.fileName)} · '
+                          '${formatBytes(widget.attachment.sizeBytes)}',
                     style: Theme.of(
                       context,
                     ).textTheme.labelSmall?.copyWith(color: t.textTertiary),

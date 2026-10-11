@@ -16,6 +16,7 @@ IconData attachmentIconData(AttachmentKind kind) => switch (kind) {
   AttachmentKind.archive => LucideIcons.fileArchive,
   AttachmentKind.audio => LucideIcons.fileAudio,
   AttachmentKind.video => LucideIcons.fileVideo,
+  AttachmentKind.email => LucideIcons.mail,
   AttachmentKind.executable => LucideIcons.shieldAlert,
   AttachmentKind.unknown => LucideIcons.file,
 };
@@ -111,6 +112,7 @@ class AttachmentTypeIcon extends StatelessWidget {
     AttachmentKind.archive: 10,
     AttachmentKind.audio: 12,
     AttachmentKind.video: 1,
+    AttachmentKind.email: 2,
     AttachmentKind.text: 8,
   };
 

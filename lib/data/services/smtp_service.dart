@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 
 import 'package:enough_mail/enough_mail.dart' as em;
 
@@ -401,11 +402,18 @@ abstract final class MimeBuilder {
           rawName,
           sourcePath: file.path,
         );
-        builder.addBinary(
-          bytes,
-          em.MediaType.guessFromFileName(name),
-          filename: name,
-        );
+        final isEml = name.toLowerCase().endsWith('.eml') ||
+            name.toLowerCase().endsWith('.nws') ||
+            name.toLowerCase().endsWith('.rfc822');
+        if (isEml) {
+          _addEmlAttachment(builder, bytes, name);
+        } else {
+          builder.addBinary(
+            bytes,
+            em.MediaType.guessFromFileName(name),
+            filename: name,
+          );
+        }
       }
 
       final mime = builder.buildMimeMessage();
@@ -419,6 +427,52 @@ abstract final class MimeBuilder {
     } catch (error) {
       return Err(UnknownFailure(detail: 'MIME oluşturulamadı: $error'));
     }
+  }
+
+  /// `.eml` dosyasını iletilen ileti olarak ekler.
+  ///
+  /// Standart biçim (Gmail/Outlook/Thunderbird'ün yaptığı): iç ileti HAM metin
+  /// olarak, `message/rfc822` + 7bit gömülür. RFC 2046 bu türde base64/QP'ye
+  /// izin vermez; üstelik `enough_mail` base64 gövdeli bir rfc822 parçasını
+  /// ayrıştırırken çöker (alıcı tarafta gövde indirilemez). Dosya yalnızca
+  /// ASCII değilse (yabancı kaynaklı 8bit .eml) ya da başlık/gövde ayrımı
+  /// yoksa, bozulmasın diye sıradan ikili ek olarak gönderilir.
+  static void _addEmlAttachment(
+    em.MessageBuilder builder,
+    List<int> bytes,
+    String name,
+  ) {
+    String? text;
+    if (!bytes.any((b) => b > 127 || b == 0)) {
+      final normalized = String.fromCharCodes(bytes)
+          .replaceAll('\r\n', '\n')
+          .replaceAll('\r', '\n')
+          .replaceAll('\n', '\r\n')
+          .trimLeft();
+      // enough_mail iç başlık sonunu (CRLF CRLF) arar; yoksa çöker.
+      if (normalized.contains('\r\n\r\n')) text = normalized;
+    }
+    if (text == null) {
+      builder.addBinary(
+        Uint8List.fromList(bytes),
+        em.MediaType.fromSubtype(em.MediaSubtype.applicationOctetStream),
+        filename: name,
+      );
+      return;
+    }
+    final part = builder.addPart(
+      mimePart: em.MimePart()
+        ..mimeData = em.TextMimeData(
+          text.endsWith('\r\n') ? text : '$text\r\n',
+          containsHeader: false,
+        ),
+      mediaSubtype: em.MediaSubtype.messageRfc822,
+      disposition: em.ContentDispositionHeader.from(
+        em.ContentDisposition.attachment,
+        filename: name,
+      ),
+    );
+    part.setHeader('Content-Transfer-Encoding', '7bit');
   }
 
   static String _domainOf(String email) {
