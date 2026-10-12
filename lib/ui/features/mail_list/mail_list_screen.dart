@@ -1467,6 +1467,7 @@ class _SelectionActionBar extends ConsumerWidget {
                     KaydetNotice.show(
                       overlay,
                       message: '${selected.length} ileti ek olarak hazırlanıyor…',
+                      bottomInset: _ComposeFab.footprint,
                     );
                   }
 
@@ -1488,7 +1489,7 @@ class _SelectionActionBar extends ConsumerWidget {
                         initialAccountId: selected.first.accountId,
                         initialSubject: 'İlet: ${selected.length} ileti',
                         initialBody:
-                            '${selected.length} ileti ek (.eml) olarak iletildi.\n\n',
+                            'İletilen ${selected.length} ileti ek (.eml) olarak ektedir.\n\n',
                         initialAttachmentPaths: paths,
                       );
                       done();
@@ -1498,6 +1499,7 @@ class _SelectionActionBar extends ConsumerWidget {
                       KaydetNotice.show(
                         overlay,
                         message: 'İletiler hazırlanamadı: $e',
+                        bottomInset: _ComposeFab.footprint,
                       );
                     }
                   }
@@ -1507,7 +1509,12 @@ class _SelectionActionBar extends ConsumerWidget {
                 icon: LucideIcons.archive,
                 label: 'Arşivle',
                 onTap: () async {
-                  await archiveMessages(context, ref, ids);
+                  await archiveMessages(
+                    context,
+                    ref,
+                    ids,
+                    bottomInset: _ComposeFab.footprint,
+                  );
                   done();
                 },
               ),
@@ -1535,6 +1542,7 @@ class _SelectionActionBar extends ConsumerWidget {
                     context,
                     ref,
                     ids,
+                    bottomInset: _ComposeFab.footprint,
                   );
                   if (deleted) done();
                 },
@@ -1545,7 +1553,13 @@ class _SelectionActionBar extends ConsumerWidget {
                 menuChildren: folderMenuItems(
                   ref,
                   (target) async {
-                    if (await moveMessagesToFolder(context, ref, ids, target)) {
+                    if (await moveMessagesToFolder(
+                      context,
+                      ref,
+                      ids,
+                      target,
+                      bottomInset: _ComposeFab.footprint,
+                    )) {
                       done();
                     }
                   },

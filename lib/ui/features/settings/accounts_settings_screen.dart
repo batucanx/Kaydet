@@ -173,9 +173,12 @@ class AccountsSettingsScreen extends ConsumerWidget {
         await container.read(accountRepositoryProvider).signOut(target.id);
       } on Object catch (error) {
         if (context.mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('Hesap silinemedi: $error')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text('Hesap silinemedi: $error'),
+            ),
+          );
         }
       }
       return;
@@ -199,7 +202,10 @@ class AccountsSettingsScreen extends ConsumerWidget {
     } on Object catch (error) {
       navigator.pop();
       messenger.showSnackBar(
-        SnackBar(content: Text('Çıkış yapılamadı: $error')),
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text('Çıkış yapılamadı: $error'),
+        ),
       );
       return;
     }

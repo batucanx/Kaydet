@@ -173,13 +173,33 @@ final class QuotaExceededFailure extends AppFailure {
 
 /// Sunucu komutu reddetti.
 final class ServerFailure extends AppFailure {
-  const ServerFailure({super.detail, this.isPermanent = false});
+  const ServerFailure({
+    super.detail,
+    this.isPermanent = false,
+    this.smtpCode,
+  });
 
   /// Kalıcı hata (5xx) ise tekrar denenmez.
   final bool isPermanent;
 
+  /// Sunucunun SMTP yanıt kodu (biliniyorsa). Ham yanıt metni kullanıcıya
+  /// gösterilmez; yalnızca kod, sorunun ne olduğunu anlamaya yeter.
+  final int? smtpCode;
+
   @override
-  String get userMessage => 'Sunucu isteği reddetti.';
+  String get userMessage => smtpCode != null && smtpCode! > 0
+      ? 'Sunucu isteği reddetti (SMTP $smtpCode). $_serverReason'
+      : 'Sunucu isteği reddetti.';
+
+  /// Sunucunun kendi açıklaması (kısaltılmış): 550 gibi kodlar alıcı, ek türü
+  /// ya da ileti ilkesi olabilir; yalnızca metin hangisi olduğunu söyler.
+  String get _serverReason {
+    final text = (detail ?? '')
+        .replaceAll(RegExp(r'^\d{3}\s+'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return text.length > 140 ? '${text.substring(0, 140)}…' : text;
+  }
 }
 
 /// MIME ayrıştırma başarısız — mail ham haliyle gösterilir.

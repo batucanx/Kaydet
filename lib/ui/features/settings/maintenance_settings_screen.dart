@@ -76,7 +76,10 @@ class MaintenanceSettingsScreen extends ConsumerWidget {
         .pruneCachedBodies(keep: Duration.zero);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('$removed ileti içeriği temizlendi.')),
+      SnackBar(
+        duration: const Duration(seconds: 3),
+        content: Text('$removed ileti içeriği temizlendi.'),
+      ),
     );
   }
 

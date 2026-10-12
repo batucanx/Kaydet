@@ -520,7 +520,7 @@ void main() {
       final source = built.valueOrNull!.source;
       // Content-Type: message/rfc822 olmalı (application/octet-stream DEĞİL)
       expect(source, contains('message/rfc822'));
-      expect(source, contains('Content-Disposition: attachment; filename="iletilen_mail.eml"'));
+      expect(source, contains('Content-Disposition: attachment; filename="iletilen_mail"'));
 
       tempDir.deleteSync(recursive: true);
     });

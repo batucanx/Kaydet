@@ -105,7 +105,10 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
     final email = emailController.text.trim();
     if (!EmailAddress.isValidEmail(email)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Geçerli bir e-posta adresi girin.')),
+        const SnackBar(
+          duration: Duration(seconds: 3),
+          content: Text('Geçerli bir e-posta adresi girin.'),
+        ),
       );
       return;
     }

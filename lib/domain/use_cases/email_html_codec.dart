@@ -36,6 +36,10 @@ abstract final class EmailHtmlCodec {
   /// Çıktıdaki her öznitelik doğrulanmıştır; boyutlar 4 seviyeden birine
   /// oturtulur. Sonuç her zaman `\n` ile biterek geçerli bir Quill belgesidir.
   static Delta decode(String html) => _Decoder().run(html);
+
+  /// [decode] gibi, ama zaten ayrıştırılmış (ve çağıranın temizlediği) bir
+  /// `<body>` ağacından okur — büyük gövdeler iki kez ayrıştırılmaz.
+  static Delta decodeBody(dom.Element body) => _Decoder().runBody(body);
 }
 
 /// Dışarıdan gelen Delta'yı (yapıştırma) editöre girmeden önce temizler.
@@ -406,7 +410,7 @@ final class _Encoder {
                 ? 'max-width:${run.imageWidth}px;'
                 : 'max-width:100%;';
         _out.write(
-          '<img src="$src"$widthAttr style="$maxWidth;height:auto;display:inline-block;border:0;outline:none;text-decoration:none;" alt="İmza Görseli" />',
+          '<img src="$src"$widthAttr style="$maxWidth;height:auto;display:inline-block;border:0;outline:none;text-decoration:none;" alt="" />',
         );
         continue;
       }
@@ -646,6 +650,10 @@ final class _Decoder {
 
   Delta run(String source) {
     final body = html_parser.parse(source).body;
+    return body == null ? runBody(null) : runBody(body);
+  }
+
+  Delta runBody(dom.Element? body) {
     if (body != null) _walk(body, const _Ctx());
     _flush();
 

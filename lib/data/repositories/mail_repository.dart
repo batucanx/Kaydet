@@ -627,16 +627,38 @@ class MailRepository {
         } catch (_) {}
       }
 
-      if (length == 0 || isTruncated || isCorruptOffice) {
+      // Eski sürüm iç iletinin satır sonlarını silerek kaydediyordu
+      // ("From: a@xTo: b@x…"): ilk KB'de hiç satır sonu yoksa bozuk sayılır ve
+      // ek sunucudan yeniden alınır.
+      var isCollapsedEml = false;
+      if ((nameLower.endsWith('.eml') || attachment.mimeType.toLowerCase().contains('rfc822')) &&
+          length > 0) {
+        try {
+          final raf = file.openSync(mode: FileMode.read);
+          try {
+            final head = raf.readSync(length < 1024 ? length : 1024);
+            isCollapsedEml = !head.contains(0x0A) && !head.contains(0x0D);
+          } finally {
+            raf.closeSync();
+          }
+        } catch (_) {}
+      }
+
+      if (length == 0 || isTruncated || isCorruptOffice || isCollapsedEml) {
         try {
           file.deleteSync();
         } catch (_) {}
+        await _db.setAttachmentPath(attachmentId, '');
       } else {
         try {
           final rawBytes = await file.readAsBytes();
           final decodedBytes = AttachmentFiles.ensureBinaryDecoded(rawBytes);
           if (decodedBytes.length != rawBytes.length) {
             await file.writeAsBytes(decodedBytes);
+          }
+          if (attachment.sizeBytes == 0 && length > 0) {
+            await (_db.update(_db.attachments)..where((a) => a.id.equals(attachmentId)))
+                .write(AttachmentsCompanion(sizeBytes: Value(length)));
           }
           return Ok(existing);
         } catch (_) {
@@ -661,10 +683,9 @@ class MailRepository {
     );
     if (fetched is Err<Uint8List>) return Err(fetched.failure);
     final data = (fetched as Ok<Uint8List>).value;
-    // BODYSTRUCTURE boyutu bildirmişken boş içerik gelmesi bozuk bir yanıttır;
-    // boş dosyayı "indirildi" diye önbelleğe almak, kullanıcının ekini bir daha
-    // hiç açamamasına yol açardı.
-    if (data.isEmpty && attachment.sizeBytes > 0) {
+    // Boş içerik gelmesi bozuk bir yanıttır; boş dosyayı "indirildi" diye
+    // önbelleğe almak, kullanıcının ekini bir daha hiç açamamasına yol açardı.
+    if (data.isEmpty) {
       return const Err(ServerFailure(detail: 'ek içeriği boş geldi'));
     }
 
@@ -685,9 +706,20 @@ class MailRepository {
       final file = File(
         p.join(folder.path, AttachmentFiles.safeFileName(attachment.fileName)),
       );
-      final decodedData = AttachmentFiles.ensureBinaryDecoded(data);
+      final nameLower = attachment.fileName.toLowerCase();
+      final isEml = nameLower.endsWith('.eml') ||
+          attachment.mimeType.toLowerCase().contains('rfc822') ||
+          attachment.mimeType.toLowerCase().contains('eml');
+      final decodedData = isEml ? data : AttachmentFiles.ensureBinaryDecoded(data);
+      if (decodedData.isEmpty) {
+        return const Err(ServerFailure(detail: 'ek içeriği çözülemedi'));
+      }
       await file.writeAsBytes(decodedData);
       await _db.setAttachmentPath(attachmentId, file.path);
+      if (attachment.sizeBytes == 0 && decodedData.isNotEmpty) {
+        await (_db.update(_db.attachments)..where((a) => a.id.equals(attachmentId)))
+            .write(AttachmentsCompanion(sizeBytes: Value(decodedData.length)));
+      }
       return Ok(file.path);
     } on FileSystemException catch (error) {
       return Err(StorageFailure(detail: error.message));

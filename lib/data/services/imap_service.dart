@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -639,6 +640,28 @@ class EnoughMailImapService implements ImapService {
           if (i.contentType?.mediaType.sub == em.MediaSubtype.messageRfc822)
             i.fetchId,
       };
+
+      int resolveAttachmentSize(em.ContentInfo info) {
+        if (info.size != null && info.size! > 0) {
+          return info.size!;
+        }
+        final part = message.getPart(info.fetchId);
+        if (part != null) {
+          if (part.mimeData is em.BinaryMimeData) {
+            final data = (part.mimeData as em.BinaryMimeData).data;
+            if (data.isNotEmpty) return data.length;
+          } else if (part.mimeData is em.TextMimeData) {
+            final text = (part.mimeData as em.TextMimeData).text;
+            if (text.isNotEmpty) return utf8.encode(text).length;
+          }
+          final binary = part.decodeContentBinary();
+          if (binary != null && binary.isNotEmpty) return binary.length;
+          final text = part.decodeContentText();
+          if (text != null && text.isNotEmpty) return utf8.encode(text).length;
+        }
+        return 0;
+      }
+
       for (final info in infos) {
         if (rfc822Ids.contains(info.fetchId) &&
             info.contentType?.mediaType.sub != em.MediaSubtype.messageRfc822) {
@@ -655,7 +678,7 @@ class EnoughMailImapService implements ImapService {
               fallback: 'dosya',
             ),
             mimeType: mime,
-            sizeBytes: info.size ?? 0,
+            sizeBytes: resolveAttachmentSize(info),
             contentId: info.cid,
           ),
         );
@@ -675,7 +698,7 @@ class EnoughMailImapService implements ImapService {
               fallback: 'gomulu',
             ),
             mimeType: mime,
-            sizeBytes: info.size ?? 0,
+            sizeBytes: resolveAttachmentSize(info),
             contentId: info.cid,
             isInline: true,
           ),
@@ -695,28 +718,145 @@ class EnoughMailImapService implements ImapService {
         final fetchQuery = partId.isNotEmpty
             ? '(BODY.PEEK[$partId.MIME] BODY.PEEK[$partId])'
             : '(BODY.PEEK[])';
-        final result = await _requireClient.uidFetchMessages(
-          sequence,
-          fetchQuery,
-          responseTimeout: _attachmentResponseTimeout,
-        );
+
+        em.FetchImapResult result;
+        try {
+          result = await _requireClient.uidFetchMessages(
+            sequence,
+            fetchQuery,
+            responseTimeout: _attachmentResponseTimeout,
+          );
+        } catch (_) {
+          // Bazı IMAP sunucuları birleşik BODY.PEEK[$partId.MIME] BODY.PEEK[$partId]
+          // sorgusunu desteklemez; doğrudan tekil parça sorgusuna geri düşülür.
+          result = await _requireClient.uidFetchMessages(
+            sequence,
+            partId.isNotEmpty ? '(BODY.PEEK[$partId])' : '(BODY.PEEK[])',
+            responseTimeout: _attachmentResponseTimeout,
+          );
+        }
+
         final message = result.messages.firstOrNull;
         if (message == null) {
           throw const MessageNotFoundException();
         }
+
+        // İlgili parçayı bul
         final part = message.getPart(partId);
+        final mimePart = partId.isNotEmpty ? message.getPart('$partId.MIME') : null;
+
+        // Header'lar $partId.MIME içinde bulunabilir ($partId içinde containsHeader: false olabilir)
+        final fileName = (part?.decodeFileName() ?? mimePart?.decodeFileName() ?? '')
+            .trim()
+            .toLowerCase();
+        final contentType = (part?.getHeaderValue('content-type') ??
+                mimePart?.getHeaderValue('content-type') ??
+                part?.mediaType.text ??
+                '')
+            .trim()
+            .toLowerCase();
+        final encoding = (part?.getHeaderValue('content-transfer-encoding') ??
+                mimePart?.getHeaderValue('content-transfer-encoding') ??
+                '')
+            .trim()
+            .toLowerCase();
+
+        final isEmlOrRfc822 = part?.mediaType.sub == em.MediaSubtype.messageRfc822 ||
+            mimePart?.mediaType.sub == em.MediaSubtype.messageRfc822 ||
+            contentType.contains('rfc822') ||
+            contentType.contains('eml') ||
+            fileName.endsWith('.eml') ||
+            fileName.endsWith('.rfc822') ||
+            fileName.endsWith('.nws');
+        final isBase64 = encoding == 'base64' || encoding == 'b';
+
         Uint8List? data;
+
         if (part != null) {
-          data = part.decodeContentBinary();
+          if (isEmlOrRfc822 && !isBase64) {
+            // EML / RFC 822 ekleri: decodeContentBinary() 8bit/none kodlamada
+            // satır sonlarını sildiği için (replaceAll('\r\n', '')) asla çağrılmamalıdır!
+            // Ham MIME veya Text verisi satır sonları korunarak doğrudan bayt olarak alınır.
+            if (part.mimeData is em.BinaryMimeData) {
+              final raw = (part.mimeData as em.BinaryMimeData).data;
+              if (raw.isNotEmpty) data = raw;
+            } else if (part.mimeData is em.TextMimeData) {
+              final raw = (part.mimeData as em.TextMimeData).text;
+              if (raw.isNotEmpty) data = Uint8List.fromList(utf8.encode(raw));
+            } else {
+              final text = part.decodeContentText();
+              if (text != null && text.isNotEmpty) {
+                data = Uint8List.fromList(utf8.encode(text));
+              }
+            }
+          } else if (part.mimeData is em.TextMimeData && !isBase64) {
+            final raw = (part.mimeData as em.TextMimeData).text;
+            if (raw.isNotEmpty) data = Uint8List.fromList(utf8.encode(raw));
+          } else if (part.mimeData is em.BinaryMimeData && !isBase64) {
+            final raw = (part.mimeData as em.BinaryMimeData).data;
+            if (raw.isNotEmpty) data = raw;
+          }
+
+          data ??= part.decodeContentBinary();
         } else if (message.parts == null || message.parts!.isEmpty) {
           // Çok parçalı olmayan ileti: ek, iletinin kendisidir.
           data = message.decodeContentBinary();
         } else {
-          data = message.decodeContentBinary();
+          // Parça doğrudan bulunamadıysa parts içindeki tekil parçayı veya message'ı dene
+          final candidate = (message.parts?.length == 1 ? message.parts!.first : null);
+          if (candidate != null) {
+            if (isEmlOrRfc822 && !isBase64) {
+              if (candidate.mimeData is em.BinaryMimeData) {
+                data = (candidate.mimeData as em.BinaryMimeData).data;
+              } else if (candidate.mimeData is em.TextMimeData) {
+                data = Uint8List.fromList(utf8.encode((candidate.mimeData as em.TextMimeData).text));
+              }
+            }
+            data ??= candidate.decodeContentBinary();
+          }
+          data ??= message.decodeContentBinary();
         }
-        if (data == null) {
+
+        // Eğer veri hala boş ise, tekil BODY.PEEK[$partId] ile tekrar dene:
+        if ((data == null || data.isEmpty) && partId.isNotEmpty) {
+          try {
+            final fbResult = await _requireClient.uidFetchMessages(
+              sequence,
+              '(BODY.PEEK[$partId])',
+              responseTimeout: _attachmentResponseTimeout,
+            );
+            final fbMsg = fbResult.messages.firstOrNull;
+            if (fbMsg != null) {
+              final fbPart = fbMsg.getPart(partId) ??
+                  (fbMsg.parts?.isNotEmpty == true ? fbMsg.parts!.first : null);
+              if (fbPart != null) {
+                if (isEmlOrRfc822 && !isBase64) {
+                  if (fbPart.mimeData is em.BinaryMimeData) {
+                    final raw = (fbPart.mimeData as em.BinaryMimeData).data;
+                    if (raw.isNotEmpty) data = raw;
+                  } else if (fbPart.mimeData is em.TextMimeData) {
+                    final raw = (fbPart.mimeData as em.TextMimeData).text;
+                    if (raw.isNotEmpty) data = Uint8List.fromList(utf8.encode(raw));
+                  }
+                }
+                data ??= fbPart.decodeContentBinary();
+              } else {
+                data = fbMsg.decodeContentBinary();
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (data == null || data.isEmpty) {
           throw const ImapServiceException('Ek içeriği çözülemedi');
         }
+
+        // EML / RFC 822 eklerinde ikili bayt çözümlemesi (ensureBinaryDecoded) yapılmaz,
+        // çünkü EML dosyası zaten RFC 822 metin/MIME akışıdır.
+        if (isEmlOrRfc822) {
+          return data;
+        }
+
         return AttachmentFiles.ensureBinaryDecoded(data);
       }, timeout: _attachmentResponseTimeout + _outerSlack);
 

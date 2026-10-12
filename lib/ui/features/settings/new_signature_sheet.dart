@@ -194,7 +194,10 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
       if (mounted) {
         setState(() => _isSaving = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('İmza kaydedilirken hata: $e')),
+          SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Text('İmza kaydedilirken hata: $e'),
+          ),
         );
       }
     }

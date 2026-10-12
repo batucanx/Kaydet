@@ -258,7 +258,12 @@ class _LabelsSettingsScreenState extends ConsumerState<LabelsSettingsScreen> {
     setState(() => _busy.remove(label.id));
 
     if (result case Err(:final failure)) {
-      messenger.showSnackBar(SnackBar(content: Text(failure.userMessage)));
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(failure.userMessage),
+        ),
+      );
       return;
     }
     if (ref.read(messageFilterProvider).labelName == label.name) {

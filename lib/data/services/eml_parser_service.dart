@@ -13,9 +13,9 @@ import 'mail_text_decoder.dart';
 /// EML (.eml, RFC 822 / RFC 2822 / MIME) dosyalarını ayrıştıran ve
 /// gerçek e-posta nesnesine (`EmlMessage`) dönüştüren production seviyesinde servis.
 abstract final class EmlParserService {
-  /// RFC 822 başlıklarını tanıyan regex deseni.
+  /// RFC 822 / MIME başlıklarını tanıyan regex deseni.
   static final RegExp _headerLineRegex = RegExp(
-    r'^(?:Return-Path|Received|DKIM-Signature|Authentication-Results|X-[A-Za-z0-9-]+|Message-ID|MIME-Version|From|To|Subject|Date|Content-Type|Reply-To|Cc|Bcc|In-Reply-To|References)\s*:',
+    r'^(?:Return-Path|Delivered-To|Received|Envelope-to|Delivery-date|ARC-[A-Za-z0-9-]+|DKIM-Signature|Authentication-Results|Message-ID|Message-Id|MIME-Version|X-[A-Za-z0-9-]+|From|To|Subject|Date|Content-Type|Content-Transfer-Encoding|Content-Disposition|Content-ID|Content-Id|Reply-To|Cc|Bcc|In-Reply-To|References)\s*:',
     caseSensitive: false,
   );
 
@@ -28,7 +28,8 @@ abstract final class EmlParserService {
         return true;
       }
     }
-    return false;
+    // Başlıklar yapışmış olsa bile kontrol et
+    return _headerLineRegex.hasMatch(text.trim());
   }
 
   /// Verilen bayt dizisinin EML olup olmadığını denetler.
@@ -78,7 +79,8 @@ abstract final class EmlParserService {
     final charset = _detectCharsetFromSample(headerSample);
 
     String rawText;
-    if (charset != null && (charset == 'iso-8859-9' || charset == 'windows-1254')) {
+    if (charset != null &&
+        (charset == 'iso-8859-9' || charset == 'windows-1254')) {
       rawText = MailTextDecoderFallback.decodeWindows1254(bytes);
     } else {
       try {
@@ -97,7 +99,7 @@ abstract final class EmlParserService {
 
   /// Ham metinden EML ayrıştırır.
   static EmlMessage parseText(String rawText) {
-    var cleaned = rawText.trimLeft();
+    var cleaned = rawText.replaceFirst('﻿', '').trimLeft();
     if (cleaned.isEmpty) {
       throw const FormatException('EML dosyası boş.');
     }
@@ -110,36 +112,229 @@ abstract final class EmlParserService {
       }
     }
 
-    // Satır sonlarını RFC 822 uyumlu CRLF (\r\n) biçimine normalize et
-    cleaned = cleaned.replaceAll('\r\n', '\n').replaceAll('\r', '\n').replaceAll('\n', '\r\n');
+    // MIME yapısını, çökmüş başlıkları, yapışmış boundary ve transfer encoding değerlerini onar
+    cleaned = _repairEmlText(cleaned);
 
     em.MimeMessage? message;
     try {
-      message = em.MimeMessage.parseFromText(cleaned);
+      message = em.MimeMessage.parseFromText(cleaned.replaceAll('\n', '\r\n'));
     } catch (_) {
       // enough_mail parse edemezse manual fallback
     }
 
-    if (message != null && _isValidParsedMessage(message)) {
-      return _buildFromMimeMessage(message, cleaned);
+    if (message != null && message.mediaType.sub == em.MediaSubtype.messageRfc822) {
+      final inner = message.decodeContentMessage();
+      if (inner != null) {
+        message = inner;
+      }
     }
 
-    // Manual RFC822 Fallback Parser
+    if (message != null && _isValidParsedMessage(message)) {
+      final domainMsg = _buildFromMimeMessage(message, cleaned);
+      return _sanitizeLeakedHeaders(domainMsg);
+    }
+
+    // Manual RFC822 / MIME Fallback Parser
     return _manualParseRfc822(cleaned);
+  }
+
+  /// Satır sonları silinmiş, boundary'leri veya Content-Transfer-Encoding değerleri
+  /// birbirine yapışmış bozuk EML metinlerini RFC 822 / MIME standartlarına uygun hâle getirir.
+  static String _repairEmlText(String text) {
+    var result = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+
+    // 1. MIME Boundary tanımlarını bul (ör. boundary="tBxHeOogUFzSKxgR3Q")
+    final boundaryMatches = RegExp(
+      r'boundary\s*=\s*"?([^";\r\n]+)"?',
+      caseSensitive: false,
+    ).allMatches(result);
+    final boundaries = boundaryMatches
+        .map((m) => m.group(1)!.trim())
+        .where((b) => b.isNotEmpty)
+        .toSet();
+
+    // 2. Birbirine yapışmış RFC 822 / MIME başlıklarını ("+0300Message-Id:", "Delivered-To: ...Received:") ayır
+    final knownHeaders = RegExp(
+      r'(?<=[^\n-])(?=(?:Return-Path|Delivered-To|Envelope-to|Delivery-date|ARC-[A-Za-z0-9-]+|DKIM-Signature|Authentication-Results|Message-ID|Message-Id|MIME-Version|X-[A-Za-z0-9-]+|From|Reply-To|In-Reply-To|References|Content-Type|Content-Transfer-Encoding|Content-Disposition|Content-ID|Content-Id|Cc|Bcc|To|Subject|Date)\s*:)',
+      caseSensitive: false,
+    );
+    result = result.replaceAll(knownHeaders, '\n');
+
+    // 3. Yapışmış MIME boundary sınırlarını ayır
+    for (final boundary in boundaries) {
+      final bndStart = RegExp('(?<=[^\\n])(?=--${RegExp.escape(boundary)})');
+      result = result.replaceAll(bndStart, '\n');
+      final bndClose = RegExp('(--${RegExp.escape(boundary)}--)(?=[^\\r\\n])');
+      result = result.replaceAllMapped(bndClose, (m) => '${m.group(1)}\n');
+      final bndNormal = RegExp('(--${RegExp.escape(boundary)})(?=[^\\r\\n-])');
+      result = result.replaceAllMapped(bndNormal, (m) => '${m.group(1)}\n');
+    }
+
+    // 4. Content-Transfer-Encoding değerine yapışmış gövde veya boundary'leri temizle:
+    // Örneğin "Content-Transfer-Encoding: 7bitt5--boundary" ->
+    // "Content-Transfer-Encoding: 7bit\n\nt5\n--boundary"
+    // Yatay boşluk [ \t] kullanarak \n üzerinden eşleşmeyi engelle.
+    final cteGlued = RegExp(
+      r'^(Content-Transfer-Encoding:[ \t]*(?:7bit|8bit|binary|quoted-printable|base64))[ \t]*([^\r\n]+)$',
+      caseSensitive: false,
+      multiLine: true,
+    );
+    result = result.replaceAllMapped(cteGlued, (m) {
+      final header = m.group(1)!;
+      final extra = m.group(2)!;
+      if (extra.trim().isEmpty) return header;
+      return '$header\n\n$extra';
+    });
+
+    // 5. Üst başlık bloğundaki satır katlamalarını (folding) düzelt:
+    // Kolon `:` içermeyen continuation satırlarını önceki başlıkla birleştir
+    int headerEnd = -1;
+    if (boundaries.isNotEmpty) {
+      for (final b in boundaries) {
+        final idx = result.indexOf('--$b');
+        if (idx != -1 && (headerEnd == -1 || idx < headerEnd)) {
+          headerEnd = idx;
+        }
+      }
+    }
+    if (headerEnd == -1) {
+      headerEnd = _findHeaderEndPosition(result);
+    }
+
+    if (headerEnd != -1) {
+      final headerSection = result.substring(0, headerEnd);
+      final rest = result.substring(headerEnd);
+
+      final hLines = headerSection.split('\n');
+      final unfoldedLines = <String>[];
+      for (final line in hLines) {
+        if (line.trim().isEmpty) {
+          unfoldedLines.add(line);
+          continue;
+        }
+        final isNewHeader = RegExp(r'^[A-Za-z0-9-]+:\s*').hasMatch(line.trim());
+        if (!isNewHeader && unfoldedLines.isNotEmpty) {
+          unfoldedLines.last = '${unfoldedLines.last} ${line.trim()}';
+        } else {
+          unfoldedLines.add(line);
+        }
+      }
+      result = '${unfoldedLines.join('\n')}$rest';
+    }
+
+    // 6. Satır katlaması nedeniyle iki satıra bölünmüş RFC 2047 encoded-word'leri birleştir
+    result = result.replaceAllMapped(
+      RegExp(r'(=\?[^?\s]+\?[bBqQ]\?[^?\s]*)\n\s*([^?\s]*\?=)'),
+      (m) => '${m.group(1)}${m.group(2)}',
+    );
+
+    // 7. Başlık bloğu ile gövde / ilk boundary arasında mutlaka çift satır sonu (\n\n) olmasını sağla
+    if (boundaries.isNotEmpty) {
+      for (final boundary in boundaries) {
+        final firstBnd = '--$boundary';
+        final bndIdx = result.indexOf(firstBnd);
+        if (bndIdx != -1) {
+          final beforeBnd = result.substring(0, bndIdx);
+          if (!beforeBnd.endsWith('\n\n')) {
+            result = '${beforeBnd.trimRight()}\n\n${result.substring(bndIdx)}';
+          }
+          break;
+        }
+      }
+    } else {
+      final hEnd = _findHeaderEndPosition(result);
+      if (hEnd == -1) {
+        final lines = result.split('\n');
+        var lastHeaderIdx = -1;
+        for (var i = 0; i < lines.length; i++) {
+          final l = lines[i].trim();
+          if (_headerLineRegex.hasMatch(l) ||
+              l.startsWith(' ') ||
+              l.startsWith('\t')) {
+            lastHeaderIdx = i;
+          } else if (l.isNotEmpty) {
+            break;
+          }
+        }
+        if (lastHeaderIdx != -1 && lastHeaderIdx + 1 < lines.length) {
+          final headersPart = lines.sublist(0, lastHeaderIdx + 1).join('\n');
+          final bodyPart = lines.sublist(lastHeaderIdx + 1).join('\n');
+          result = '$headersPart\n\n$bodyPart';
+        }
+      }
+    }
+
+    return result;
   }
 
   static bool _isValidParsedMessage(em.MimeMessage msg) {
     final from = msg.from;
     final subject = msg.decodeSubject();
+    final bodyText = msg.decodeTextPlainPart() ?? msg.decodeContentText();
     // Eğer hem from hem subject yoksa ve tüm metin tek bir düz body gibi algılanmışsa
-    // enough_mail başlıkları gövdeden ayıramamış olabilir.
     if ((from == null || from.isEmpty) && (subject == null || subject.isEmpty)) {
-      final bodyText = msg.decodeTextPlainPart() ?? msg.decodeContentText();
       if (bodyText != null && _headerLineRegex.hasMatch(bodyText.trim())) {
         return false;
       }
     }
+    // Eğer gövdenin başında Return-Path, Received gibi sunucu üstbilgileri varsa ayrıştırma bozulmuştur
+    if (bodyText != null && _startsWithTransportHeaders(bodyText.trim())) {
+      return false;
+    }
     return true;
+  }
+
+  static bool _startsWithTransportHeaders(String text) {
+    final firstLine = text.split('\n').first.trim();
+    return RegExp(
+      r'^(?:Return-Path|Delivered-To|Received|DKIM-Signature|Authentication-Results|MIME-Version|X-[A-Za-z0-9-]+)\s*:',
+      caseSensitive: false,
+    ).hasMatch(firstLine);
+  }
+
+  /// Gövdeye sızmış teknik e-posta üstbilgilerini (Return-Path, Received vb.) temizler.
+  static EmlMessage _sanitizeLeakedHeaders(EmlMessage msg) {
+    var text = msg.textBody;
+    var html = msg.htmlBody;
+    if (text != null && _startsWithTransportHeaders(text.trim())) {
+      text = _stripLeadingHeadersFromBody(text);
+    }
+    if (html != null && _startsWithTransportHeaders(html.trim())) {
+      html = _stripLeadingHeadersFromBody(html);
+    }
+    if (text != msg.textBody || html != msg.htmlBody) {
+      return EmlMessage(
+        headers: msg.headers,
+        body: EmlBody(
+          textPlain: text,
+          textHtml: html,
+          isHtmlPreferred: html != null && html.trim().isNotEmpty,
+        ),
+        attachments: msg.attachments,
+        rawSource: msg.rawSource,
+      );
+    }
+    return msg;
+  }
+
+  static String _stripLeadingHeadersFromBody(String text) {
+    final lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+    var idx = 0;
+    while (idx < lines.length) {
+      final line = lines[idx].trim();
+      if (line.isEmpty) {
+        idx++;
+        break;
+      }
+      if (RegExp(r'^[A-Za-z0-9-]+:\s*').hasMatch(line) ||
+          line.startsWith(' ') ||
+          line.startsWith('\t')) {
+        idx++;
+        continue;
+      }
+      break;
+    }
+    return lines.sublist(idx).join('\n').trim();
   }
 
   static EmlMessage _buildFromMimeMessage(em.MimeMessage message, String rawSource) {
@@ -166,26 +361,23 @@ abstract final class EmlParserService {
     if (fromName.isEmpty) fromName = fromEmail.isNotEmpty ? fromEmail : 'Bilinmeyen Gönderici';
     fromName = _decodeHeaderWord(fromName);
 
-    final toList = message.to?.map((a) {
-          final p = a.personalName?.trim();
-          final name = (p != null && p.isNotEmpty) ? _decodeHeaderWord(p) : a.email;
-          return EmailAddress(email: a.email, name: name);
-        }).toList() ??
-        const <EmailAddress>[];
+    List<EmailAddress> parseAddresses(List<em.MailAddress>? addresses, String? rawHeader) {
+      if (rawHeader != null && rawHeader.isNotEmpty) {
+        final decoded = _decodeHeaderWord(rawHeader);
+        final list = _parseAddressList(decoded);
+        if (list.isNotEmpty) return list;
+      }
+      return addresses?.map((a) {
+            final p = a.personalName?.trim();
+            final name = (p != null && p.isNotEmpty) ? _decodeHeaderWord(p) : a.email;
+            return EmailAddress(email: a.email, name: name);
+          }).toList() ??
+          const <EmailAddress>[];
+    }
 
-    final ccList = message.cc?.map((a) {
-          final p = a.personalName?.trim();
-          final name = (p != null && p.isNotEmpty) ? _decodeHeaderWord(p) : a.email;
-          return EmailAddress(email: a.email, name: name);
-        }).toList() ??
-        const <EmailAddress>[];
-
-    final bccList = message.bcc?.map((a) {
-          final p = a.personalName?.trim();
-          final name = (p != null && p.isNotEmpty) ? _decodeHeaderWord(p) : a.email;
-          return EmailAddress(email: a.email, name: name);
-        }).toList() ??
-        const <EmailAddress>[];
+    final toList = parseAddresses(message.to, message.getHeaderValue('to'));
+    final ccList = parseAddresses(message.cc, message.getHeaderValue('cc'));
+    final bccList = parseAddresses(message.bcc, message.getHeaderValue('bcc'));
 
     final replyToPart = message.replyTo?.isNotEmpty == true ? message.replyTo!.first : null;
     final replyTo = replyToPart != null
@@ -219,12 +411,32 @@ abstract final class EmlParserService {
       } catch (_) {}
     }
 
+    // Eğer hâlâ boşsa, çocuk parçaları özyinelemeli olarak tara
+    if (rawHtml == null && textBody == null && message.parts != null) {
+      void findParts(em.MimePart part) {
+        if (part.mediaType.sub == em.MediaSubtype.textHtml && rawHtml == null) {
+          rawHtml = part.decodeContentText();
+        } else if (part.mediaType.sub == em.MediaSubtype.textPlain && textBody == null) {
+          textBody = part.decodeContentText();
+        }
+        if (part.parts != null) {
+          for (final c in part.parts!) {
+            findParts(c);
+          }
+        }
+      }
+      for (final child in message.parts!) {
+        findParts(child);
+      }
+    }
+
     String? htmlBody;
-    if (rawHtml != null && rawHtml.trim().isNotEmpty) {
+    final validRawHtml = rawHtml;
+    if (validRawHtml != null && validRawHtml.trim().isNotEmpty) {
       try {
-        htmlBody = InlineImageCollector.resolve(message, rawHtml);
+        htmlBody = InlineImageCollector.resolve(message, validRawHtml);
       } catch (_) {
-        htmlBody = rawHtml;
+        htmlBody = validRawHtml;
       }
     }
 
@@ -318,12 +530,30 @@ abstract final class EmlParserService {
           }
         }
       } else {
-        bytes = part.decodeContentBinary() ?? Uint8List(0);
+        final encoding = (part.getHeaderValue('content-transfer-encoding') ?? '')
+            .toLowerCase()
+            .trim();
+        if (part.mimeData is em.TextMimeData &&
+            encoding != 'base64' &&
+            encoding != 'b') {
+          final text = part.decodeContentText();
+          if (text != null && text.isNotEmpty) {
+            bytes = Uint8List.fromList(utf8.encode(text));
+          } else {
+            final raw = (part.mimeData as em.TextMimeData).text;
+            bytes = Uint8List.fromList(utf8.encode(raw));
+          }
+        } else {
+          bytes = part.decodeContentBinary() ?? Uint8List(0);
+        }
       }
 
-      final safeName = _decodeHeaderWord(
+      var safeName = _decodeHeaderWord(
         fileName ?? (isNested ? 'iletilen-mesaj.eml' : 'ek'),
       );
+      if (isNested && !safeName.toLowerCase().endsWith('.eml')) {
+        safeName = '$safeName.eml';
+      }
 
       EmlMessage? nested;
       if (isNested && bytes.isNotEmpty) {
@@ -336,7 +566,9 @@ abstract final class EmlParserService {
       if (!alreadyAdded) {
         result.add(EmlAttachment(
           fileName: safeName,
-          mimeType: mime.isNotEmpty ? mime : (isNested ? 'message/rfc822' : 'application/octet-stream'),
+          mimeType: mime.isNotEmpty
+              ? mime
+              : (isNested ? 'message/rfc822' : 'application/octet-stream'),
           sizeBytes: bytes.length,
           bytes: bytes,
           isInline: isInline && !isExplicitAttachment,
@@ -346,7 +578,6 @@ abstract final class EmlParserService {
         ));
       }
 
-      // Nested EML ise, iç parçaları dış mesajın ek listesine dahil etme!
       if (isNested) return;
 
       if (part.parts != null) {
@@ -380,8 +611,9 @@ abstract final class EmlParserService {
     return null;
   }
 
-  /// Fallback RFC 822 ayrıştırıcı: enough_mail'in gövde ve başlıkları ayıramadığı
-  /// veya bozuk biçimli EML'lerde devreye girer.
+  /// Tam teşekküllü fallback RFC 822 / MIME ayrıştırıcı:
+  /// enough_mail'in gövde ve başlıkları ayıramadığı veya bozuk biçimli EML'lerde devreye girer.
+  /// multipart/alternative yapısını, Content-Transfer-Encoding ve charset'leri bağımsız çözer.
   static EmlMessage _manualParseRfc822(String rawText) {
     final headerEndPos = _findHeaderEndPosition(rawText);
     String headerBlock;
@@ -414,12 +646,12 @@ abstract final class EmlParserService {
 
     final subject = _decodeHeaderWord(headersMap['subject'] ?? '(Konu yok)');
     final fromStr = headersMap['from'] ?? '';
-    final from = _parseSingleAddress(fromStr);
-    final toList = _parseAddressList(headersMap['to'] ?? '');
-    final ccList = _parseAddressList(headersMap['cc'] ?? '');
-    final bccList = _parseAddressList(headersMap['bcc'] ?? '');
+    final from = _parseSingleAddress(_decodeHeaderWord(fromStr));
+    final toList = _parseAddressList(_decodeHeaderWord(headersMap['to'] ?? ''));
+    final ccList = _parseAddressList(_decodeHeaderWord(headersMap['cc'] ?? ''));
+    final bccList = _parseAddressList(_decodeHeaderWord(headersMap['bcc'] ?? ''));
     final replyToStr = headersMap['reply-to'];
-    final replyTo = replyToStr != null ? _parseSingleAddress(replyToStr) : null;
+    final replyTo = replyToStr != null ? _parseSingleAddress(_decodeHeaderWord(replyToStr)) : null;
     final messageId = headersMap['message-id'];
     final inReplyTo = headersMap['in-reply-to'];
     final references = headersMap['references'];
@@ -431,33 +663,162 @@ abstract final class EmlParserService {
     }
 
     final contentType = (headersMap['content-type'] ?? '').toLowerCase();
-    String? htmlBody;
-    String? textBody;
-
-    if (contentType.contains('text/html')) {
-      htmlBody = bodyBlock;
-    } else {
-      textBody = bodyBlock;
+    if (contentType.contains('message/rfc822') &&
+        headersMap['subject'] == null &&
+        headersMap['from'] == null &&
+        bodyBlock.trim().isNotEmpty) {
+      return _manualParseRfc822(bodyBlock);
     }
 
-    return EmlMessage(
-      headers: EmlHeaders(
-        subject: subject,
-        from: from,
-        to: toList,
-        cc: ccList,
-        bcc: bccList,
-        replyTo: replyTo,
-        messageId: messageId,
-        inReplyTo: inReplyTo,
-        references: references,
-        date: date,
-        rawHeaders: headersMap,
-      ),
-      body: EmlBody(textPlain: textBody, textHtml: htmlBody),
-      attachments: const [],
-      rawSource: rawText,
+    String? htmlBody;
+    String? textBody;
+    final attachments = <EmlAttachment>[];
+
+    // Multipart denetimi
+    final boundaryMatch = RegExp(
+      r'boundary\s*=\s*"?([^";\r\n]+)"?',
+      caseSensitive: false,
+    ).firstMatch(contentType);
+
+    if (boundaryMatch != null) {
+      final boundary = boundaryMatch.group(1)!.trim();
+      final parts = bodyBlock.split('--$boundary');
+      for (var partStr in parts) {
+        partStr = partStr.trim();
+        if (partStr.isEmpty || partStr == '--') continue;
+        final partEndPos = _findHeaderEndPosition(partStr);
+        String partHeaders = '';
+        String partBody = partStr;
+        if (partEndPos != -1) {
+          partHeaders = partStr.substring(0, partEndPos);
+          partBody = partStr.substring(partEndPos).replaceFirst(RegExp(r'^\r?\n'), '');
+        }
+        final pMap = <String, String>{};
+        for (final l in partHeaders.split(RegExp(r'\r?\n'))) {
+          final c = l.indexOf(':');
+          if (c != -1) {
+            pMap[l.substring(0, c).trim().toLowerCase()] = l.substring(c + 1).trim();
+          }
+        }
+        final pType = (pMap['content-type'] ?? '').toLowerCase();
+        final pEnc = _extractTransferEncoding(pMap['content-transfer-encoding']);
+        final pCharset = _extractCharset(pType);
+        final decoded = _decodeBodyContent(partBody, pEnc, pCharset);
+
+        final disp = (pMap['content-disposition'] ?? '').toLowerCase();
+        final isAtt = disp.contains('attachment') || pType.contains('message/rfc822');
+
+        if (isAtt) {
+          final fnMatch = RegExp(r'filename\s*=\s*"?([^";\r\n]+)"?', caseSensitive: false)
+              .firstMatch(disp);
+          final fn = _decodeHeaderWord(fnMatch?.group(1)?.trim() ?? 'ek');
+          final bytes = _decodeBodyBytes(partBody, pEnc);
+          EmlMessage? nested;
+          if (pType.contains('message/rfc822') || fn.endsWith('.eml')) {
+            try {
+              nested = parseBytes(bytes);
+            } catch (_) {}
+          }
+          attachments.add(EmlAttachment(
+            fileName: fn,
+            mimeType: pType.isNotEmpty ? pType : 'application/octet-stream',
+            sizeBytes: bytes.length,
+            bytes: bytes,
+            isNestedEml: nested != null,
+            nestedMessage: nested,
+          ));
+        } else if (pType.contains('text/html')) {
+          htmlBody ??= decoded;
+        } else if (pType.contains('text/plain')) {
+          textBody ??= decoded;
+        }
+      }
+    } else {
+      final enc = _extractTransferEncoding(headersMap['content-transfer-encoding']);
+      final charset = _extractCharset(contentType);
+      final decoded = _decodeBodyContent(bodyBlock, enc, charset);
+      if (contentType.contains('text/html')) {
+        htmlBody = decoded;
+      } else {
+        textBody = decoded;
+      }
+    }
+
+    final headers = EmlHeaders(
+      subject: subject,
+      from: from,
+      to: toList,
+      cc: ccList,
+      bcc: bccList,
+      replyTo: replyTo,
+      messageId: messageId,
+      inReplyTo: inReplyTo,
+      references: references,
+      date: date,
+      rawHeaders: headersMap,
     );
+
+    return _sanitizeLeakedHeaders(EmlMessage(
+      headers: headers,
+      body: EmlBody(
+        textPlain: textBody,
+        textHtml: htmlBody,
+        isHtmlPreferred: htmlBody != null && htmlBody.trim().isNotEmpty,
+      ),
+      attachments: attachments,
+      rawSource: rawText,
+    ));
+  }
+
+  /// Content-Transfer-Encoding değerini yalnızca kendi geçerli anahtar sözcüğünden okur.
+  /// Yanına yapışmış boundary veya gövde metnini kesinlikle dahil etmez.
+  static String _extractTransferEncoding(String? cte) {
+    if (cte == null) return '7bit';
+    final m = RegExp(
+      r'\b(7bit|8bit|binary|quoted-printable|base64)\b',
+      caseSensitive: false,
+    ).firstMatch(cte);
+    return m?.group(1)?.toLowerCase() ?? '7bit';
+  }
+
+  static String? _extractCharset(String contentType) {
+    final m = RegExp(
+      r'charset\s*=\s*"?([A-Za-z0-9_-]+)"?',
+      caseSensitive: false,
+    ).firstMatch(contentType);
+    return m?.group(1)?.toLowerCase();
+  }
+
+  static String _decodeBodyContent(String content, String encoding, String? charset) {
+    final clean = content.trim();
+    if (encoding == 'base64') {
+      try {
+        final bytes = base64.decode(base64.normalize(clean.replaceAll(RegExp(r'\s+'), '')));
+        return _decodeBytesWithCharset(bytes, charset);
+      } catch (_) {}
+    } else if (encoding == 'quoted-printable') {
+      try {
+        final bytes = MailTextDecoderFallback.decodeQuotedPrintable(clean);
+        return _decodeBytesWithCharset(bytes, charset);
+      } catch (_) {}
+    } else if (charset != null && charset.isNotEmpty) {
+      return _decodeBytesWithCharset(Uint8List.fromList(clean.codeUnits), charset);
+    }
+    return clean;
+  }
+
+  static Uint8List _decodeBodyBytes(String content, String encoding) {
+    final clean = content.trim();
+    if (encoding == 'base64') {
+      try {
+        return base64.decode(base64.normalize(clean.replaceAll(RegExp(r'\s+'), '')));
+      } catch (_) {}
+    } else if (encoding == 'quoted-printable') {
+      try {
+        return MailTextDecoderFallback.decodeQuotedPrintable(clean);
+      } catch (_) {}
+    }
+    return Uint8List.fromList(utf8.encode(clean));
   }
 
   static int _findHeaderEndPosition(String text) {
@@ -472,33 +833,70 @@ abstract final class EmlParserService {
   }
 
   static EmailAddress _parseSingleAddress(String raw) {
-    if (raw.trim().isEmpty) return const EmailAddress(email: '', name: 'Bilinmeyen Gönderici');
-    final match = RegExp(r'^(?:"?([^"<]+)"?\s*)?<?([^>]+)>?$').firstMatch(raw.trim());
-    if (match != null) {
-      final name = match.group(1)?.trim();
-      final email = match.group(2)?.trim() ?? '';
+    final input = raw.trim();
+    if (input.isEmpty) {
+      return const EmailAddress(email: '', name: 'Bilinmeyen Gönderici');
+    }
+    final angle = RegExp(r'^(.*?)<([^<>]*)>\s*$').firstMatch(input);
+    if (angle != null) {
+      final email = angle.group(2)!.trim();
+      var name = angle.group(1)!.trim();
+      if (name.length >= 2 && name.startsWith('"') && name.endsWith('"')) {
+        name = name.substring(1, name.length - 1).replaceAll(r'\"', '"');
+      }
+      name = _decodeHeaderWord(name.trim());
       return EmailAddress(
         email: email,
-        name: (name != null && name.isNotEmpty)
-            ? _decodeHeaderWord(name)
-            : (email.isNotEmpty ? email : 'Bilinmeyen'),
+        name: name.isNotEmpty ? name : (email.isNotEmpty ? email : 'Bilinmeyen'),
       );
     }
-    return EmailAddress(email: raw.trim(), name: raw.trim());
+    // "a@x.com (Ad Soyad)" veya yalın adres
+    final comment = RegExp(r'^(\S+@\S+?)\s*\((.*)\)$').firstMatch(input);
+    if (comment != null) {
+      final name = _decodeHeaderWord(comment.group(2)!.trim());
+      final email = comment.group(1)!;
+      return EmailAddress(email: email, name: name.isNotEmpty ? name : email);
+    }
+    return EmailAddress(email: input, name: input);
   }
 
   static List<EmailAddress> _parseAddressList(String raw) {
     if (raw.trim().isEmpty) return const [];
-    final parts = raw.split(',');
-    return parts.map(_parseSingleAddress).where((a) => a.email.isNotEmpty).toList();
+    final parts = <String>[];
+    final buf = StringBuffer();
+    var inQuote = false;
+    var inAngle = false;
+    for (final ch in raw.split('')) {
+      if (ch == '"') inQuote = !inQuote;
+      if (!inQuote) {
+        if (ch == '<') inAngle = true;
+        if (ch == '>') inAngle = false;
+      }
+      if ((ch == ',' || ch == ';') && !inQuote && !inAngle) {
+        parts.add(buf.toString());
+        buf.clear();
+      } else {
+        buf.write(ch);
+      }
+    }
+    parts.add(buf.toString());
+    return parts
+        .where((p) => p.trim().isNotEmpty)
+        .map(_parseSingleAddress)
+        .where((a) => a.email.isNotEmpty)
+        .toList();
   }
 
   /// RFC 2047 Encoded-Word (`=?charset?enc?text?=`) kod çözümlemesi yapar.
+  /// Arka arkaya gelen encoded-word'leri birleştirir, soft break ve folding'i çözer.
   static String _decodeHeaderWord(String input) {
     if (!input.contains('=?') || !input.contains('?=')) return input;
 
+    // RFC 2047 kuralı: Ardışık encoded-word'ler arasındaki boşluk atılır
+    var text = input.replaceAll(RegExp(r'(\?=\s+=\?)'), '?==?');
+
     final regex = RegExp(r'=\?([^?]+)\?([bBqQ])\?([^?]+)\?=', caseSensitive: false);
-    return input.replaceAllMapped(regex, (m) {
+    return text.replaceAllMapped(regex, (m) {
       final charset = m.group(1)!.toLowerCase();
       final encoding = m.group(2)!.toUpperCase();
       final encodedData = m.group(3)!;
@@ -506,29 +904,44 @@ abstract final class EmlParserService {
       Uint8List bytes;
       if (encoding == 'B') {
         try {
-          bytes = base64.decode(base64.normalize(encodedData));
+          final clean = encodedData.replaceAll(RegExp(r'\s+'), '');
+          bytes = base64.decode(base64.normalize(clean));
         } catch (_) {
           return m.group(0)!;
         }
       } else if (encoding == 'Q') {
-        final clean = encodedData.replaceAll('_', ' ');
+        final clean = encodedData
+            .replaceAll(RegExp(r'[\r\n]+'), '')
+            .replaceAll('_', ' ');
         bytes = MailTextDecoderFallback.decodeQuotedPrintable(clean);
       } else {
         return m.group(0)!;
       }
 
-      if (charset == 'utf-8' || charset == 'utf8') {
-        return utf8.decode(bytes, allowMalformed: true);
-      } else if (charset == 'iso-8859-9' || charset == 'windows-1254') {
-        return MailTextDecoderFallback.decodeWindows1254(bytes);
-      } else {
-        try {
-          return utf8.decode(bytes);
-        } catch (_) {
-          return latin1.decode(bytes);
-        }
-      }
+      return _decodeBytesWithCharset(bytes, charset);
     });
+  }
+
+  static String _decodeBytesWithCharset(List<int> bytes, String? charset) {
+    final cs = charset?.toLowerCase().trim() ?? 'utf-8';
+    if (cs == 'iso-8859-9' || cs == 'windows-1254' || cs == 'cp1254') {
+      return MailTextDecoderFallback.decodeWindows1254(Uint8List.fromList(bytes));
+    }
+    if (cs == 'iso-8859-1' || cs == 'latin1' || cs == 'latin-1') {
+      return latin1.decode(bytes);
+    }
+    if (cs == 'us-ascii' || cs == 'ascii') {
+      return ascii.decode(bytes, allowInvalid: true);
+    }
+    try {
+      return utf8.decode(bytes, allowMalformed: false);
+    } catch (_) {
+      try {
+        return MailTextDecoderFallback.decodeWindows1254(Uint8List.fromList(bytes));
+      } catch (_) {
+        return latin1.decode(bytes);
+      }
+    }
   }
 
   static String _extractHeaderSample(Uint8List bytes) {
@@ -544,7 +957,6 @@ abstract final class EmlParserService {
   /// Dosya adını sanitize eder, Türkçe karakterleri korur, geçersiz karakterleri temizler.
   static String sanitizeEmlFileName(String subject, {DateTime? date, int index = 1}) {
     var clean = subject.trim();
-    // / \ : * ? " < > | temizle
     clean = clean.replaceAll(RegExp(r'[\\/:*?"<>|]'), ' ').trim();
     clean = clean.replaceAll(RegExp(r'\s+'), ' ');
 
@@ -577,6 +989,17 @@ abstract final class MailTextDecoderFallback {
     while (i < chars.length) {
       final c = chars[i];
       if (c == 0x3D /* = */) {
+        // Yumuşak satır sonu (soft line break): =LF veya =CRLF
+        if (i + 1 < chars.length && chars[i + 1] == 0x0A) {
+          i += 2;
+          continue;
+        }
+        if (i + 2 < chars.length &&
+            chars[i + 1] == 0x0D &&
+            chars[i + 2] == 0x0A) {
+          i += 3;
+          continue;
+        }
         if (i + 2 < chars.length) {
           final h1 = _hexVal(chars[i + 1]);
           final h2 = _hexVal(chars[i + 2]);

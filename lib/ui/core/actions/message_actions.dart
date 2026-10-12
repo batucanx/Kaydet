@@ -20,11 +20,14 @@ import '../widgets/kaydet_widgets.dart';
 /// bağımlı olmasın diye (döngüsel import) bu ortak eylemler `ui/core`'a
 /// taşınmıştır — ikisi de burayı import eder, birbirini değil.
 
-/// Bildirimin ekranda kalma süresi — geri alma penceresinden
-/// (bkz. `mailUndoWindowProvider`, 6 sn) kısa tutulur ki görünen "Geri al"
-/// düğmesi her zaman hâlâ geçerli olsun. Sunucu işlemi pencere boyunca
-/// bekletilir; "Geri al" bu pencerede gerçek sunucu durumunu korur.
-const Duration _undoNoticeDuration = Duration(seconds: 5);
+/// Ana ekranda "Yeni ileti" FAB'ının üstünde güvenle duracak varsayılan alt boşluk
+/// (FAB yüksekliği 56 + kenar boşluğu 16). Böylece bildirimin "Yeni ileti" simgesinin
+/// üstünü kapatması kesin olarak önlenir.
+const double defaultNoticeBottomInset =
+    Dimens.fabSize + kFloatingActionButtonMargin;
+
+/// Bildirimin ekranda kalma süresi — 3 saniye sonra kaybolur.
+const Duration _undoNoticeDuration = Duration(seconds: 3);
 
 /// Arşivle: swipe, seçim çubuğu ve detay ekranının ortak, TEK yolu.
 ///
@@ -35,7 +38,7 @@ Future<void> archiveMessages(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (messageIds.isEmpty) return;
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -60,7 +63,7 @@ Future<void> restoreMessagesToInbox(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (messageIds.isEmpty) return;
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -121,7 +124,7 @@ Future<bool> markMessagesAsSpam(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (messageIds.isEmpty) return false;
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -151,7 +154,7 @@ Future<bool> markMessagesAsNotSpam(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (messageIds.isEmpty) return false;
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -189,11 +192,13 @@ Future<bool> moveMessagesToFolder(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds,
-  MailboxRow target,
-) async {
+  MailboxRow target, {
+  double bottomInset = defaultNoticeBottomInset,
+}) async {
   if (messageIds.isEmpty) return false;
+  final overlay = Overlay.of(context, rootOverlay: true);
   if (target.specialUse == SpecialUse.junk) {
-    await markMessagesAsSpam(context, ref, messageIds);
+    await markMessagesAsSpam(context, ref, messageIds, bottomInset: bottomInset);
     return true;
   }
   if (target.specialUse == SpecialUse.inbox &&
@@ -203,6 +208,20 @@ Future<bool> moveMessagesToFolder(
   await ref
       .read(mailRepositoryProvider)
       .moveToFolder(messageIds: messageIds, targetMailboxId: target.id);
+  if (overlay.mounted) {
+    final one = messageIds.length == 1;
+    final folderName = target.name.trim();
+    final message = folderName.isNotEmpty
+        ? (one
+              ? 'İleti "$folderName" klasörüne taşındı'
+              : '${messageIds.length} ileti "$folderName" klasörüne taşındı')
+        : (one ? 'İleti taşındı' : '${messageIds.length} ileti taşındı');
+    KaydetNotice.show(
+      overlay,
+      message: message,
+      bottomInset: bottomInset,
+    );
+  }
   return true;
 }
 
@@ -212,7 +231,7 @@ Future<bool> deleteWithConfirmation(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (!await confirmDelete(context, ref, messageIds)) return false;
   if (!context.mounted) return false;
@@ -226,7 +245,7 @@ Future<void> deleteMessagesWithUndo(
   BuildContext context,
   WidgetRef ref,
   List<int> messageIds, {
-  double bottomInset = 0,
+  double bottomInset = defaultNoticeBottomInset,
 }) async {
   if (messageIds.isEmpty) return;
   final overlay = Overlay.of(context, rootOverlay: true);
@@ -332,7 +351,11 @@ Future<void> _undo(
 
 /// Sunucuda başarısız olup yerelde geri alınan arşivle/sil/taşı eylemini
 /// kullanıcıya bildirir (bkz. `MailRepository.actionFailures`).
-void showMailActionFailure(OverlayState overlay, MailActionFailure event) {
+void showMailActionFailure(
+  OverlayState overlay,
+  MailActionFailure event, {
+  double bottomInset = defaultNoticeBottomInset,
+}) {
   final plural = event.count > 1;
   final subject = plural ? 'İletiler' : 'İleti';
   final message = switch ((event.kind, event.failure)) {
@@ -344,7 +367,7 @@ void showMailActionFailure(OverlayState overlay, MailActionFailure event) {
     (MailActionKind.delete, _) => '$subject silinemedi. Lütfen tekrar deneyin.',
     (MailActionKind.move, _) => '$subject taşınamadı. Lütfen tekrar deneyin.',
   };
-  KaydetNotice.show(overlay, message: message);
+  KaydetNotice.show(overlay, message: message, bottomInset: bottomInset);
 }
 
 /// Menünün, seçili iletiler tek bir hesaba indirgenemediğinde (Tüm Hesaplar

@@ -216,10 +216,10 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
 
   bool get isDark => brightness == Brightness.dark;
 
-  /// Yan menünün sol rayı — Magic Pattern `rail`: açık temada brand-950
-  /// (#03241F), koyu temada #06070A. Üzerindeki ikon/metin her iki temada
-  /// beyaz tabanlıdır (bkz. `FolderDrawer`).
-  Color get rail => isDark ? const Color(0xFF06070A) : const Color(0xFF03241F);
+  /// Yan menünün sol rayı — Magic Pattern `rail`: açık temada brand-950'nin
+  /// bir tık açığı (#0B3A31), koyu temada #06070A. Üzerindeki ikon/metin her
+  /// iki temada beyaz tabanlıdır (bkz. `FolderDrawer`).
+  Color get rail => isDark ? const Color(0xFF06070A) : const Color(0xFF0B3A31);
 
   /// Üst çubuk (AppBar) zemini: tüm ekranlarda ve "Yeni ileti" düğmesinde
   /// ortak. Açık temada marka tonunun koyu hali (`accentStrong`, rail kadar

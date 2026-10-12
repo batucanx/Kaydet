@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'package:enough_mail/enough_mail.dart' as em;
 
@@ -121,18 +124,14 @@ class EnoughMailSmtpService implements SmtpService {
 
     final (secret, mechanism) = switch (config.credential) {
       PasswordCredential(:final password) => (
-          password,
-          client.serverInfo.supportsAuth(em.AuthMechanism.plain)
-              ? em.AuthMechanism.plain
-              : em.AuthMechanism.login,
-        ),
+        password,
+        client.serverInfo.supportsAuth(em.AuthMechanism.plain)
+            ? em.AuthMechanism.plain
+            : em.AuthMechanism.login,
+      ),
     };
 
-    final auth = await client.authenticate(
-      config.username,
-      secret,
-      mechanism,
-    );
+    final auth = await client.authenticate(config.username, secret, mechanism);
     if (!auth.isOkStatus) {
       throw const _SmtpFailure('Kimlik doğrulama reddedildi', isAuth: true);
     }
@@ -166,10 +165,27 @@ class EnoughMailSmtpService implements SmtpService {
       if (code == 552) {
         return QuotaExceededFailure(detail: '$code $text');
       }
-      return ServerFailure(detail: '$code $text', isPermanent: true);
+      _logRejection(code, msg);
+      return ServerFailure(
+        detail: '$code $text',
+        isPermanent: true,
+        smtpCode: code,
+      );
     }
     // 4xx geçicidir — kuyrukta tekrar denenir.
-    return ServerFailure(detail: '$code $text');
+    _logRejection(code, msg);
+    return ServerFailure(detail: '$code $text', smtpCode: code);
+  }
+
+  /// Yalnızca güvenli üstveri: kod, ek sayısı/boyutu. İleti içeriği yazılmaz.
+  void _logRejection(int code, OutgoingMessage msg) {
+    assert(() {
+      // ignore: avoid_print
+      print(
+        '[SMTP] reddedildi code=$code attachments=${msg.attachmentPaths.length}',
+      );
+      return true;
+    }());
   }
 
   AppFailure _mapError(Object error) {
@@ -197,6 +213,7 @@ class EnoughMailSmtpService implements SmtpService {
       return ServerFailure(
         detail: text,
         isPermanent: (error.response.code ?? 0) >= 500,
+        smtpCode: error.response.code,
       );
     }
     if (error is em.MailException) {
@@ -313,22 +330,23 @@ abstract final class MimeBuilder {
 
       final builder = em.MessageBuilder()
         ..from = [em.MailAddress(message.from.name, message.from.email)]
-        ..to = message.to
-            .map((a) => em.MailAddress(a.name, a.email))
-            .toList()
+        ..to = message.to.map((a) => em.MailAddress(a.name, a.email)).toList()
         ..subject = message.subject
         ..date = DateTime.now();
 
       if (message.cc.isNotEmpty) {
-        builder.cc =
-            message.cc.map((a) => em.MailAddress(a.name, a.email)).toList();
+        builder.cc = message.cc
+            .map((a) => em.MailAddress(a.name, a.email))
+            .toList();
       }
       if (includeBcc && message.bcc.isNotEmpty) {
-        builder.bcc =
-            message.bcc.map((a) => em.MailAddress(a.name, a.email)).toList();
+        builder.bcc = message.bcc
+            .map((a) => em.MailAddress(a.name, a.email))
+            .toList();
       }
 
-      final messageId = message.messageId ??
+      final messageId =
+          message.messageId ??
           em.MessageBuilder.createMessageId(
             _domainOf(message.from.email),
             isChat: false,
@@ -356,11 +374,53 @@ abstract final class MimeBuilder {
       final hasInlines = inlines.isNotEmpty;
 
       // Düz metin + HTML ASLA kardeş (`multipart/mixed`) parçalar olarak
-      // gönderilmez. Ekler (attachmentFiles) VEYA satır içi görseller (inlines)
-      // varsa kök `multipart/mixed` olur, alternatif çifti onun İLK çocuğu,
-      // satır içi görseller Content-ID ile kardeşleri, normal ekler ise
-      // en sondaki kardeşleridir.
-      if (hasAttachments || hasInlines) {
+      // gönderilmez. Standart (Gmail/Outlook'un yaptığı) yapı:
+      //
+      //   multipart/mixed                (yalnızca normal ek varsa)
+      //    ├── multipart/alternative
+      //    │    ├── text/plain
+      //    │    └── multipart/related    (yalnızca satır içi görsel varsa)
+      //    │         ├── text/html
+      //    │         └── image/* + Content-ID + inline
+      //    └── normal ek(ler)
+      //
+      // Görseller HTML'in KARDEŞİ olarak `related` içinde durur: `cid:`
+      // başvurusu RFC 2387'ye göre yalnızca bu kapsamda çözülür; ek olarak
+      // görünmezler.
+      if (hasHtml && hasInlines) {
+        final em.PartBuilder root;
+        if (hasAttachments) {
+          builder.setContentType(
+            em.MediaType.fromSubtype(em.MediaSubtype.multipartMixed),
+          );
+          root = builder.addPart(
+            mediaSubtype: em.MediaSubtype.multipartAlternative,
+          );
+        } else {
+          builder.setContentType(
+            em.MediaType.fromSubtype(em.MediaSubtype.multipartAlternative),
+          );
+          root = builder;
+        }
+        root.addTextPlain(message.plainText);
+        final related = root.addPart(
+          mediaSubtype: em.MediaSubtype.multipartRelated,
+        );
+        related.addTextHtml(processedHtml);
+        for (final inline in inlines) {
+          final part = related.addBinary(
+            inline.bytes,
+            inline.mimeType != null
+                ? em.MediaType.fromText(inline.mimeType!)
+                : em.MediaType.guessFromFileName(inline.filename),
+            filename: wireFileName(inline.filename),
+          );
+          part.setHeader('Content-ID', '<${inline.cid}>');
+          part.contentDisposition = em.ContentDispositionHeader(
+            'inline; filename="${wireFileName(inline.filename)}"',
+          );
+        }
+      } else if (hasAttachments) {
         builder.setContentType(
           em.MediaType.fromSubtype(em.MediaSubtype.multipartMixed),
         );
@@ -371,19 +431,6 @@ abstract final class MimeBuilder {
           );
         } else {
           builder.addTextPlain(message.plainText);
-        }
-
-        // Satır içi (CID) görseller
-        for (final inline in inlines) {
-          final part = builder.addBinary(
-            inline.bytes,
-            em.MediaType.guessFromFileName(inline.filename),
-            filename: inline.filename,
-          );
-          part.setHeader('Content-ID', '<${inline.cid}>');
-          part.contentDisposition = em.ContentDispositionHeader(
-            'inline; filename="${inline.filename}"',
-          );
         }
       } else if (hasHtml) {
         builder.setContentType(
@@ -402,7 +449,8 @@ abstract final class MimeBuilder {
           rawName,
           sourcePath: file.path,
         );
-        final isEml = name.toLowerCase().endsWith('.eml') ||
+        final isEml =
+            name.toLowerCase().endsWith('.eml') ||
             name.toLowerCase().endsWith('.nws') ||
             name.toLowerCase().endsWith('.rfc822');
         if (isEml) {
@@ -411,7 +459,7 @@ abstract final class MimeBuilder {
           builder.addBinary(
             bytes,
             em.MediaType.guessFromFileName(name),
-            filename: name,
+            filename: wireFileName(name),
           );
         }
       }
@@ -456,7 +504,7 @@ abstract final class MimeBuilder {
       builder.addBinary(
         Uint8List.fromList(bytes),
         em.MediaType.fromSubtype(em.MediaSubtype.applicationOctetStream),
-        filename: name,
+        filename: wireFileName(name),
       );
       return;
     }
@@ -469,10 +517,53 @@ abstract final class MimeBuilder {
       mediaSubtype: em.MediaSubtype.messageRfc822,
       disposition: em.ContentDispositionHeader.from(
         em.ContentDisposition.attachment,
-        filename: name,
+        // Türü zaten `message/rfc822`; web istemcisi de eki uzantısız
+        // gönderir ve sunucu (cPanel/Exim) `.eml` uzantılı eki 550 ile
+        // reddedebilir.
+        filename: wireFileName(
+          name.replaceFirst(
+            RegExp(r'\.(eml|nws|rfc822)$', caseSensitive: false),
+            '',
+          ),
+        ),
       ),
     );
     part.setHeader('Content-Transfer-Encoding', '7bit');
+  }
+
+  /// Dosya adını SMTP'ye güvenle gidecek (7 bit ASCII) hâle getirir.
+  ///
+  /// `enough_mail` dosya adını başlığa OLDUĞU GİBİ yazar; `İlet Çağrı.eml`
+  /// gibi Türkçe karakterli bir ad ham UTF-8 baytı olarak telde gider. Gönderim
+  /// 8BITMIME/SMTPUTF8 olmadan (`use8BitEncoding: false`) yapıldığından sunucu
+  /// iletiyi kalıcı hatayla reddeder. Ad, RFC 2047 kodlu sözcüklere
+  /// (`=?UTF-8?B?...?=`) çevrilir; sözcükler arasındaki boşluk alıcıda
+  /// atılır, böylece 76 sütunluk katlama sözcük sınırında yapılır.
+  @visibleForTesting
+  static String wireFileName(String name) {
+    final safe = name.replaceAll(RegExp(r'[\r\n\t]+'), ' ');
+    final plain = !safe.codeUnits.any((c) => c > 126 || c < 32);
+    if (plain) return safe.replaceAll('"', "'").replaceAll(r'\', '_');
+
+    final words = <String>[];
+    final chunk = <int>[];
+    void flush() {
+      if (chunk.isEmpty) return;
+      words.add('=?UTF-8?B?${base64.encode(chunk)}?=');
+      chunk.clear();
+    }
+
+    for (final rune in safe.runes) {
+      final bytes = utf8.encode(String.fromCharCode(rune));
+      // 15 bayt -> 20 base64 karakteri + 12 sarmalayıcı = 32. Kısa tutulur:
+      // `enough_mail` başlığı 76. sütunda katlar ve katlama noktasını yalnızca
+      // boşluk/`;`/`)` üzerinde arar; bulamazsa kodlu sözcüğün ORTASINDAN
+      // keser ve ad bozulur.
+      if (chunk.length + bytes.length > 15) flush();
+      chunk.addAll(bytes);
+    }
+    flush();
+    return words.join(' ');
   }
 
   static String _domainOf(String email) {
@@ -502,6 +593,4 @@ Result<WireMessage> _buildWireMessage(
   message,
   includeBcc: includeBcc,
   skipMissingAttachments: skipMissingAttachments,
-).map(
-  (built) => WireMessage(source: built.source, messageId: built.messageId),
-);
+).map((built) => WireMessage(source: built.source, messageId: built.messageId));

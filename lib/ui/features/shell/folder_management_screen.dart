@@ -298,7 +298,10 @@ class _FolderManagementScreenState
       if (!mounted) return;
       setState(() => _optimisticOrder = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Klasör değişikliği kaydedilemedi.')),
+        const SnackBar(
+          duration: Duration(seconds: 3),
+          content: Text('Klasör değişikliği kaydedilemedi.'),
+        ),
       );
     }
   }
@@ -626,7 +629,10 @@ class _FolderManagementScreenState
             if (failure != null) {
               setState(() => busy = false);
               messenger.showSnackBar(
-                SnackBar(content: Text(failure.userMessage)),
+                SnackBar(
+                  duration: const Duration(seconds: 3),
+                  content: Text(failure.userMessage),
+                ),
               );
               return;
             }
@@ -757,7 +763,12 @@ class _FolderManagementScreenState
           newParentId: newParentId,
         );
     if (result case Err(:final failure)) {
-      messenger.showSnackBar(SnackBar(content: Text(failure.userMessage)));
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(failure.userMessage),
+        ),
+      );
     } else {
       ref.read(syncControllerProvider.notifier).syncFolders(force: true);
     }
@@ -784,7 +795,12 @@ class _FolderManagementScreenState
         .read(folderRepositoryProvider)
         .deleteFolder(accountId: accountId, mailboxId: folder.id);
     if (result case Err(:final failure)) {
-      messenger.showSnackBar(SnackBar(content: Text(failure.userMessage)));
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text(failure.userMessage),
+        ),
+      );
     } else {
       ref.read(syncControllerProvider.notifier).syncFolders(force: true);
     }

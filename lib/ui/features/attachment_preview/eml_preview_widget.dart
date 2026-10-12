@@ -197,6 +197,14 @@ class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
     }
   }
 
+  Future<void> _retryLoad() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    await _loadEml();
+  }
+
   Future<void> _initWebView(ParsedEmlData data, KaydetTokens tokens) async {
     String contentHtml;
     if (data.htmlBody != null && data.htmlBody!.trim().isNotEmpty) {
@@ -445,6 +453,11 @@ class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
                 runSpacing: Space.sm,
                 alignment: WrapAlignment.center,
                 children: [
+                  OutlinedButton.icon(
+                    icon: const Icon(LucideIcons.rotateCcw, size: 16),
+                    label: const Text('Tekrar Dene'),
+                    onPressed: _retryLoad,
+                  ),
                   OutlinedButton.icon(
                     icon: const Icon(LucideIcons.externalLink, size: 16),
                     label: const Text('Dışarıda Aç'),

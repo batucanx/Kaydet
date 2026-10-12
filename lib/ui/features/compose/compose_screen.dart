@@ -18,6 +18,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 
 import '../../../app/providers.dart';
 import '../../../core/date_format.dart';
+import '../../../core/result.dart';
 import '../../../core/turkish.dart';
 import '../../../data/database/app_database.dart';
 import '../../../data/services/attachment_files.dart';
@@ -26,6 +27,7 @@ import '../../../domain/use_cases/attachment_type.dart';
 import '../../../domain/use_cases/compose_formatting.dart';
 import '../../../domain/use_cases/email_html_codec.dart';
 import '../../../domain/use_cases/image_attachment_resize.dart';
+import '../../../domain/use_cases/quoted_html.dart';
 import '../../../domain/use_cases/share_attachment_policy.dart';
 import '../../../domain/use_cases/text_extraction.dart';
 import '../../../domain/use_cases/threading.dart';
@@ -184,6 +186,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// Henüz kalıcı depoya kopyalanmayı bekleyen (boyut kontrolü + `persist`)
   /// ekler — listede bir yükleniyor ikonuyla gösterilir (bkz. `_AttachmentList`).
   final List<_PendingAttachment> _pendingAttachments = [];
+
+  /// İptal edilen geçici ekler (kullanıcı indirme veya hazırlık sırasında 'X'e bastı).
+  final Set<String> _cancelledPendingAttachments = {};
 
   /// Kalıcı depoya az önce kopyalanmış eklerin yolu — kısa süreliğine bir
   /// onay ikonuyla gösterilip ardından normal dosya türü ikonuna döner.
@@ -353,14 +358,26 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       final id = widget.replyToId!;
       final rowFuture = db.messageById(id);
       final bodyFuture = db.bodyOf(id);
+      final attachmentsFuture = db.attachmentsOf(id);
       final row = await rowFuture;
       final body = await bodyFuture;
+      final attachments = await attachmentsFuture;
       if (row != null) {
         // Yanıt/iletme, iletiyi alan hesaptan gönderilir.
         _fromAccountId = row.accountId;
         await _prefetchDefaultSignature();
         final selfEmail = ref.read(accountByIdProvider(row.accountId))?.email;
         _applyReply(row, body, selfEmail);
+        for (final path in widget.initialAttachmentPaths) {
+          await _addAttachmentPath(path);
+        }
+        if (widget.mode == ComposeMode.forward) {
+          await _forwardAttachments(
+            id,
+            row: row,
+            initialAttachments: attachments,
+          );
+        }
       }
     } else {
       if (widget.initialTo != null) _to.text = widget.initialTo!;
@@ -463,14 +480,40 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         '\n\n${formatDetailDate(row.dateUtc)} tarihinde '
         '${from.display} <${from.email}> yazdı:\n';
 
-    void setReplyBody(String quotePrefix, String quoteText) {
+    // Orijinal iletinin HTML'i (gömülü görselleri `data:` olarak içinde) varsa
+    // alıntı ondan kurulur; böylece logo/banner/fotoğraf yeni iletide de
+    // görünür ve gönderimde Content-ID'li MIME parçalarına dönüşür (bkz.
+    // `QuotedHtml`, `HtmlInlineProcessor`). HTML yoksa ya da okunamazsa düz
+    // metne düşülür — metin hiçbir zaman kaybolmaz.
+    Delta? quoteDelta(bool asQuote) {
+      final html = body?.html;
+      if (html == null || html.trim().isEmpty) return null;
+      try {
+        return QuotedHtml.toDelta(html, asQuote: asQuote);
+      } on Object {
+        return null;
+      }
+    }
+
+    void setReplyBody(
+      String quotePrefix,
+      String quoteText, {
+      Delta? quoted,
+    }) {
       final docDelta = Delta();
       if (sigDelta.isNotEmpty) {
         for (final op in sigDelta.toList()) {
           docDelta.push(op);
         }
       }
-      docDelta.insert('$quotePrefix$quoteText\n');
+      if (quoted != null) {
+        docDelta.insert(quotePrefix);
+        for (final op in quoted.toList()) {
+          docDelta.push(op);
+        }
+      } else {
+        docDelta.insert('$quotePrefix$quoteText\n');
+      }
       _quill.document = Document.fromDelta(docDelta);
     }
 
@@ -497,7 +540,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       case ComposeMode.reply:
         _to.text = primaryText;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
-        setReplyBody(quoteHeader, TextExtraction.quote(quotedSource));
+        setReplyBody(
+          quoteHeader,
+          TextExtraction.quote(quotedSource),
+          quoted: quoteDelta(true),
+        );
 
       case ComposeMode.replyAll:
         // Kendi adresimiz ve asıl alıcılar Bilgi listesinden çıkarılır.
@@ -515,17 +562,26 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _cc.text = others.map((a) => a.formatted).join(', ');
         _showCcBcc = others.isNotEmpty;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
-        setReplyBody(quoteHeader, TextExtraction.quote(quotedSource));
+        setReplyBody(
+          quoteHeader,
+          TextExtraction.quote(quotedSource),
+          quoted: quoteDelta(true),
+        );
 
       case ComposeMode.forward:
         _subject.text = _prefixSubject(row.subject, 'İlet');
+        final ccHeader = cc.isNotEmpty
+            ? 'Bilgi: ${cc.map((a) => a.formatted).join(', ')}\n'
+            : '';
         setReplyBody(
           '\n\n---------- İletilen ileti ----------\n'
           'Kimden: ${from.formatted}\n'
           'Tarih: ${formatDetailDate(row.dateUtc)}\n'
           'Konu: ${row.subject}\n'
-          'Kime: ${to.map((a) => a.formatted).join(', ')}\n\n',
+          'Kime: ${to.map((a) => a.formatted).join(', ')}\n'
+          '$ccHeader\n',
           quotedSource,
+          quoted: quoteDelta(false),
         );
 
       case ComposeMode.newMessage:
@@ -556,7 +612,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return '$prefix: $trimmed';
   }
 
-  String get _bodyPlainText => _quill.document.toPlainText().trim();
+  /// Gömülü görsellerin yer tutucu karakteri (`U+FFFC`) düz metin parçasına
+  /// ve önizlemeye sızmasın diye atılır.
+  String get _bodyPlainText =>
+      _quill.document.toPlainText().replaceAll('￼', '').trim();
 
   /// Zengin metni gönderim/kaydetme için e-posta HTML'ine çevirir (bkz.
   /// [EmailHtmlCodec.encode]); içerik boşsa `null` döner (düz taslak olarak
@@ -668,7 +727,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return AttachmentReminder.shouldWarn(
       subject: _subject.text,
       body: _bodyPlainText,
-      hasAttachments: _attachments.isNotEmpty,
+      hasAttachments: _attachments.isNotEmpty || _pendingAttachments.isNotEmpty,
       isReplyOrForward: _sourceIsReply || _sourceIsForward,
     );
   }
@@ -708,6 +767,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     ].where((a) => !a.isValid).toList();
     if (invalid.isNotEmpty) {
       _showError('Geçersiz adres: ${invalid.first.email}');
+      return;
+    }
+
+    if (_pendingAttachments.isNotEmpty) {
+      _showError('Ekler hazırlanıyor, lütfen bekleyin…');
       return;
     }
 
@@ -1069,8 +1133,17 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// - Dosya kalıcı depoya kopyalanır (bkz. `OutgoingAttachmentStore`):
   ///   seçicinin verdiği yol geçici bir klasördedir ve taslak beklerken
   ///   silinebilir.
-  Future<void> _addAttachmentPath(String path, {String? originalName}) async {
-    if (_attachments.contains(path) || _storedBySource.containsKey(path)) return;
+  Future<void> _addAttachmentPath(
+    String path, {
+    String? originalName,
+    _PendingAttachment? replacePending,
+  }) async {
+    if (_attachments.contains(path) || _storedBySource.containsKey(path)) {
+      if (replacePending != null && mounted) {
+        setState(() => _pendingAttachments.remove(replacePending));
+      }
+      return;
+    }
     // Orijinal ad verilmişse onu, yoksa path'ten temizlenmiş adı al.
     final name = AttachmentFiles.cleanPickedName(
       (originalName != null && originalName.trim().isNotEmpty)
@@ -1082,8 +1155,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     // Boyut kontrolü ve `persist` kopyası bitene kadar kullanıcı bir
     // yükleniyor ikonu görür — aksi hâlde ek, işlem bitene kadar listede hiç
     // görünmez ve kullanıcı eklemenin gerçekten başladığını bilemez.
-    final pending = _PendingAttachment(path, name);
-    if (mounted) setState(() => _pendingAttachments.add(pending));
+    final pending = replacePending ?? _PendingAttachment(path, name);
+    if (replacePending == null && mounted) {
+      setState(() => _pendingAttachments.add(pending));
+    }
     void dropPending() {
       if (mounted) setState(() => _pendingAttachments.remove(pending));
     }
@@ -1151,6 +1226,86 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (!mounted) return;
       setState(() => _justUploaded.remove(stored));
     });
+  }
+
+  /// İletilen e-postanın eklerini yazma ekranına otomatik olarak iliştirir.
+  /// Yerelde hazır bulunanlar doğrudan eklenir; henüz indirilmemiş olanlar
+  /// için yükleme kartı gösterilip arka planda indirilir.
+  Future<void> _forwardAttachments(
+    int messageId, {
+    required MessageRow row,
+    required List<AttachmentRow> initialAttachments,
+  }) async {
+    final db = ref.read(databaseProvider);
+    final repo = ref.read(mailRepositoryProvider);
+
+    var attachments = initialAttachments;
+    // Eğer veritabanında ek yoksa ama iletinin ek bayrağı varsa,
+    // gövde/ek yapısı henüz sunucudan çekilmemiş olabilir.
+    if (attachments.isEmpty && row.hasAttachments) {
+      await repo.ensureBody(messageId);
+      if (!mounted) return;
+      attachments = await db.attachmentsOf(messageId);
+    }
+
+    final toForward = attachments.where((a) => !a.isInline).toList();
+    if (toForward.isEmpty || !mounted) return;
+
+    for (final att in toForward) {
+      if (!mounted) return;
+      final pendingKey = 'msg_${messageId}_att_${att.id}';
+      if (_cancelledPendingAttachments.contains(pendingKey)) continue;
+
+      final existingLocal = att.localPath;
+      if (existingLocal != null && File(existingLocal).existsSync()) {
+        await _addAttachmentPath(existingLocal, originalName: att.fileName);
+      } else {
+        final pending = _PendingAttachment(
+          pendingKey,
+          att.fileName,
+          sizeBytes: att.sizeBytes,
+        );
+        if (mounted) {
+          setState(() => _pendingAttachments.add(pending));
+        }
+
+        unawaited(() async {
+          try {
+            final res = await repo.downloadAttachment(att.id);
+            if (!mounted) return;
+
+            if (_cancelledPendingAttachments.contains(pendingKey) ||
+                !_pendingAttachments.contains(pending)) {
+              if (mounted) {
+                setState(() => _pendingAttachments.remove(pending));
+              }
+              return;
+            }
+
+            if (res is Ok<String>) {
+              final downloadedPath = res.value;
+              if (mounted) {
+                await _addAttachmentPath(
+                  downloadedPath,
+                  originalName: att.fileName,
+                  replacePending: pending,
+                );
+              }
+            } else {
+              if (mounted) {
+                setState(() => _pendingAttachments.remove(pending));
+                _showError('“${att.fileName}” indirilemedi.');
+              }
+            }
+          } catch (_) {
+            if (mounted) {
+              setState(() => _pendingAttachments.remove(pending));
+              _showError('“${att.fileName}” indirilemedi.');
+            }
+          }
+        }());
+      }
+    }
   }
 
   /// Etiket anında değişir — "..." menüsündeki onay kutusuna dokunur
@@ -1456,6 +1611,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                       onRemove: (path) {
                         _storedBySource.removeWhere((_, stored) => stored == path);
                         setState(() => _attachments.remove(path));
+                        _onChanged();
+                      },
+                      onRemovePending: (pending) {
+                        _cancelledPendingAttachments.add(pending.path);
+                        setState(() => _pendingAttachments.remove(pending));
                         _onChanged();
                       },
                     ),
@@ -2518,11 +2678,12 @@ class _ContactOptionsList extends StatelessWidget {
   }
 }
 
-/// Kalıcı depoya kopyalanmayı bekleyen bir ek — bkz. `_addAttachmentPath`.
+/// Kalıcı depoya kopyalanmayı veya indirilip iliştirilmeyi bekleyen bir ek.
 class _PendingAttachment {
-  const _PendingAttachment(this.path, this.name);
+  const _PendingAttachment(this.path, this.name, {this.sizeBytes});
   final String path;
   final String name;
+  final int? sizeBytes;
 }
 
 /// [path]'ten (yerel dosya) `AttachmentPreviewScreen`in beklediği
@@ -2564,12 +2725,14 @@ class _AttachmentList extends StatelessWidget {
     required this.onRemove,
     this.pending = const [],
     this.justUploaded = const {},
+    this.onRemovePending,
   });
 
   final List<String> paths;
   final List<_PendingAttachment> pending;
   final Set<String> justUploaded;
   final ValueChanged<String> onRemove;
+  final ValueChanged<_PendingAttachment>? onRemovePending;
 
   /// Dokunulan karttan başlayarak TÜM hazır ekler arasında kaydırılabilir
   /// galeriyi açar (bkz. `AttachmentPreviewScreen`, mail detay ekranındaki
@@ -2619,7 +2782,14 @@ class _AttachmentList extends StatelessWidget {
             spacing: Space.sm,
             runSpacing: Space.sm,
             children: [
-              for (final item in pending) _PendingAttachmentCard(name: item.name),
+              for (final item in pending)
+                _PendingAttachmentCard(
+                  name: item.name,
+                  sizeBytes: item.sizeBytes,
+                  onRemove: onRemovePending != null
+                      ? () => onRemovePending!(item)
+                      : null,
+                ),
               for (var i = 0; i < paths.length; i++)
                 _AttachmentCard(
                   path: paths[i],
@@ -2675,13 +2845,23 @@ class _AttachmentCardShell extends StatelessWidget {
 }
 
 class _PendingAttachmentCard extends StatelessWidget {
-  const _PendingAttachmentCard({required this.name});
+  const _PendingAttachmentCard({
+    required this.name,
+    this.sizeBytes,
+    this.onRemove,
+  });
 
   final String name;
+  final int? sizeBytes;
+  final VoidCallback? onRemove;
 
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
+    final subtitle = (sizeBytes != null && sizeBytes! > 0)
+        ? '${AttachmentType.label(name)} · ${formatBytes(sizeBytes!)} · Hazırlanıyor…'
+        : 'Hazırlanıyor…';
+
     return _AttachmentCardShell(
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2702,13 +2882,36 @@ class _PendingAttachmentCard extends StatelessWidget {
           ),
           const SizedBox(width: Space.sm),
           Flexible(
-            child: Text(
-              name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.labelMedium,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.labelMedium,
+                ),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                ),
+              ],
             ),
           ),
+          if (onRemove != null)
+            IconButton(
+              icon: const Icon(LucideIcons.x, size: IconSize.sm),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              visualDensity: VisualDensity.compact,
+              tooltip: 'Kaldır',
+              onPressed: onRemove,
+            ),
         ],
       ),
     );
