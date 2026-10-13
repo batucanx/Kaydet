@@ -163,7 +163,7 @@ class NotificationService {
 
   /// `res/drawable/ic_stat_kaydet.xml` — tek renkli küçük simge.
   static const String _smallIcon = 'ic_stat_kaydet';
-  static const Color _accent = Color(0xFF2478C7);
+  static const Color _accent = Color(0xFF2577A0);
 
   static const String _payloadPrefix = 'message:';
   static const String _groupPrefix = 'kaydet_inbox_';

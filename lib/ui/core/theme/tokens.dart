@@ -88,7 +88,7 @@ abstract final class ComposePalette {
     '#EF4444', // kırmızı
     '#F97316', // turuncu
     '#F5C518', // altın
-    '#22C55E', // yeşil
+    '#2577A0', // mavi (marka)
     '#14B8A6', // turkuaz
     '#3B82F6', // mavi
     '#8B5CF6', // mor
@@ -100,7 +100,7 @@ abstract final class ComposePalette {
   static const List<String> highlight = [
     '#FEF08A', // sarı
     '#FED7AA', // turuncu
-    '#BBF7D0', // yeşil
+    '#BAE0F0', // açık mavi
     '#BFDBFE', // mavi
     '#E9D5FF', // mor
     '#FBCFE8', // pembe
@@ -217,19 +217,19 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   bool get isDark => brightness == Brightness.dark;
 
   /// Yan menünün sol rayı — Magic Pattern `rail`: açık temada brand-950'nin
-  /// bir tık açığı (#0B3A31), koyu temada #06070A. Üzerindeki ikon/metin her
+  /// bir tık açığı (#0F3447), koyu temada #06070A. Üzerindeki ikon/metin her
   /// iki temada beyaz tabanlıdır (bkz. `FolderDrawer`).
-  Color get rail => isDark ? const Color(0xFF06070A) : const Color(0xFF0B3A31);
+  Color get rail => isDark ? const Color(0xFF06070A) : const Color(0xFF0F3447);
 
   /// Üst çubuk (AppBar) zemini: tüm ekranlarda ve "Yeni ileti" düğmesinde
   /// ortak. Açık temada marka tonunun koyu hali (`accentStrong`, rail kadar
-  /// koyu değil), koyu temada koyu yeşil (#062B24, siyah değil). Üzerindeki metin/ikon beyazdır.
-  Color get topBar => isDark ? const Color(0xFF062B24) : accentStrong;
+  /// koyu değil), koyu temada koyu mavi (#0C2A3A, siyah değil). Üzerindeki metin/ikon beyazdır.
+  Color get topBar => isDark ? const Color(0xFF0C2A3A) : accentStrong;
 
   /// "Sabitlenmiş" ikonu: açık temada belirgin siyah, koyu temada altın sarısı.
   Color get pinIcon => isDark ? warning : const Color(0xFF000000);
 
-  /// Açık tema — Magic Pattern "tide-light" + "brand-jade" referansı.
+  /// Açık tema — Magic Pattern "tide-light" + "brand" referansı.
   ///
   /// Zemin hiyerarşisi: üst çubuk `canvas` (#F7F8FA) üzerinde, liste/okuma
   /// yüzeyi beyaz `surface`; alanlar ve pilller `sunken` (#F0F2F5).
@@ -244,16 +244,16 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     textPrimary: Color(0xFF14171C),
     textSecondary: Color(0xFF4B5361),
     textTertiary: Color(0xFF737D8C),
-    accent: Color(0xFF0C8C76),
-    accentFill: Color(0xFF0C8C76),
+    accent: Color(0xFF2577A0),
+    accentFill: Color(0xFF2577A0),
     onAccentFill: Color(0xFFFFFFFF),
-    accentSubtle: Color(0xFFE7F8F4),
+    accentSubtle: Color(0xFFE8F2F7),
     // brand-600 (accent pressed): `accentFill` üstünde ayrışan koyu ton.
-    accentStrong: Color(0xFF0A7564),
+    accentStrong: Color(0xFF1D6080),
     danger: Color(0xFFE5484D),
     // Beyaz yazılı dolgularda kontrast için `danger`dan bir ton koyu.
     dangerFill: Color(0xFFC62A2F),
-    success: Color(0xFF12A575),
+    success: Color(0xFF2577A0),
     warning: Color(0xFFD98E04),
     divider: Color(0xFFE6E9EE),
     border: Color(0xFFE6E9EE),
@@ -273,8 +273,8 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
   ///                                      yumuşatmak için okuma da bunda).
   ///
   /// Vurgu ikiye ayrılır — koyu zeminde tek renk hem dolgu hem metin olamaz:
-  ///   accent (#55C7AE, brand-300) → metin, ikon, gösterge
-  ///   accentFill (#0C8C76)        → dolgu; üstünde beyaz metin
+  ///   accent (#6DB4D6) → metin, ikon, gösterge
+  ///   accentFill (#2577A0)        → dolgu; üstünde beyaz metin
   static const KaydetTokens dark = KaydetTokens(
     brightness: Brightness.dark,
     bg: Color(0xFF13161B),
@@ -286,15 +286,15 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     textPrimary: Color(0xFFF2F4F7),
     textSecondary: Color(0xFFB6BECA),
     textTertiary: Color(0xFF7E8896),
-    accent: Color(0xFF55C7AE),
-    accentFill: Color(0xFF0C8C76),
+    accent: Color(0xFF6DB4D6),
+    accentFill: Color(0xFF2577A0),
     onAccentFill: Color(0xFFFFFFFF),
     // Seçili klasör/liste satırı zemini (brand-950).
-    accentSubtle: Color(0xFF03241F),
-    accentStrong: Color(0xFF0C8C76),
+    accentSubtle: Color(0xFF0A2230),
+    accentStrong: Color(0xFF2577A0),
     danger: Color(0xFFFF6369),
     dangerFill: Color(0xFFC5221F),
-    success: Color(0xFF3DD68C),
+    success: Color(0xFF6DB4D6),
     warning: Color(0xFFFFB224),
     divider: Color(0xFF242932),
     // Alan çerçevesi, onay kutusu, sheet tutamacı: sunken (#1A1E24) üstünde
@@ -311,9 +311,9 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     AvatarTone(Color(0xFF56442E), Color(0xFFE8CEB0)),
     AvatarTone(Color(0xFF564C2E), Color(0xFFE8DAB0)),
     AvatarTone(Color(0xFF55562E), Color(0xFFE6E8B0)),
-    AvatarTone(Color(0xFF44562E), Color(0xFFCEE8B0)),
-    AvatarTone(Color(0xFF2E563C), Color(0xFFB0E8C3)),
-    AvatarTone(Color(0xFF2E564E), Color(0xFFB0E8DD)),
+    AvatarTone(Color(0xFF2E4A56), Color(0xFFB0D8E8)),
+    AvatarTone(Color(0xFF2E5260), Color(0xFFB0DCEC)),
+    AvatarTone(Color(0xFF2E3F56), Color(0xFFB0C8E8)),
     AvatarTone(Color(0xFF2E5156), Color(0xFFB0E1E8)),
     AvatarTone(Color(0xFF2E4656), Color(0xFFB0D1E8)),
     AvatarTone(Color(0xFF2E3456), Color(0xFFB0B7E8)),
@@ -329,9 +329,9 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     AvatarTone(Color(0xFFF0E6DB), Color(0xFF6F4A20)),
     AvatarTone(Color(0xFFF0EBDB), Color(0xFF6F5B20)),
     AvatarTone(Color(0xFFEFF0DB), Color(0xFF6C6F20)),
-    AvatarTone(Color(0xFFE6F0DB), Color(0xFF4A6F20)),
-    AvatarTone(Color(0xFFDBF0E2), Color(0xFF206F3A)),
-    AvatarTone(Color(0xFFDBF0EC), Color(0xFF206F5F)),
+    AvatarTone(Color(0xFFDBE9F0), Color(0xFF204A6F)),
+    AvatarTone(Color(0xFFDBEDF5), Color(0xFF20586F)),
+    AvatarTone(Color(0xFFDBE3F0), Color(0xFF203F6F)),
     AvatarTone(Color(0xFFDBEDF0), Color(0xFF20646F)),
     AvatarTone(Color(0xFFDBE7F0), Color(0xFF204E6F)),
     AvatarTone(Color(0xFFDBDEF0), Color(0xFF202B6F)),
@@ -348,9 +348,9 @@ class KaydetTokens extends ThemeExtension<KaydetTokens> {
     'Kehribar',
     'Altın',
     'Zeytin',
-    'Yeşil',
-    'Çimen',
-    'Zümrüt',
+    'Petrol',
+    'Çelik',
+    'Denim',
     'Turkuaz',
     'Gök',
     'Mavi',

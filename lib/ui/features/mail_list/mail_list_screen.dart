@@ -1871,7 +1871,7 @@ class _FilterMenuButton extends ConsumerWidget {
         ],
       ],
       builder: (context, controller, child) {
-        // Gelen Kutusu üst çubuğu `rail` (koyu yeşil) zeminli olduğundan
+        // Gelen Kutusu üst çubuğu `rail` (koyu mavi) zeminli olduğundan
         // metin beyazdır; pilin zemini şeffaf beyazdır.
         final onAppBar = t.onAccentFill;
         return Padding(
@@ -2076,7 +2076,7 @@ class _InboxAppBar extends StatelessWidget implements PreferredSizeWidget {
     final theme = Theme.of(context);
     final account = this.account;
 
-    // Üst çubuk yan menü rayıyla aynı koyu yeşil (`rail`) zeminde durur;
+    // Üst çubuk yan menü rayıyla aynı koyu mavi (`rail`) zeminde durur;
     // metin/ikonlar beyaz, durum çubuğu ikonları açık renklidir.
     final ink = t.onAccentFill;
     return AnnotatedRegion<SystemUiOverlayStyle>(
