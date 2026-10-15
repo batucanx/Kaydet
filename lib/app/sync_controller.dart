@@ -491,6 +491,16 @@ class SyncController extends Notifier<SyncState> {
         return;
       }
 
+      // Konuşmalardaki gönderilen yanıtların yerel veritabanında güncel kalması
+      // için Gönderilenler klasörünü de arka planda eşitle.
+      final sentBox =
+          boxes.where((m) => m.specialUse == SpecialUse.sent).firstOrNull;
+      if (sentBox != null) {
+        _fireAndForget(
+          engine.syncMailbox(accountId: accountId, mailbox: sentBox),
+        );
+      }
+
       state = state.copyWith(
         lastSyncAt: DateTime.now(),
         hasMore: inbox.first.hasMoreOnServer,

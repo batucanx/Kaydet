@@ -851,12 +851,15 @@ class SyncEngine {
     int accountId,
     List<FetchedEnvelope> envelopes,
   ) async {
-    // 1. Bu partideki tüm referansları topla.
+    // 1. Bu partideki tüm referansları ve konuları topla.
     final referenced = <String>{};
+    final subjectKeys = <String>{};
     for (final envelope in envelopes) {
       referenced.addAll(Threading.parseReferences(envelope.references));
       final inReplyTo = Threading.normalizeId(envelope.inReplyTo);
       if (inReplyTo != null) referenced.add(inReplyTo);
+      final sKey = Threading.subjectKey(envelope.subject);
+      if (sKey != null) subjectKeys.add(sKey);
     }
 
     // 2. Veritabanında bu kimliklere sahip iletileri bul.
@@ -875,6 +878,26 @@ class SyncEngine {
       }
     }
 
+    // 2b. Veritabanında aynı normalleştirilmiş konuya sahip konuşmaları bul.
+    final knownBySubj = <String, String>{};
+    if (subjectKeys.isNotEmpty) {
+      final cleanSubjs =
+          subjectKeys.map((s) => s.replaceFirst('subj:', '')).toList();
+      final subjRows = await (_db.select(_db.messages)..where(
+            (m) =>
+                m.accountId.equals(accountId) &
+                m.subjectNormalized.isIn(cleanSubjs) &
+                m.threadId.isBiggerThanValue(''),
+          ))
+          .get();
+      for (final row in subjRows) {
+        final key = 'subj:${row.subjectNormalized}';
+        if (!knownBySubj.containsKey(key)) {
+          knownBySubj[key] = row.threadId;
+        }
+      }
+    }
+
     // 3. Parti içi zincirleri de hesaba katarak ata → konuşma ataması yap.
     final result = <int, String>{};
     for (final envelope in envelopes) {
@@ -884,10 +907,13 @@ class SyncEngine {
         references: envelope.references,
         subject: envelope.subject,
         knownThreads: known,
+        knownBySubject: knownBySubj,
       );
       result[envelope.uid] = threadId;
       final own = Threading.normalizeId(envelope.messageId);
       if (own != null) known[own] = threadId;
+      final sKey = Threading.subjectKey(envelope.subject);
+      if (sKey != null) knownBySubj.putIfAbsent(sKey, () => threadId);
     }
     return result;
   }

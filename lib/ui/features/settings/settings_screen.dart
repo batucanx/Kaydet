@@ -136,6 +136,23 @@ class SettingsScreen extends ConsumerWidget {
                 onTap: () => context.pushScreen(const SwipeSettingsScreen()),
               ),
               SettingsTile(
+                icon: LucideIcons.layers3,
+                title: 'Gruplandırma',
+                subtitle: settings.groupMessages
+                    ? 'Aynı konuşmadaki iletiler birlikte gösterilir'
+                    : 'Her ileti ayrı satırda gösterilir',
+                trailing: Semantics(
+                  label: 'İletileri gruplandır',
+                  value: settings.groupMessages ? 'Açık' : 'Kapalı',
+                  child: Switch.adaptive(
+                    value: settings.groupMessages,
+                    onChanged: (value) => ref
+                        .read(settingsProvider.notifier)
+                        .setGroupMessages(value),
+                  ),
+                ),
+              ),
+              SettingsTile(
                 iconAsset: 'assets/icons/settings_labels.png',
                 title: 'Etiketler',
                 subtitle: labels.isEmpty

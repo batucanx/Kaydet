@@ -167,6 +167,57 @@ void main() {
 
       expect(result[1], result[2]);
     });
+
+    test('Message-IDli iletiler referans başlığı olmasa bile aynı konuda birleşir', () {
+      final result = Threading.assignThreads([
+        const ThreadInput(
+          localId: 1,
+          messageId: '<root@x.com>',
+          inReplyTo: null,
+          references: null,
+          subject: 'İlan Taşıma',
+        ),
+        const ThreadInput(
+          localId: 2,
+          messageId: '<reply@x.com>',
+          inReplyTo: null,
+          references: null,
+          subject: 'Re: İlan Taşıma',
+        ),
+      ]);
+
+      expect(result[1], 'root@x.com');
+      expect(result[2], 'root@x.com');
+    });
+
+    test('> KONU: ve KONU: ön ekli iletiler aynı konuda birleşir', () {
+      final result = Threading.assignThreads([
+        const ThreadInput(
+          localId: 1,
+          messageId: '<m1@x.com>',
+          inReplyTo: null,
+          references: null,
+          subject: 'Dural Gayrimenkul',
+        ),
+        const ThreadInput(
+          localId: 2,
+          messageId: '<m2@x.com>',
+          inReplyTo: null,
+          references: null,
+          subject: '> KONU: Dural Gayrimenkul',
+        ),
+        const ThreadInput(
+          localId: 3,
+          messageId: '<m3@x.com>',
+          inReplyTo: null,
+          references: null,
+          subject: 'KONU: Dural Gayrimenkul',
+        ),
+      ]);
+
+      expect(result[1], result[2]);
+      expect(result[2], result[3]);
+    });
   });
 
   group('kimlik normalleştirme', () {

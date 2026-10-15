@@ -708,33 +708,112 @@ class AppDatabase extends _$AppDatabase {
   /// [orderById] `true` olduğunda kayıt ekleme sırası (`id DESC`) kullanılır —
   /// Çöp Kutusu'nda son silinen (= en son eklenen) iletinin en üstte görünmesi
   /// için. Diğer klasörlerde varsayılan `dateUtc DESC` sırası korunur.
+  /// [sentMailboxId] verilirse, bu klasördeki konuşmalara ait gönderilen (sent)
+  /// yanıt iletileri de listeye dahil edilir — böylece webmail/sunucu tarafındaki
+  /// konuşma görünümüyle birebir eşleşir.
   Stream<List<MessageRow>> watchMessages({
     required int accountId,
     required int mailboxId,
+    int? sentMailboxId,
     int limit = 100,
     bool orderById = false,
     bool excludeDrafts = false,
-  }) =>
-      (select(messages)
-            ..where(
-              (m) =>
-                  m.accountId.equals(accountId) &
-                  m.mailboxId.equals(mailboxId) &
-                  m.isDeleted.equals(false) &
-                  (excludeDrafts
-                      ? m.isDraft.equals(false)
-                      : const Constant(true)),
-            )
-            ..orderBy([
-              (m) => orderById
-                  ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
-                  : OrderingTerm(
-                      expression: m.dateUtc,
-                      mode: OrderingMode.desc,
-                    ),
-            ])
-            ..limit(limit))
-          .watch();
+  }) {
+    final query = select(messages);
+    if (sentMailboxId != null && sentMailboxId != mailboxId) {
+      query.where(
+        (m) =>
+            m.accountId.equals(accountId) &
+            m.isDeleted.equals(false) &
+            (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)) &
+            CustomExpression<bool>('''
+              (mailbox_id = $mailboxId OR (
+                mailbox_id = $sentMailboxId AND (
+                  thread_id != '' AND thread_id IN (
+                    SELECT thread_id FROM messages
+                    WHERE account_id = $accountId AND mailbox_id = $mailboxId AND thread_id != '' AND is_deleted = 0
+                  )
+                )
+              ))
+            '''),
+      );
+    } else {
+      query.where(
+        (m) =>
+            m.accountId.equals(accountId) &
+            m.mailboxId.equals(mailboxId) &
+            m.isDeleted.equals(false) &
+            (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
+      );
+    }
+
+    query.orderBy([
+      (m) => orderById
+          ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
+          : OrderingTerm(
+              expression: m.dateUtc,
+              mode: OrderingMode.desc,
+            ),
+    ]);
+    query.limit(limit);
+    return query.watch();
+  }
+
+  /// Bir konuşmaya ait tüm iletileri çeker (gelen + gönderilen).
+  /// En yeniden en eskiye sıralıdır.
+  Stream<List<MessageRow>> watchThreadMessages({
+    required int accountId,
+    required String threadId,
+    String? subjectNormalized,
+  }) {
+    final cleanSubj = subjectNormalized?.trim() ?? '';
+    return (select(messages)
+          ..where((m) {
+            final forAccount =
+                m.accountId.equals(accountId) & m.isDeleted.equals(false);
+            if (threadId.isNotEmpty && cleanSubj.isNotEmpty) {
+              return forAccount &
+                  (m.threadId.equals(threadId) |
+                      m.subjectNormalized.equals(cleanSubj));
+            } else if (threadId.isNotEmpty) {
+              return forAccount & m.threadId.equals(threadId);
+            } else {
+              return forAccount & m.subjectNormalized.equals(cleanSubj);
+            }
+          })
+          ..orderBy([
+            (m) =>
+                OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+          ]))
+        .watch();
+  }
+
+  Future<List<MessageRow>> getThreadMessages({
+    required int accountId,
+    required String threadId,
+    String? subjectNormalized,
+  }) {
+    final cleanSubj = subjectNormalized?.trim() ?? '';
+    return (select(messages)
+          ..where((m) {
+            final forAccount =
+                m.accountId.equals(accountId) & m.isDeleted.equals(false);
+            if (threadId.isNotEmpty && cleanSubj.isNotEmpty) {
+              return forAccount &
+                  (m.threadId.equals(threadId) |
+                      m.subjectNormalized.equals(cleanSubj));
+            } else if (threadId.isNotEmpty) {
+              return forAccount & m.threadId.equals(threadId);
+            } else {
+              return forAccount & m.subjectNormalized.equals(cleanSubj);
+            }
+          })
+          ..orderBy([
+            (m) =>
+                OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+          ]))
+        .get();
+  }
 
   /// Birden çok klasörün (genelde farklı hesapların aynı türdeki klasörleri)
   /// birleşik iletileri — "Tüm Hesaplar" görünümü. [watchMessages] ile aynı

@@ -88,21 +88,23 @@ const Set<String> _replyPrefixes = {
   'yanit',
   'iletilen',
   'yonlendirilen',
+  'konu',
 };
 
 /// Konu başlığındaki yanıt/iletme ön eklerini temizler.
 ///
-/// Hem İngilizce (Re:, Fwd:, Fw:) hem Türkçe (Yan:, Ynt:, İlt:, Yanıt:)
-/// ön ekleri, `Re[2]:` gibi sayaçlı biçimler ve art arda tekrarlar kaldırılır.
-/// Konuşma gruplama (threading) bu normalleştirilmiş konuyu kullanır.
+/// Hem İngilizce (Re:, Fwd:, Fw:) hem Türkçe (Yan:, Ynt:, İlt:, Yanıt:, Konu:)
+/// ön ekleri, `Re[2]:` gibi sayaçlı biçimler, alıntı işaretleri (`>`) ve art arda
+/// tekrarlar kaldırılır. Konuşma gruplama (threading) bu normalleştirilmiş konuyu kullanır.
 ///
 /// Ön ek karşılaştırması [foldForSearch] üzerinden yapılır: düzenli ifadenin
 /// `caseSensitive: false` seçeneği `İ` (U+0130) harfini `i` ile eşleştirmez,
 /// bu yüzden "İlt:" ön eki yakalanmaz. Katlama bu farkı ortadan kaldırır.
 String normalizeSubject(String? subject) {
   if (subject == null) return '';
-  // Katlanmış başlıklar satır sonu içerebilir; tek satıra indirilir.
+  // Katlanmış başlıklar satır sonu içerebilir; tek satıra indirilir ve baştaki alıntı işaretleri temizlenir.
   var text = subject.replaceAll(RegExp(r'\s+'), ' ').trim();
+  text = text.replaceAll(RegExp(r'^[>\s]+'), '').trim();
 
   final prefix = RegExp(
     r'^([\p{L}]{2,12})\s*(\[\d+\])?\s*:\s*',
@@ -117,6 +119,22 @@ String normalizeSubject(String? subject) {
     text = text.substring(match.end).trim();
   }
   return text;
+}
+
+/// Konu başlığının bir yanıt veya iletme ön eki taşıyıp taşımadığını denetler.
+bool hasReplyPrefix(String? subject) {
+  if (subject == null || subject.trim().isEmpty) return false;
+  var text = subject.replaceAll(RegExp(r'\s+'), ' ').trim();
+  text = text.replaceAll(RegExp(r'^[>\s]+'), '').trim();
+
+  final prefix = RegExp(
+    r'^([\p{L}]{2,12})\s*(\[\d+\])?\s*:\s*',
+    unicode: true,
+  );
+  final match = prefix.firstMatch(text);
+  if (match == null) return false;
+  final token = foldForSearch(match.group(1)!);
+  return _replyPrefixes.contains(token);
 }
 
 /// Bir e-posta adresinden görünen ad üretir.

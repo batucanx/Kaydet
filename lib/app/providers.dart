@@ -229,7 +229,13 @@ final settingsStoreProvider = Provider<AppSettingsStore>(
 
 class SettingsNotifier extends Notifier<AppSettings> {
   @override
-  AppSettings build() => ref.watch(settingsStoreProvider).read();
+  AppSettings build() {
+    try {
+      return ref.watch(settingsStoreProvider).read();
+    } catch (_) {
+      return const AppSettings();
+    }
+  }
 
   Future<void> _save(AppSettings next) async {
     state = next;
@@ -302,6 +308,9 @@ class SettingsNotifier extends Notifier<AppSettings> {
 
   Future<void> setShowBrandLogos(bool value) =>
       _save(state.copyWith(showBrandLogos: value));
+
+  Future<void> setGroupMessages(bool value) =>
+      _save(state.copyWith(groupMessages: value));
 }
 
 final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(
@@ -371,9 +380,7 @@ final mailboxesProvider = StreamProvider<List<MailboxRow>>((ref) {
 /// duyurmanın anlamı yok (bkz. `BrandAvatar`).
 final ownEmailDomainsProvider = Provider<Set<String>>((ref) {
   final accounts = ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
-  return {
-    for (final account in accounts) ?domainOf(account.email),
-  };
+  return {for (final account in accounts) ?domainOf(account.email)};
 });
 
 /// Belirli bir hesabın klasörleri — çoklu hesap yan menüsünde her hesap
@@ -529,14 +536,16 @@ final allMailboxesProvider = StreamProvider<List<MailboxRow>>(
 /// Her hesabın [use] türündeki klasörü — mevcut klasör eşleştirmesinin
 /// (`FolderMapping`, `MailboxRow.specialUse`) sonucu; burada yeni bir eşleme
 /// mantığı YOKTUR.
-final unifiedMailboxesProvider =
-    Provider.family<List<MailboxRow>, SpecialUse>((ref, use) {
-      final all = ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
-      return [
-        for (final box in all)
-          if (box.specialUse == use && box.isSelectable) box,
-      ];
-    });
+final unifiedMailboxesProvider = Provider.family<List<MailboxRow>, SpecialUse>((
+  ref,
+  use,
+) {
+  final all = ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
+  return [
+    for (final box in all)
+      if (box.specialUse == use && box.isSelectable) box,
+  ];
+});
 
 /// Tüm hesaplardaki [use] klasörlerinin okunmamış toplamı.
 final unifiedUnreadCountProvider = StreamProvider.family<int, SpecialUse>((
@@ -720,25 +729,68 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
   // Çöp Kutusu'nda iletiler orijinal gönderi tarihine göre değil,
   // sildikten sonra çöp kutusuna taşınma sırasına göre (en son silinen
   // en üstte) gösterilir; bunun için `id DESC` proxy olarak kullanılır.
-  final isTrash =
-      ref.watch(currentMailboxProvider)?.specialUse == SpecialUse.trash;
+  final specialUse = ref.watch(currentSpecialUseProvider);
+  final isTrash = specialUse == SpecialUse.trash;
+  final isInbox = specialUse == SpecialUse.inbox;
+
+  final groupMessages = ref.watch(
+    settingsProvider.select((settings) => settings.groupMessages),
+  );
+
+  final sentMailboxId = groupMessages
+      ? ref.watch(
+          mailboxesProvider.select(
+            (m) => m.value
+                ?.where(
+                  (b) =>
+                      b.accountId == accountId &&
+                      b.specialUse == SpecialUse.sent,
+                )
+                .firstOrNull
+                ?.id,
+          ),
+        )
+      : null;
 
   final Stream<List<MessageRow>> source = folder.isFlaggedView
       ? db.watchFlagged(accountId: accountId)
       : db.watchMessages(
           accountId: accountId,
           mailboxId: folder.mailboxId!,
+          sentMailboxId: sentMailboxId,
           limit: ref.watch(pageLimitProvider),
           orderById: isTrash,
           // Taslaklar yalnızca Taslaklar klasöründe görünür: sunucuda Gelen
           // Kutusu'na `\Draft` bayrağıyla düşen iletiler ve Taslaklar klasörü
           // bilinmediğinde Gelen Kutusu'na yazılan yerel taslaklar gizlenir.
-          excludeDrafts:
-              ref.watch(currentMailboxProvider)?.specialUse == SpecialUse.inbox,
+          excludeDrafts: isInbox,
         );
 
   return source.map(filter.apply);
 });
+
+/// Genişletilmiş konuşma satırlarının kimlikleri (örn: 'group-1-msgid').
+/// Kullanıcı dropdown simgesine dokunduğunda durumu güncellenir.
+class ExpandedThreadsNotifier extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const <String>{};
+
+  void toggle(String threadKey) {
+    if (state.contains(threadKey)) {
+      state = {...state}..remove(threadKey);
+    } else {
+      state = {...state, threadKey};
+    }
+  }
+
+  void collapseAll() => state = const <String>{};
+  void expandAll(Iterable<String> keys) => state = keys.toSet();
+}
+
+final expandedThreadsProvider =
+    NotifierProvider<ExpandedThreadsNotifier, Set<String>>(
+  ExpandedThreadsNotifier.new,
+);
 
 /// Aynı ileti (aynı `Message-ID` başlığı) birden çok hesabın kutusuna
 /// düşmüşse (ör. iki adresine birden gönderilmiş ya da bir takma ad
@@ -783,6 +835,17 @@ class MessageItem extends MailListItem {
   final MessageRow message;
 }
 
+/// Aynı ilişki kimliği altındaki iletilerin listedeki tek temsili.
+/// [messages] en yeniden en eskiye sıralıdır; ilk ileti satırın güncel
+/// özeti olur. İlişki bilgisi eşitleme sırasında kalıcı hesaplanır.
+class GroupedMessagesItem extends MailListItem {
+  const GroupedMessagesItem(this.messages) : assert(messages.length > 1);
+
+  final List<MessageRow> messages;
+
+  MessageRow get latest => messages.first;
+}
+
 /// Klasör ilk kez eşitlenirken (yerel veri henüz eksik) gösterilen tek öğe:
 /// iskelet shimmer yükleme görünümü. Böylece kullanıcı klasörü boş sanmaz ve
 /// iletiler parça parça dolmaz; indirme bitince liste tek seferde gelir.
@@ -825,6 +888,9 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final filterActive = ref.watch(
     messageFilterProvider.select((f) => f.isActive),
   );
+  final groupMessages = ref.watch(
+    settingsProvider.select((settings) => settings.groupMessages),
+  );
   // Bu klasör DAHA ÖNCE HİÇ eşitlenmedi (bkz. `SyncEngine.syncMailbox`
   // içindeki `neverSynced = mailbox.uidNext == null` — ilk indirme
   // tamamlanana kadar `uidNext` yerelde yazılmaz) VE tam da şu an bir
@@ -851,12 +917,19 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final syncState = ref.watch(syncControllerProvider);
   final syncInFlight = syncState.isSyncing;
   final isOffline = syncState.isOffline;
-  final folderError = mailbox != null ? syncState.folderErrors[mailbox.id] : null;
+  final folderError = mailbox != null
+      ? syncState.folderErrors[mailbox.id]
+      : null;
   final syncError = folderError ?? syncState.lastError;
 
-  final neverSyncedFolder = mailbox != null && mailbox.lastSyncAt == null;
+  final isUnified = folder?.isUnified == true;
+  final neverSyncedFolder = isUnified
+      ? ref
+            .watch(unifiedMailboxesProvider(folder!.unifiedUse!))
+            .every((m) => m.lastSyncAt == null)
+      : (mailbox != null && mailbox.lastSyncAt == null);
   final isFolderLoading =
-      syncInFlight || (neverSyncedFolder && !isOffline && syncError == null);
+      neverSyncedFolder && syncInFlight && !isOffline && syncError == null;
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
     final showPinned =
@@ -892,21 +965,34 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
       return items;
     }
 
+    final listRows = groupMessages ? _groupMessageRows(visible) : visible;
+
     if (!groupByDate) {
-      items.addAll(visible.map(MessageItem.new));
+      for (final row in listRows) {
+        items.add(
+          row is List<MessageRow>
+              ? GroupedMessagesItem(row)
+              : MessageItem(row as MessageRow),
+        );
+      }
       return items;
     }
 
     // `visible` zaten tarihe göre yeniden-eskiye sıralı geldiği için (bkz.
     // `watchMessages`) tek geçişte ardışık grup değişimini yakalamak yeterli.
     String? lastLabel;
-    for (final message in visible) {
+    for (final row in listRows) {
+      final message = row is List<MessageRow> ? row.first : row as MessageRow;
       final label = formatGroupHeader(message.dateUtc);
       if (label != lastLabel) {
         items.add(DateHeaderItem(label));
         lastLabel = label;
       }
-      items.add(MessageItem(message));
+      items.add(
+        row is List<MessageRow>
+            ? GroupedMessagesItem(row)
+            : MessageItem(message),
+      );
     }
     return items;
   }
@@ -944,14 +1030,18 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
     if (folder.isUnified) {
       // Tüm Hesaplar: satırlar bu türün herhangi bir hesaptaki klasöründen
       // gelmeli (aksi hâlde tek hesabın önceki klasörünün bayat satırlarıdır).
-      return unifiedMailboxIds.contains(rows.first.mailboxId);
+      return rows.any((m) => unifiedMailboxIds.contains(m.mailboxId));
     }
     if (accountId == null) return false;
-    final sample = rows.first;
-    if (sample.accountId != accountId) return false;
-    return folder.isFlaggedView
-        ? rows.every((m) => m.isFlagged)
-        : sample.mailboxId == folder.mailboxId;
+    if (rows.first.accountId != accountId) return false;
+    if (folder.isFlaggedView) {
+      return rows.every((m) => m.isFlagged);
+    }
+    final targetMailboxId = folder.mailboxId;
+    // Gelen kutusunda kullanıcının gönderdiği yanıtlar da (gönderilen kutusu)
+    // yer alabilir. Bu nedenle satırlardan en az biri hedef klasöre aitse
+    // bu liste doğru klasöre aittir.
+    return rows.any((m) => m.mailboxId == targetMailboxId);
   }
 
   if (syncError != null &&
@@ -987,6 +1077,50 @@ class PageLimitNotifier extends Notifier<int> {
 
   void grow() => state = state + step;
   void reset() => state = step;
+}
+
+/// Kaynak liste en yeni → en eski olduğundan, ilk karşılaşılan üye grubun
+/// sıralama tarihini ve özetini taşır. Hesap kimliği anahtara dahildir;
+/// farklı hesaplarda aynı Message-ID üretilse bile içerikler karışmaz.
+List<Object> _groupMessageRows(List<MessageRow> rows) {
+  final groups = <String, List<MessageRow>>{};
+  final order = <String>[];
+  final threadBySubject = <String, String>{};
+
+  for (final row in rows) {
+    final relationId = row.threadId.trim();
+    final cleanSubj = row.subjectNormalized.trim();
+    final isReply = hasReplyPrefix(row.subject);
+    final subjKey =
+        cleanSubj.isNotEmpty ? 'subj:${row.accountId}:$cleanSubj' : null;
+
+    String key;
+    if (relationId.isNotEmpty) {
+      key = 'group:${row.accountId}:$relationId';
+      if (subjKey != null && !threadBySubject.containsKey(subjKey)) {
+        threadBySubject[subjKey] = key;
+      }
+    } else if (subjKey != null && isReply && threadBySubject.containsKey(subjKey)) {
+      key = threadBySubject[subjKey]!;
+    } else {
+      key = 'single:${row.id}';
+      if (subjKey != null && isReply && !threadBySubject.containsKey(subjKey)) {
+        threadBySubject[subjKey] = key;
+      }
+    }
+
+    final members = groups[key];
+    if (members == null) {
+      groups[key] = [row];
+      order.add(key);
+    } else {
+      members.add(row);
+    }
+  }
+  return [
+    for (final key in order)
+      if (groups[key]!.length == 1) groups[key]!.single else groups[key]!,
+  ];
 }
 
 final pageLimitProvider = NotifierProvider<PageLimitNotifier, int>(
@@ -1037,9 +1171,7 @@ final pinnedMessagesProvider = StreamProvider<List<MessageRow>>((ref) {
         box.accountId,
     }.toList();
     if (accountIds.isEmpty) return Stream.value(const <MessageRow>[]);
-    return db
-        .watchFlaggedIn(accountIds: accountIds)
-        .map(_dedupeAcrossAccounts);
+    return db.watchFlaggedIn(accountIds: accountIds).map(_dedupeAcrossAccounts);
   }
 
   final accountId = ref.watch(accountIdProvider);

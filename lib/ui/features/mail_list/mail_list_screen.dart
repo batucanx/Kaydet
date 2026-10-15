@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show jsonDecode;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart' show HitTestResult;
 import 'package:flutter/rendering.dart' show RenderMetaData, ScrollCacheExtent;
@@ -7,6 +8,8 @@ import 'package:flutter/services.dart'
     show HapticFeedback, SystemUiOverlayStyle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+
+import '../../../core/date_format.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/push_stubs.dart';
@@ -253,7 +256,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
   void _triggerAutoLoadMore() {
     final now = DateTime.now();
     if (_lastAutoLoadAttempt != null &&
-        now.difference(_lastAutoLoadAttempt!) < const Duration(milliseconds: 800)) {
+        now.difference(_lastAutoLoadAttempt!) <
+            const Duration(milliseconds: 800)) {
       return;
     }
     final syncState = ref.read(syncControllerProvider);
@@ -322,6 +326,8 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
         if (expanded) ids.addAll(pinned.map((m) => m.id));
       } else if (item is MessageItem) {
         ids.add(item.message.id);
+      } else if (item is GroupedMessagesItem) {
+        ids.addAll(item.messages.map((m) => m.id));
       }
     }
     return ids;
@@ -502,6 +508,12 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
     final isSentLike =
         folderUse == SpecialUse.sent || folderUse == SpecialUse.drafts;
 
+    ref.listen<SelectedFolder?>(selectedFolderProvider, (prev, next) {
+      if (prev != next && _scroll.hasClients) {
+        _scroll.jumpTo(0);
+      }
+    });
+
     final scaffold = Scaffold(
       appBar: _buildAppBar(
         context,
@@ -592,12 +604,7 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
                 switchInCurve: Motion.standard,
                 switchOutCurve: Motion.standard,
                 child: KeyedSubtree(
-                  key: ValueKey((
-                    accountId,
-                    folder?.mailboxId,
-                    folder?.isFlaggedView,
-                    unifiedUse,
-                  )),
+                  key: ValueKey(accountId),
                   child: itemsAsync.when(
                     skipLoadingOnReload: true,
                     loading: () => const _ListSkeleton(),
@@ -675,7 +682,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
         : const <int, AccountRow>{};
     // Klasör yüklenirken ya da liste boşken ("yükleniyor"/"boş" yer tutucusu)
     // altta sayfalama kontrolü gösterilmez: ortada hâlâ bir ileti yok.
-    final hasMessages = items.any((i) => i is MessageItem);
+    final hasMessages = items.any(
+      (i) => i is MessageItem || i is GroupedMessagesItem,
+    );
     final showLoadMore = hasMessages && (hasMore || isLoadingMore);
     final list = ListView.builder(
       key: const PageStorageKey('mail-list'),
@@ -731,6 +740,20 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
                 ref.read(selectionProvider.notifier).toggle(message.id),
             onLongPress: () => _onRowLongPress(message.id),
           ),
+          GroupedMessagesItem(:final messages) => _GroupedThreadRow(
+            key: ValueKey(
+              'group-${messages.first.accountId}-${messages.first.threadId.isNotEmpty ? messages.first.threadId : messages.first.subjectNormalized}',
+            ),
+            messages: messages,
+            labels: labels,
+            isSentFolder: isSentLike,
+            account: accountsById[messages.first.accountId],
+            onTap: () => _onGroupedRowTap(messages),
+            onAvatarTap: () =>
+                ref.read(selectionProvider.notifier).toggle(messages.first.id),
+            onLongPress: () => _onRowLongPress(messages.first.id),
+            onChildTap: _onRowTap,
+          ),
         };
       },
     );
@@ -779,6 +802,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
 
     await context.pushScreen(MailDetailScreen(messageId: message.id));
   }
+
+  Future<void> _onGroupedRowTap(List<MessageRow> messages) =>
+      _onRowTap(messages.first);
 
   Future<void> _openCompose({int? draftId}) => openCompose(
     context,
@@ -1004,6 +1030,374 @@ class _ComposeFab extends StatelessWidget {
 /// ebeveynden parametre olarak almaz. Böylece bir satır seçildiğinde/
 /// seçimi kaldırıldığında SADECE o satırın widget'ı yeniden çizilir,
 /// listedeki diğer görünür satırlar etkilenmez.
+/// Çoklu konuşma grubu satırı: başlık satırı + açılır/kapanır (dropdown)
+/// alt ileti listesi. Sunucu/Webmail tarafındaki gibi tüm iletileri sırayla
+/// ve ait oldukları klasör rozetleriyle (örn: [Gönderilenler]) gösterir.
+class _GroupedThreadRow extends ConsumerWidget {
+  const _GroupedThreadRow({
+    super.key,
+    required this.messages,
+    required this.labels,
+    required this.isSentFolder,
+    required this.account,
+    required this.onTap,
+    required this.onAvatarTap,
+    required this.onLongPress,
+    required this.onChildTap,
+  });
+
+  final List<MessageRow> messages;
+  final List<LabelRow> labels;
+  final bool isSentFolder;
+  final AccountRow? account;
+  final VoidCallback onTap;
+  final VoidCallback onAvatarTap;
+  final VoidCallback onLongPress;
+  final ValueChanged<MessageRow> onChildTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = context.tokens;
+    final parent = messages.first;
+    final threadKey =
+        'group-${parent.accountId}-${parent.threadId.isNotEmpty ? parent.threadId : parent.subjectNormalized}';
+    final expanded = ref.watch(
+      expandedThreadsProvider.select((set) => set.contains(threadKey)),
+    );
+
+    final currentFolder = ref.watch(selectedFolderProvider);
+    final currentMailboxId = currentFolder?.mailboxId;
+    final mailboxes =
+        ref.watch(allMailboxesProvider).value ?? const <MailboxRow>[];
+    final mailboxesById = {for (final m in mailboxes) m.id: m};
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _SwipeRow(
+          key: ValueKey('swipe-${parent.id}'),
+          message: parent,
+          groupedMessages: messages,
+          labels: labels,
+          isSentFolder: isSentFolder,
+          account: account,
+          isExpanded: expanded,
+          onToggleExpand: () =>
+              ref.read(expandedThreadsProvider.notifier).toggle(threadKey),
+          onTap: onTap,
+          onAvatarTap: onAvatarTap,
+          onLongPress: onLongPress,
+        ),
+        AnimatedSize(
+          duration: context.motion(Motion.base),
+          curve: Motion.standard,
+          alignment: Alignment.topCenter,
+          child: expanded
+              ? Container(
+                  decoration: BoxDecoration(
+                    color: t.surface.withValues(alpha: 0.5),
+                    border: Border(
+                      bottom: BorderSide(
+                        color: t.divider.withValues(alpha: 0.5),
+                        width: 0.5,
+                      ),
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < messages.length; i++)
+                        _ChildThreadRow(
+                          key: ValueKey('thread-child-${messages[i].id}'),
+                          message: messages[i],
+                          isFirst: i == 0,
+                          isLast: i == messages.length - 1,
+                          currentMailboxId: currentMailboxId,
+                          mailbox: mailboxesById[messages[i].mailboxId],
+                          onTap: () => onChildTap(messages[i]),
+                        ),
+                    ],
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
+}
+
+/// Konuşma grubu içerisindeki tek bir alt ileti satırı.
+/// Webmail referansındaki gibi girintili avatar, gönderen/alıcı, snippet,
+/// ait olduğu klasör rozeti ([Gönderilenler]) ve tarih taşır.
+class _ChildThreadRow extends ConsumerWidget {
+  const _ChildThreadRow({
+    super.key,
+    required this.message,
+    required this.isFirst,
+    required this.isLast,
+    required this.currentMailboxId,
+    required this.mailbox,
+    required this.onTap,
+  });
+
+  final MessageRow message;
+  final bool isFirst;
+  final bool isLast;
+  final int? currentMailboxId;
+  final MailboxRow? mailbox;
+  final VoidCallback onTap;
+
+  String _displayName(bool isSent) {
+    if (isSent) {
+      final to = _decode(message.toAddrJson);
+      if (to.isEmpty) return 'Alıcı yok';
+      final first = to.first;
+      return to.length > 1 ? '$first +${to.length - 1}' : first;
+    }
+    if (message.fromName.trim().isNotEmpty) return message.fromName.trim();
+    if (message.fromEmail.trim().isNotEmpty) return message.fromEmail.trim();
+    return 'Bilinmeyen gönderen';
+  }
+
+  String _avatarKey(bool isSent) {
+    if (isSent) {
+      final to = _decodeEmails(message.toAddrJson);
+      return to.isEmpty ? '' : to.first;
+    }
+    return message.fromEmail.trim();
+  }
+
+  static bool _isEmptyJsonList(String json) => json.isEmpty || json == '[]';
+
+  static List<String> _decode(String json) {
+    if (_isEmptyJsonList(json)) return const [];
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(
+            (m) => (m['n'] as String?)?.trim().isNotEmpty == true
+                ? m['n'] as String
+                : (m['e'] as String? ?? ''),
+          )
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  static List<String> _decodeEmails(String json) {
+    if (_isEmptyJsonList(json)) return const [];
+    try {
+      final decoded = jsonDecode(json);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map((m) => m['e'] as String? ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = context.tokens;
+    final isSelected = ref.watch(
+      selectionProvider.select((set) => set.contains(message.id)),
+    );
+    final box = mailbox;
+    final isSent = box?.specialUse == SpecialUse.sent;
+    final unread = !message.isSeen;
+    final name = _displayName(isSent);
+    final avatarKey = _avatarKey(isSent);
+
+    final showFolderBadge = box != null &&
+        currentMailboxId != null &&
+        box.id != currentMailboxId;
+    final folderDisplayName = box == null
+        ? null
+        : FolderMapping.displayName(box.specialUse, box.name);
+
+    final snippet = message.preview.trim().isNotEmpty
+        ? message.preview.trim()
+        : message.subject.trim();
+
+    return MetaData(
+      metaData: _MailRowTag(message.id),
+      behavior: HitTestBehavior.translucent,
+      child: Material(
+        color: isSelected ? t.accentSubtle : Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (ref.read(selectionProvider).isNotEmpty) {
+              ref.read(selectionProvider.notifier).toggle(message.id);
+              HapticFeedback.selectionClick();
+              return;
+            }
+            onTap();
+          },
+          onLongPress: () {
+            ref.read(selectionProvider.notifier).toggle(message.id);
+            HapticFeedback.selectionClick();
+            _DragSelectStartNotification(message.id).dispatch(context);
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color:
+                      isSelected ? t.accent : t.accent.withValues(alpha: 0.35),
+                  width: isSelected ? 3 : 2,
+                ),
+                bottom: BorderSide(
+                  color: t.divider.withValues(alpha: 0.4),
+                  width: 0.5,
+                ),
+              ),
+            ),
+            padding: const EdgeInsets.only(
+              left: Space.xl,
+              right: Space.md,
+              top: Space.xs + 3,
+              bottom: Space.xs + 3,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                // Küçük avatar (26px) + okunmamış noktası
+                GestureDetector(
+                  onTap: () {
+                    ref.read(selectionProvider.notifier).toggle(message.id);
+                    HapticFeedback.selectionClick();
+                  },
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      KaydetAvatar(
+                        name: name,
+                        email: avatarKey,
+                        size: 26,
+                      ),
+                      if (unread)
+                        Positioned(
+                          left: -5,
+                          top: 10,
+                          child: Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: t.accent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: Space.sm),
+                // Gönderen / Alıcı ve Snippet
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              isSent ? 'Alıcı: $name' : name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: (unread
+                                      ? AppText.labelMedium
+                                      : AppText.labelMedium.copyWith(
+                                          fontWeight: FontWeight.normal,
+                                        ))
+                                  .copyWith(
+                                color: unread ? t.textPrimary : t.textSecondary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: Space.xs),
+                          Text(
+                            formatListDate(
+                              message.dateUtc,
+                              locale:
+                                  Localizations.localeOf(context).languageCode,
+                            ),
+                            style: AppText.labelSmall.copyWith(
+                              color: unread ? t.accent : t.textTertiary,
+                              fontWeight:
+                                  unread ? FontWeight.w600 : FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              snippet.isEmpty ? '(içerik yok)' : snippet,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppText.bodyMedium.copyWith(
+                                color: t.textTertiary,
+                              ),
+                            ),
+                          ),
+                          if (showFolderBadge && folderDisplayName != null) ...[
+                            const SizedBox(width: Space.xs),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 1.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: t.surfaceElevated,
+                                borderRadius: BorderRadius.circular(Radii.full),
+                                border: Border.all(
+                                  color: t.border,
+                                  width: 0.8,
+                                ),
+                              ),
+                              child: Text(
+                                folderDisplayName,
+                                style: AppText.labelSmall.copyWith(
+                                  fontSize: 10,
+                                  color: t.textSecondary,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (message.hasAttachments) ...[
+                            const SizedBox(width: Space.xs),
+                            Icon(
+                              LucideIcons.paperclip,
+                              size: 11,
+                              color: t.textTertiary,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SwipeRow extends ConsumerStatefulWidget {
   const _SwipeRow({
     super.key,
@@ -1013,8 +1407,11 @@ class _SwipeRow extends ConsumerStatefulWidget {
     required this.onTap,
     required this.onAvatarTap,
     required this.onLongPress,
+    this.groupedMessages = const [],
     this.useOwnFolder = false,
     this.account,
+    this.isExpanded = false,
+    this.onToggleExpand,
   });
 
   final MessageRow message;
@@ -1033,6 +1430,9 @@ class _SwipeRow extends ConsumerStatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onAvatarTap;
   final VoidCallback onLongPress;
+  final List<MessageRow> groupedMessages;
+  final bool isExpanded;
+  final VoidCallback? onToggleExpand;
 
   @override
   ConsumerState<_SwipeRow> createState() => _SwipeRowState();
@@ -1197,8 +1597,12 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
     }
     final rightEffective = _effectiveFor(rightSelected, folder);
     final leftEffective = _effectiveFor(leftSelected, folder);
-    final rightStyle = SwipeStyle.of(rightEffective, t);
-    final leftStyle = SwipeStyle.of(leftEffective, t);
+    // Grup satırı birden çok iletiyi temsil eder. Yanlışlıkla yalnızca en son
+    // üyeye işlem uygulamamak için kaydırma kapalıdır; uzun basma/avatara
+    // dokunma tüm üyeleri seçer ve mevcut toplu işlem çubuğu kullanılır.
+    final allowSwipe = widget.groupedMessages.isEmpty;
+    final rightStyle = allowSwipe ? SwipeStyle.of(rightEffective, t) : null;
+    final leftStyle = allowSwipe ? SwipeStyle.of(leftEffective, t) : null;
 
     final direction = switch ((rightStyle != null, leftStyle != null)) {
       (true, true) => DismissDirection.horizontal,
@@ -1254,6 +1658,9 @@ class _SwipeRowState extends ConsumerState<_SwipeRow> {
           onRemoveLabel: (name) => ref
               .read(mailRepositoryProvider)
               .setLabel(messageIds: [message.id], labelName: name, add: false),
+          groupedMessages: widget.groupedMessages,
+          isExpanded: widget.isExpanded,
+          onToggleExpand: widget.onToggleExpand,
         ),
       ),
     );
@@ -1506,7 +1913,8 @@ class _SelectionActionBar extends ConsumerWidget {
                   if (overlay.mounted) {
                     KaydetNotice.show(
                       overlay,
-                      message: '${selected.length} ileti ek olarak hazırlanıyor…',
+                      message:
+                          '${selected.length} ileti ek olarak hazırlanıyor…',
                       bottomInset: _ComposeFab.footprint,
                     );
                   }

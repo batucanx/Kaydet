@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-
 
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
@@ -29,6 +29,9 @@ class MailRow extends StatelessWidget {
     this.account,
     this.onRemoveLabel,
     this.onUnpin,
+    this.groupedMessages = const [],
+    this.isExpanded = false,
+    this.onToggleExpand,
   });
 
   final MessageRow message;
@@ -49,6 +52,20 @@ class MailRow extends StatelessWidget {
   /// Verilirse sabitleme ikonuna dokunmak sabitlemeyi kaldırır.
   final VoidCallback? onUnpin;
 
+  /// Birden çok ileti tek satırda özetlendiğinde grubun tüm üyeleri. Boşsa
+  /// satır normal ileti görünümündedir.
+  final List<MessageRow> groupedMessages;
+
+  /// Konuşma grubu genişletilmiş (dropdown açık) mı?
+  final bool isExpanded;
+
+  /// Konuşma grubu açma/kapatma (dropdown) callback'i.
+  final VoidCallback? onToggleExpand;
+
+  bool get _isGrouped => groupedMessages.length > 1;
+
+  List<MessageRow> get _allMessages => _isGrouped ? groupedMessages : [message];
+
   /// Gönderilenler ve Taslaklar klasöründe alıcı gösterilir.
   String get _displayName {
     if (isSentFolder) {
@@ -68,6 +85,17 @@ class MailRow extends StatelessWidget {
       return to.isEmpty ? '' : to.first;
     }
     return message.fromEmail;
+  }
+
+  String get _participantNames {
+    final names = <String>[];
+    for (final item in _allMessages) {
+      final name = item.fromName.trim().isNotEmpty
+          ? item.fromName.trim()
+          : item.fromEmail.trim();
+      if (name.isNotEmpty && !names.contains(name)) names.add(name);
+    }
+    return names.take(3).join(', ');
   }
 
   /// Boş/`[]` girdide `jsonDecode`'a hiç girmez — Gelen Kutusu'nda her
@@ -124,7 +152,7 @@ class MailRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = context.tokens;
-    final unread = !message.isSeen;
+    final unread = _allMessages.any((item) => !item.isSeen);
     final pinned = message.isFlagged;
     final labelNames = _labelNames;
     final outbox = message.outboxState;
@@ -134,7 +162,8 @@ class MailRow extends StatelessWidget {
       selected: isSelected,
       label:
           '${unread ? 'Okunmamış. ' : ''}${pinned ? 'Sabitlenmiş. ' : ''}'
-          '$_displayName. ${message.subject}',
+          '${_isGrouped ? 'Gruplandırılmış ${_allMessages.length} ileti. ' : ''}'
+          '${_isGrouped ? _participantNames : _displayName}. ${message.subject}',
       child: InkWell(
         onTap: onTap,
         onLongPress: onLongPress,
@@ -277,7 +306,7 @@ class MailRow extends StatelessWidget {
   Widget _senderLine(BuildContext context, bool unread) {
     final t = context.tokens;
     return Text(
-      _displayName,
+      _isGrouped ? _participantNames : _displayName,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
       style: (unread ? AppText.listSenderUnread : AppText.listSenderRead)
@@ -313,6 +342,10 @@ class MailRow extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           date,
+          if (_isGrouped) ...[
+            const SizedBox(height: Space.xs),
+            _groupCount(context),
+          ],
           if (pinned || message.hasAttachments) ...[
             const SizedBox(height: Space.xs),
             Row(
@@ -343,6 +376,67 @@ class MailRow extends StatelessWidget {
             ),
           ],
         ],
+      ),
+    );
+  }
+
+  Widget _groupCount(BuildContext context) {
+    final t = context.tokens;
+    final pill = Container(
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 22),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: isExpanded ? t.accent.withValues(alpha: 0.16) : t.accentSubtle,
+        borderRadius: BorderRadius.circular(Radii.full),
+        border: Border.all(
+          color: isExpanded ? t.accent : t.accent.withValues(alpha: 0.35),
+          width: 1,
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Text(
+            '${_allMessages.length}',
+            style: AppText.labelMedium.copyWith(
+              color: t.accent,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 3),
+          Icon(
+            isExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+            size: 13,
+            color: t.accent,
+          ),
+        ],
+      ),
+    );
+
+    if (onToggleExpand == null) {
+      return Semantics(
+        label: '${_allMessages.length} ileti',
+        child: pill,
+      );
+    }
+
+    return Semantics(
+      label: isExpanded
+          ? '${_allMessages.length} ileti, konuşmayı daralt'
+          : '${_allMessages.length} ileti, konuşmayı genişlet',
+      button: true,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            HapticFeedback.selectionClick();
+            onToggleExpand!();
+          },
+          borderRadius: BorderRadius.circular(Radii.full),
+          child: pill,
+        ),
       ),
     );
   }

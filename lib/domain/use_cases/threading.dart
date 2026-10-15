@@ -48,12 +48,15 @@ abstract final class Threading {
   ///
   /// [knownThreads] daha önce hesaplanmış `messageId → threadId` eşlemesidir;
   /// yeni ileti bir ata iletiye bağlanırsa onun konuşmasına katılır.
+  /// [knownBySubject] ise başlık bilgisi eksik iletilerin konuya göre aynı
+  /// konuşmaya katılabilmesi için `subjKey → threadId` eşlemesidir.
   static String resolveThreadId({
     required String? messageId,
     required String? inReplyTo,
     required String? references,
     required String? subject,
     required Map<String, String> knownThreads,
+    Map<String, String>? knownBySubject,
   }) {
     final refs = <String>[
       ...parseReferences(references),
@@ -69,14 +72,26 @@ abstract final class Threading {
     // 2. Atalar bilinmiyorsa kökü konuşma kimliği yap.
     if (refs.isNotEmpty) return refs.first;
 
-    // 3. Kendi Message-ID'si varsa konuşmanın kökü bu iletidir.
+    // 3. Konuya dayalı bilinen bir konuşma var mı?
+    // Referans başlığı bulunmayan veya posta sunucusu tarafından kırpılan
+    // yanıt iletileri aynı konudaki var olan konuşmaya katılır.
+    // Ancak YALNIZCA yanıt/iletme ön eki ("Re:", "Yanıt:" vb.) taşıyorsa!
+    // Ön eki olmayan bağımsız iletiler ("Test", "Fatura" vb.) kendi Message-ID'siyle
+    // yeni bir konuşma kökü olmalıdır.
+    final subjKey = subjectKey(subject);
+    if (subjKey != null && knownBySubject != null && hasReplyPrefix(subject)) {
+      final existingBySubj = knownBySubject[subjKey];
+      if (existingBySubj != null) return existingBySubj;
+    }
+
+    // 4. Kendi Message-ID'si varsa konuşmanın kökü bu iletidir.
     final own = normalizeId(messageId);
     if (own != null) return own;
 
-    // 4. Son çare: konu anahtarı. Konu da yoksa ileti kendi başına bir
+    // 5. Son çare: konu anahtarı. Konu da yoksa ileti kendi başına bir
     // konuşmadır — boş konulu tüm otomatik iletilerin tek bir dev konuşmada
     // birikmesi engellenir.
-    return subjectKey(subject) ?? _uniqueFallbackId();
+    return subjKey ?? _uniqueFallbackId();
   }
 
   /// Eşleşecek hiçbir bilgisi olmayan iletiler için benzersiz kimlik.
@@ -140,26 +155,15 @@ abstract final class Threading {
         references: item.references,
         subject: item.subject,
         knownThreads: byMessageId,
+        knownBySubject: bySubject,
       );
 
-      var finalThread = threadId;
-
-      // Başlık bilgisi yoksa konu üzerinden birleştirmeyi dene.
-      final hasHeaders =
-          (item.messageId != null && item.messageId!.isNotEmpty) ||
-          (item.references != null && item.references!.isNotEmpty) ||
-          (item.inReplyTo != null && item.inReplyTo!.isNotEmpty);
-      final subjKey = subjectKey(item.subject);
-
-      if (!hasHeaders && subjKey != null) {
-        finalThread = bySubject[subjKey] ?? threadId;
-      }
-
       final own = normalizeId(item.messageId);
-      if (own != null) byMessageId[own] = finalThread;
-      if (subjKey != null) bySubject.putIfAbsent(subjKey, () => finalThread);
+      if (own != null) byMessageId[own] = threadId;
+      final subjKey = subjectKey(item.subject);
+      if (subjKey != null) bySubject.putIfAbsent(subjKey, () => threadId);
 
-      result[item.localId] = finalThread;
+      result[item.localId] = threadId;
     }
 
     return result;

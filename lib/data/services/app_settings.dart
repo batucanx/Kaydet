@@ -76,6 +76,7 @@ class AppSettings {
     this.notificationsEnabled = true,
     this.notificationPermissionAsked = false,
     this.showBrandLogos = true,
+    this.groupMessages = true,
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
     this.markSeenDelayMs = 1500,
@@ -94,6 +95,11 @@ class AppSettings {
   /// Açıkken gönderenlerin ALAN ADLARI Google'ın favicon servisine iletilir;
   /// kapalıyken hiçbir ağ isteği yapılmaz, renkli baş harf gösterilir.
   final bool showBrandLogos;
+
+  /// Aynı konuşmaya ait iletiler listede tek satır olarak gösterilsin mi?
+  /// İlişki bilgisi her zaman cihazda hesaplanmaya devam eder; bu tercih
+  /// yalnızca liste sunumunu değiştirir.
+  final bool groupMessages;
   final SyncFrequency syncFrequency;
   final bool confirmBeforeDelete;
 
@@ -113,24 +119,25 @@ class AppSettings {
     bool? notificationsEnabled,
     bool? notificationPermissionAsked,
     bool? showBrandLogos,
+    bool? groupMessages,
     SyncFrequency? syncFrequency,
     bool? confirmBeforeDelete,
     int? markSeenDelayMs,
     SwipeAction? swipeRight,
     SwipeAction? swipeLeft,
-  }) =>
-      AppSettings(
-        themeMode: themeMode ?? this.themeMode,
-        notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
-        notificationPermissionAsked:
-            notificationPermissionAsked ?? this.notificationPermissionAsked,
-        showBrandLogos: showBrandLogos ?? this.showBrandLogos,
-        syncFrequency: syncFrequency ?? this.syncFrequency,
-        confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
-        markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
-        swipeRight: swipeRight ?? this.swipeRight,
-        swipeLeft: swipeLeft ?? this.swipeLeft,
-      );
+  }) => AppSettings(
+    themeMode: themeMode ?? this.themeMode,
+    notificationsEnabled: notificationsEnabled ?? this.notificationsEnabled,
+    notificationPermissionAsked:
+        notificationPermissionAsked ?? this.notificationPermissionAsked,
+    showBrandLogos: showBrandLogos ?? this.showBrandLogos,
+    groupMessages: groupMessages ?? this.groupMessages,
+    syncFrequency: syncFrequency ?? this.syncFrequency,
+    confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
+    markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
+    swipeRight: swipeRight ?? this.swipeRight,
+    swipeLeft: swipeLeft ?? this.swipeLeft,
+  );
 }
 
 /// Tercihlerin kalıcı saklanması.
@@ -143,6 +150,7 @@ class AppSettingsStore {
   static const _kNotifications = 'kaydet.notifications';
   static const _kPermissionAsked = 'kaydet.notificationPermissionAsked';
   static const _kBrandLogos = 'kaydet.showBrandLogos';
+  static const _kGroupMessages = 'kaydet.groupMessages';
   static const _kSync = 'kaydet.syncFrequency';
   static const _kConfirmDelete = 'kaydet.confirmDelete';
   static const _kSwipeRight = 'kaydet.swipeRight';
@@ -168,10 +176,13 @@ class AppSettingsStore {
       notificationsEnabled: _prefs.getBool(_kNotifications) ?? true,
       notificationPermissionAsked: _prefs.getBool(_kPermissionAsked) ?? false,
       showBrandLogos: _prefs.getBool(_kBrandLogos) ?? true,
+      groupMessages: _prefs.getBool(_kGroupMessages) ?? true,
       syncFrequency: syncIndex == null
           ? SyncFrequency.push
-          : SyncFrequency
-              .values[syncIndex.clamp(0, SyncFrequency.values.length - 1)],
+          : SyncFrequency.values[syncIndex.clamp(
+              0,
+              SyncFrequency.values.length - 1,
+            )],
       confirmBeforeDelete: _prefs.getBool(_kConfirmDelete) ?? true,
       swipeRight: _readSwipe(_kSwipeRight, SwipeAction.configure),
       swipeLeft: _readSwipe(_kSwipeLeft, SwipeAction.delete),
@@ -206,8 +217,12 @@ class AppSettingsStore {
   Future<void> write(AppSettings settings) async {
     await _prefs.setInt(_kTheme, settings.themeMode.index);
     await _prefs.setBool(_kNotifications, settings.notificationsEnabled);
-    await _prefs.setBool(_kPermissionAsked, settings.notificationPermissionAsked);
+    await _prefs.setBool(
+      _kPermissionAsked,
+      settings.notificationPermissionAsked,
+    );
     await _prefs.setBool(_kBrandLogos, settings.showBrandLogos);
+    await _prefs.setBool(_kGroupMessages, settings.groupMessages);
     await _prefs.setInt(_kSync, settings.syncFrequency.index);
     await _prefs.setBool(_kConfirmDelete, settings.confirmBeforeDelete);
     await _prefs.setInt(_kSwipeRight, settings.swipeRight.index);
