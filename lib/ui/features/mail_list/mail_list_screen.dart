@@ -237,15 +237,29 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
     super.dispose();
   }
 
-  // Sayfalama artık burada TETİKLENMEZ (bkz. `_LoadMoreControl`): kaydırma
-  // pozisyonuna bağlı otomatik yükleme, hızlı kaydırma sırasında ağ isteği +
-  // veritabanı yeniden sorgusuyla aynı kareye denk gelip kare düşürüyor ve
-  // yeni satırlar birden "patlayarak" beliriyordu (Outlook mobildeki gibi
-  // "Manuel Kontrollü Sayfalama"da bir sonraki sayfa yalnızca kullanıcı
-  // düğmeye dokunduğunda, öngörülebilir tek bir anda istenir).
+  DateTime? _lastAutoLoadAttempt;
+
+  // Sonsuz kaydırma: Listenin sonuna yaklaşılınca otomatik yükler.
   void _onScroll() {
     if (!_scroll.hasClients) return;
     _isAtTop.value = _scroll.position.pixels <= 8;
+
+    final pos = _scroll.position;
+    if (pos.maxScrollExtent > 0 && pos.pixels >= pos.maxScrollExtent - 350) {
+      _triggerAutoLoadMore();
+    }
+  }
+
+  void _triggerAutoLoadMore() {
+    final now = DateTime.now();
+    if (_lastAutoLoadAttempt != null &&
+        now.difference(_lastAutoLoadAttempt!) < const Duration(milliseconds: 800)) {
+      return;
+    }
+    final syncState = ref.read(syncControllerProvider);
+    if (syncState.isLoadingMore || !syncState.hasMore) return;
+    _lastAutoLoadAttempt = now;
+    ref.read(syncControllerProvider.notifier).loadMore();
   }
 
   void _onPointerDown(PointerDownEvent e) {
@@ -458,16 +472,21 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
     final isOffline = ref.watch(
       syncControllerProvider.select((s) => s.isOffline),
     );
-    final syncError = ref.watch(
-      syncControllerProvider.select((s) => s.lastError),
-    );
+    final mailbox = ref.watch(currentMailboxProvider);
+    final folderError = mailbox != null
+        ? ref.watch(
+            syncControllerProvider.select((s) => s.folderErrors[mailbox.id]),
+          )
+        : null;
+    final syncError =
+        folderError ??
+        ref.watch(syncControllerProvider.select((s) => s.lastError));
     final isLoadingMore = ref.watch(
       syncControllerProvider.select((s) => s.isLoadingMore),
     );
     final hasMoreLocal = ref.watch(
       syncControllerProvider.select((s) => s.hasMore),
     );
-    final mailbox = ref.watch(currentMailboxProvider);
     final folder = ref.watch(selectedFolderProvider);
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
     // Tüm Hesaplar: liste tek bir klasör değil, her hesabın aynı türdeki
@@ -582,10 +601,20 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
                   child: itemsAsync.when(
                     skipLoadingOnReload: true,
                     loading: () => const _ListSkeleton(),
-                    error: (error, _) => EmptyState(
-                      icon: LucideIcons.triangleAlert,
-                      title: 'Liste yüklenemedi',
-                      description: '$error',
+                    error: (error, _) => SizedBox(
+                      height: MediaQuery.sizeOf(context).height * 0.6,
+                      child: EmptyState(
+                        icon: LucideIcons.triangleAlert,
+                        title: 'Klasör yüklenemedi',
+                        description: '$error',
+                        action: OutlinedButton.icon(
+                          onPressed: () => ref
+                              .read(syncControllerProvider.notifier)
+                              .syncCurrentFolder(allAccounts: true),
+                          icon: const Icon(LucideIcons.refreshCw, size: 16),
+                          label: const Text('Tekrar dene'),
+                        ),
+                      ),
                     ),
                     data: (items) => _buildListView(
                       context,
@@ -667,10 +696,21 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
         }
         return switch (items[index]) {
           PinnedSectionItem() => const _PinnedSection(),
-          // İlk indirme sürerken liste boş kalır; "yükleniyor" bilgisini
-          // AppBar altındaki `_SyncProgressBar` verir.
-          FolderLoadingItem() => SizedBox(
+          FolderLoadingItem() => const _ListSkeleton(),
+          FolderErrorItem(:final error) => SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.6,
+            child: EmptyState(
+              icon: LucideIcons.triangleAlert,
+              title: 'Klasör yüklenemedi',
+              description: error.userMessage,
+              action: OutlinedButton.icon(
+                onPressed: () => ref
+                    .read(syncControllerProvider.notifier)
+                    .syncCurrentFolder(allAccounts: true),
+                icon: const Icon(LucideIcons.refreshCw, size: 16),
+                label: const Text('Tekrar dene'),
+              ),
+            ),
           ),
           EmptyListItem(:final filterActive) => SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.6,
@@ -1654,11 +1694,38 @@ class _BarAction extends StatelessWidget {
 /// metni) yalnızca renk ve tıklanabilirlik değişir — ikisi de aynı
 /// `AppText.labelMedium` ölçüsünü kullandığı için geçişte satır yüksekliği
 /// sıçramaz.
-class _LoadMoreControl extends StatelessWidget {
+class _LoadMoreControl extends StatefulWidget {
   const _LoadMoreControl({required this.isLoading, required this.onTap});
 
   final bool isLoading;
   final VoidCallback onTap;
+
+  @override
+  State<_LoadMoreControl> createState() => _LoadMoreControlState();
+}
+
+class _LoadMoreControlState extends State<_LoadMoreControl> {
+  @override
+  void initState() {
+    super.initState();
+    _checkTrigger();
+  }
+
+  @override
+  void didUpdateWidget(covariant _LoadMoreControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _checkTrigger();
+  }
+
+  void _checkTrigger() {
+    if (!widget.isLoading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !widget.isLoading) {
+          widget.onTap();
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1666,16 +1733,30 @@ class _LoadMoreControl extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Space.lg),
       child: Center(
-        child: isLoading
-            ? Text(
-                'Yükleniyor…',
-                style: AppText.labelMedium.copyWith(
-                  fontSize: 14 * AppText.scale,
-                  color: t.textTertiary,
-                ),
+        child: widget.isLoading
+            ? Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: t.textTertiary,
+                    ),
+                  ),
+                  const SizedBox(width: Space.sm),
+                  Text(
+                    'Yükleniyor…',
+                    style: AppText.labelMedium.copyWith(
+                      fontSize: 14 * AppText.scale,
+                      color: t.textTertiary,
+                    ),
+                  ),
+                ],
               )
             : TextButton(
-                onPressed: onTap,
+                onPressed: widget.onTap,
                 child: const Text('Daha fazla ileti yükle'),
               ),
       ),

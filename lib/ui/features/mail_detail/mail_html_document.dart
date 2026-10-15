@@ -57,9 +57,17 @@ abstract final class MailHtmlDocument {
 
   /// Render betiğinin kaynağı; süreç boyunca bir kez okunur (bkz. `build`in
   /// `script` parametresi).
-  static final Future<String> renderScript = rootBundle.loadString(
-    _scriptAsset,
-  );
+  static String? _cachedScript;
+  static Future<String> get renderScript async {
+    final cached = _cachedScript;
+    if (cached != null) return cached;
+    try {
+      final loaded = await rootBundle.loadString(_scriptAsset);
+      return _cachedScript = loaded;
+    } catch (_) {
+      return '';
+    }
+  }
 
   /// Düz metin gövdeyi [build]in göstereceği HTML'e çevirir: kaçışlar,
   /// satır sonları ve uzun satırlar korunur; http(s) adresleri bağlantı olur.

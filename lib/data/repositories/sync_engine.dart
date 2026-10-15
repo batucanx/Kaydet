@@ -199,6 +199,7 @@ class SyncEngine {
     final caps = _connection.capabilities;
     final selected = await _connection.imap.selectMailbox(
       mailbox.path,
+      encodedPath: mailbox.encodedPath,
       enableCondStore: caps.supportsCondStore,
     );
     if (selected is Err<MailboxState>) return Err(selected.failure);
@@ -255,50 +256,73 @@ class SyncEngine {
 
     // --- 2. Yeni iletiler -------------------------------------------------
     final localHighest = await _db.highestUid(mailbox.id);
+    final localCount = await _db.countMessages(mailbox.id);
+    print(
+      '[SYNC_ENGINE] Mailbox "${mailbox.path}" (id: ${mailbox.id}, encoded: "${mailbox.encodedPath}"): '
+      'remoteExists=${state.messageCount}, uidValidity=${state.uidValidity}, '
+      'uidNext=${state.uidNext}, localHighest=$localHighest, localDbCount=$localCount',
+    );
     List<int> newIds = const [];
 
-    // Yerel kayıt yokluğu tek başına "ilk indirme" demek değildir: kullanıcı
-    // tüm iletileri arşivleyip/silip Gelen Kutusu'nu boşaltmış olabilir. Klasör
-    // daha önce eşitlendiyse (`uidNext` biliniyor) yalnızca yeni iletiler
-    // çekilir ve bildirim bastırılmaz.
     final neverSynced = mailbox.uidNext == null;
-    if (resynced || (localHighest == null && neverSynced)) {
-      // İlk indirme: en yeni N ileti.
-      final all = await _connection.imap.searchAllUids();
-      if (all is Err<List<int>>) return Err(all.failure);
-      final uids = (all as Ok<List<int>>).value..sort();
-      final slice = uids.length <= initialFetchCount
-          ? uids
-          : uids.sublist(uids.length - initialFetchCount);
-      final fetched = await _fetchAndStore(accountId, mailbox, slice);
-      if (fetched is Err<List<int>>) return Err(fetched.failure);
-      newIds = (fetched as Ok<List<int>>).value;
-      final diverted = await _divertBlockedSenders(accountId, mailbox);
-      newIds = [
-        for (final id in newIds)
-          if (!diverted.contains(id)) id,
-      ];
-      await _db.updateMailboxSync(
-        mailbox.id,
-        uidNext: state.uidNext,
-        highestModSeq: state.highestModSeq,
-        totalCount: state.messageCount,
-        hasMoreOnServer: uids.length > slice.length,
-      );
+    final needsInitialFetch =
+        resynced || neverSynced || (localHighest == null && state.messageCount > 0);
+    if (needsInitialFetch) {
+      // İlk indirme veya yerel DB'de henüz mesaj bulunmayan klasör: en yeni N ileti.
+      // Sequence numaraları (1..messageCount) kullanılarak doğrudan son N ileti çekilir.
+      if (state.messageCount > 0) {
+        final fromSeq = (state.messageCount - initialFetchCount + 1)
+            .clamp(1, state.messageCount);
+        final toSeq = state.messageCount;
+        print('[SYNC_ENGINE] Initial fetch for "${mailbox.path}": seq $fromSeq..$toSeq');
+        final fetched = await _fetchSequenceAndStore(
+          accountId,
+          mailbox,
+          fromSeq: fromSeq,
+          toSeq: toSeq,
+        );
+        if (fetched is Err<List<int>>) return Err(fetched.failure);
+        newIds = (fetched as Ok<List<int>>).value;
+        print(
+          '[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}": '
+          'UIDs=${newIds.take(10).toList()}${newIds.length > 10 ? '...' : ''}',
+        );
+        final diverted = await _divertBlockedSenders(accountId, mailbox);
+        newIds = [
+          for (final id in newIds)
+            if (!diverted.contains(id)) id,
+        ];
+        final nextUid = state.uidNext > 0
+            ? state.uidNext
+            : (newIds.isNotEmpty ? (newIds.reduce((a, b) => a > b ? a : b) + 1) : null);
+        await _db.updateMailboxSync(
+          mailbox.id,
+          uidNext: nextUid,
+          highestModSeq: state.highestModSeq,
+          totalCount: state.messageCount,
+          hasMoreOnServer: fromSeq > 1,
+        );
+      } else {
+        await _db.updateMailboxSync(
+          mailbox.id,
+          uidNext: state.uidNext > 0 ? state.uidNext : null,
+          highestModSeq: state.highestModSeq,
+          totalCount: 0,
+          hasMoreOnServer: false,
+        );
+      }
       return Ok(
         SyncOutcome(
           newMessageIds: newIds,
           resynced: resynced,
-          initialDownload: true,
+          initialDownload: neverSynced,
         ),
       );
     }
 
-    final fromUid = localHighest != null ? localHighest + 1 : mailbox.uidNext!;
+    final fromUid = localHighest != null ? localHighest + 1 : (mailbox.uidNext ?? 1);
     if (state.uidNext > fromUid) {
-      // Taşıma/silme sunucuya henüz işlenmemiş iletiler (kullanıcı az önce
-      // arşivledi/sildi) sunucuda hâlâ durur; yerelde en yüksek UID onlar
-      // olduğu için aralık çekimi onları listeye geri getirirdi.
+      print('[SYNC_ENGINE] Incremental UID fetch for "${mailbox.path}": $fromUid..${state.uidNext - 1}');
       final fetched = await _fetchRangeAndStore(
         accountId,
         mailbox,
@@ -308,6 +332,23 @@ class SyncEngine {
       );
       if (fetched is Err<List<int>>) return Err(fetched.failure);
       newIds = (fetched as Ok<List<int>>).value;
+      print('[SYNC_ENGINE] Fetched ${newIds.length} new envelopes for "${mailbox.path}"');
+    } else if (state.uidNext <= 0 && state.messageCount > mailbox.totalCount) {
+      // Sunucu UIDNEXT bildirmiyor (state.uidNext == 0): yeni iletileri sıra numarası artışıyla çek.
+      final fromSeq = (mailbox.totalCount + 1).clamp(1, state.messageCount);
+      final toSeq = state.messageCount;
+      if (toSeq >= fromSeq) {
+        print('[SYNC_ENGINE] Sequence fetch for server without UIDNEXT: seq $fromSeq..$toSeq');
+        final fetched = await _fetchSequenceAndStore(
+          accountId,
+          mailbox,
+          fromSeq: fromSeq,
+          toSeq: toSeq,
+        );
+        if (fetched is Err<List<int>>) return Err(fetched.failure);
+        newIds = (fetched as Ok<List<int>>).value;
+        print('[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}"');
+      }
     }
 
     // Engellenen göndericilerin iletileri (yeni gelenler ve önceki bir turdan kalanlar)
@@ -426,34 +467,65 @@ class SyncEngine {
     final selected = await _connection.selectVerified(current);
     if (selected is Err<MailboxState>) return Err(selected.failure);
 
-    final lowest = await _db.lowestUid(mailbox.id);
-    if (lowest == null || lowest <= 1) {
+    final lowestList = await _db.lowestUids(mailbox.id, limit: 5);
+    if (lowestList.isEmpty) {
+      final selectedState = (selected as Ok<MailboxState>).value;
+      if (selectedState.messageCount > 0) {
+        final fromSeq = (selectedState.messageCount - count + 1)
+            .clamp(1, selectedState.messageCount);
+        final toSeq = selectedState.messageCount;
+        final fetched = await _fetchSequenceAndStore(
+          accountId,
+          mailbox,
+          fromSeq: fromSeq,
+          toSeq: toSeq,
+        );
+        if (fetched is Err<List<int>>) return Err(fetched.failure);
+        final newIds = (fetched as Ok<List<int>>).value;
+        await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: fromSeq > 1);
+        return Ok(newIds.length);
+      }
+      await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: false);
+      return const Ok(0);
+    }
+    if (lowestList.first <= 1) {
       await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: false);
       return const Ok(0);
     }
 
-    final all = await _connection.imap.searchAllUids();
-    if (all is Err<List<int>>) return Err(all.failure);
-    final older = ((all as Ok<List<int>>).value..sort())
-        .where((uid) => uid < lowest)
-        .toList();
+    // Yereldeki en küçük UID'lerin IMAP sıra numarasını sorarak
+    // 100.000 UID'nin tamamını indirmeden sayfalama yaparız.
+    int? seq;
+    for (final uid in lowestList) {
+      final res = await _connection.imap.searchSequenceByUid(uid);
+      if (res is Ok<int?> && res.value != null && res.value! > 1) {
+        seq = res.value;
+        break;
+      }
+    }
 
-    if (older.isEmpty) {
+    if (seq == null || seq <= 1) {
       await _db.updateMailboxSync(mailbox.id, hasMoreOnServer: false);
       return const Ok(0);
     }
 
-    final slice = older.length <= count
-        ? older
-        : older.sublist(older.length - count);
-    final fetched = await _fetchAndStore(accountId, mailbox, slice);
+    final fromSeq = (seq - count).clamp(1, seq - 1);
+    final toSeq = seq - 1;
+
+    final fetched = await _fetchSequenceAndStore(
+      accountId,
+      mailbox,
+      fromSeq: fromSeq,
+      toSeq: toSeq,
+    );
     if (fetched is Err<List<int>>) return Err(fetched.failure);
+    final newIds = (fetched as Ok<List<int>>).value;
 
     await _db.updateMailboxSync(
       mailbox.id,
-      hasMoreOnServer: older.length > slice.length,
+      hasMoreOnServer: fromSeq > 1,
     );
-    return Ok((fetched as Ok<List<int>>).value.length);
+    return Ok(newIds.length);
   }
 
   /// Gövdesi olmayan en yeni iletilerin gövdesini arka planda indirir.
@@ -621,6 +693,27 @@ class SyncEngine {
     );
   }
 
+  Future<Result<List<int>>> _fetchSequenceAndStore(
+    int accountId,
+    MailboxRow mailbox, {
+    required int fromSeq,
+    required int toSeq,
+  }) async {
+    if (toSeq < fromSeq || fromSeq < 1) return const Ok(<int>[]);
+    final fetched = await _connection.imap.fetchEnvelopeSequenceRange(
+      fromSeq: fromSeq,
+      toSeq: toSeq,
+    );
+    if (fetched is Err<List<FetchedEnvelope>>) return Err(fetched.failure);
+    return Ok(
+      await _storeEnvelopes(
+        accountId,
+        mailbox,
+        (fetched as Ok<List<FetchedEnvelope>>).value,
+      ),
+    );
+  }
+
   Future<Result<List<int>>> _fetchRangeAndStore(
     int accountId,
     MailboxRow mailbox, {
@@ -707,13 +800,10 @@ class SyncEngine {
           isFlagged: Value(envelope.isFlagged),
           isAnswered: Value(envelope.isAnswered),
           isForwarded: Value(envelope.isForwarded),
-          // Sunucudaki `\Draft` bayrağı yalnızca Taslaklar klasöründe anlamlı:
-          // başka istemciden gelen/iletilen bir iletide kalmış bayrak, alınan
-          // iletiyi düzenlenebilir taslağa çevirmemeli (açınca gövde yerine
-          // yazma ekranı çıkardı).
-          isDraft: Value(
-            envelope.isDraft && mailbox.specialUse == SpecialUse.drafts,
-          ),
+          // Sunucudaki Taslaklar klasöründeki tüm iletiler taslaktır.
+          // Başka klasörlerdeki iletiler ise yanlışlıkla `\Draft` bayrağı taşısalar bile
+          // taslak sayılmaz.
+          isDraft: Value(mailbox.specialUse == SpecialUse.drafts),
           isDeleted: Value(envelope.isDeleted),
           hasAttachments: Value(envelope.hasAttachments),
           sizeBytes: Value(envelope.sizeBytes),
@@ -834,11 +924,15 @@ class SyncEngine {
   /// denmez): çağıran uzlaşmayı tamamlanmamış sayar ve sonraki turda yeniden
   /// dener.
   Future<Result<int>> _syncDeletions(MailboxRow mailbox) async {
-    final all = await _connection.imap.searchAllUids();
-    if (all is Err<List<int>>) return Err(all.failure);
-    final serverUids = (all as Ok<List<int>>).value.toSet();
-
     final localUids = await _db.uidsOf(mailbox.id);
+    if (localUids.isEmpty) return const Ok(0);
+
+    // 100.000 iletili kutuda tüm sunucu UID'lerini indirmek yerine (UID SEARCH ALL),
+    // yalnızca yerelde kayıtlı olan UID'lerin sunucuda hâlâ var olup olmadığı sorgulanır.
+    final serverResult = await _connection.imap.searchUidsInSet(localUids);
+    if (serverResult is Err<List<int>>) return Err(serverResult.failure);
+    final serverUids = (serverResult as Ok<List<int>>).value.toSet();
+
     final vanished = localUids
         .where((uid) => !serverUids.contains(uid))
         .toList();

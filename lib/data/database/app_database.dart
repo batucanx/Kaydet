@@ -811,6 +811,16 @@ class AppDatabase extends _$AppDatabase {
             ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.equals(uid)))
           .getSingleOrNull();
 
+  Future<MessageRow?> messageByMessageIdHeader(int mailboxId, String messageId) =>
+      (select(messages)
+            ..where(
+              (m) =>
+                  m.mailboxId.equals(mailboxId) &
+                  m.messageIdHeader.equals(messageId),
+            )
+            ..limit(1))
+          .getSingleOrNull();
+
   Future<List<MessageRow>> messagesByIds(List<int> ids) =>
       (select(messages)..where((m) => m.id.isIn(ids))).get();
 
@@ -840,6 +850,16 @@ class AppDatabase extends _$AppDatabase {
               ..limit(1))
             .getSingleOrNull();
     return row?.uid;
+  }
+
+  Future<List<int>> lowestUids(int mailboxId, {int limit = 5}) async {
+    final rows =
+        await (select(messages)
+              ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isNotNull())
+              ..orderBy([(m) => OrderingTerm(expression: m.uid)])
+              ..limit(limit))
+            .get();
+    return rows.map((m) => m.uid!).toList();
   }
 
   Future<int?> highestUid(int mailboxId) async {
@@ -974,21 +994,43 @@ class AppDatabase extends _$AppDatabase {
         if (uid != null) {
           existing = await messageByUid(mailboxId, uid);
         }
+        if (existing == null &&
+            row.messageIdHeader.present &&
+            row.messageIdHeader.value != null &&
+            row.messageIdHeader.value!.isNotEmpty) {
+          existing = await messageByMessageIdHeader(
+            mailboxId,
+            row.messageIdHeader.value!,
+          );
+        }
         if (existing == null) {
           final id = await into(messages).insert(row);
           inserted.add(id);
           await _writeFts(id, row);
         } else {
-          await (update(messages)..where((m) => m.id.equals(existing!.id)))
-              .write(row.copyWith(id: const Value.absent()));
-          // Zarf yenilenirken dizindeki gövde ve önizleme metni KAYBOLMAMALI.
-          final body = await bodyOf(existing.id);
-          await _writeFts(
-            existing.id,
-            row,
-            preview: existing.preview,
-            body: body?.plainText ?? '',
-          );
+          if (existing.isLocalOnly &&
+              row.dateUtc.present &&
+              existing.dateUtc.isAfter(row.dateUtc.value)) {
+            await (update(messages)..where((m) => m.id.equals(existing!.id))).write(
+              MessagesCompanion(
+                uid: row.uid,
+                mailboxId: row.mailboxId,
+                isDraft: row.isDraft,
+                isSeen: row.isSeen,
+              ),
+            );
+          } else {
+            await (update(messages)..where((m) => m.id.equals(existing!.id)))
+                .write(row.copyWith(id: const Value.absent()));
+            // Zarf yenilenirken dizindeki gövde ve önizleme metni KAYBOLMAMALI.
+            final body = await bodyOf(existing.id);
+            await _writeFts(
+              existing.id,
+              row,
+              preview: existing.preview,
+              body: body?.plainText ?? '',
+            );
+          }
         }
       }
     });
@@ -2016,6 +2058,40 @@ class AppDatabase extends _$AppDatabase {
       } catch (_) {}
     }
     return result;
+  }
+
+  /// Belirtilen iletiye ait henüz yürütülmemiş draft (`appendDraft`, `deleteDraft`) işlemlerini bulur.
+  Future<List<PendingOperationRow>> pendingDraftOperationsFor(
+    int messageId,
+  ) async {
+    final ops =
+        await (select(pendingOperations)..where(
+              (p) =>
+                  p.type.isIn([
+                    PendingOpType.appendDraft.index,
+                    PendingOpType.deleteDraft.index,
+                  ]) &
+                  p.status.equalsValue(PendingOpStatus.pending),
+            ))
+            .get();
+
+    final result = <PendingOperationRow>[];
+    for (final op in ops) {
+      try {
+        final decoded = jsonDecode(op.payloadJson);
+        if (decoded is Map && decoded['messageId'] == messageId) {
+          result.add(op);
+        }
+      } catch (_) {}
+    }
+    return result;
+  }
+
+  /// Belirtilen iletiye ait henüz yürütülmemiş draft senkronizasyon işlemlerini kuyruktan siler.
+  Future<int> cancelPendingDraftOperations(int messageId) async {
+    final ops = await pendingDraftOperationsFor(messageId);
+    if (ops.isEmpty) return 0;
+    return cancelPendingOperations(ops.map((o) => o.id).toList());
   }
 
   Future<void> completeOperation(int id) =>

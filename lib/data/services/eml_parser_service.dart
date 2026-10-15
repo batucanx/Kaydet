@@ -187,18 +187,30 @@ abstract final class EmlParserService {
     });
 
     // 5. Üst başlık bloğundaki satır katlamalarını (folding) düzelt:
-    // Kolon `:` içermeyen continuation satırlarını önceki başlıkla birleştir
-    int headerEnd = -1;
+    // RFC standardına göre başlık bloğu her zaman ilk boş satırda (\n\n) biter.
+    // Metinde MIME boundary varsa, ilk boundary'den önceki ilk boş satır
+    // başlıkların bittiği yerdir. Boş satır ile boundary arasında kalan metin
+    // gövdeye ait preamble (ön metin) olduğundan başlıklara dahil edilmemelidir.
+    final firstBlank = _findHeaderEndPosition(result);
+    int earliestBoundary = -1;
     if (boundaries.isNotEmpty) {
       for (final b in boundaries) {
         final idx = result.indexOf('--$b');
-        if (idx != -1 && (headerEnd == -1 || idx < headerEnd)) {
-          headerEnd = idx;
+        if (idx != -1 && (earliestBoundary == -1 || idx < earliestBoundary)) {
+          earliestBoundary = idx;
         }
       }
     }
-    if (headerEnd == -1) {
-      headerEnd = _findHeaderEndPosition(result);
+
+    int headerEnd = -1;
+    if (firstBlank != -1) {
+      if (earliestBoundary != -1) {
+        headerEnd = (firstBlank <= earliestBoundary) ? firstBlank : earliestBoundary;
+      } else {
+        headerEnd = firstBlank;
+      }
+    } else if (earliestBoundary != -1) {
+      headerEnd = earliestBoundary;
     }
 
     if (headerEnd != -1) {
@@ -230,15 +242,17 @@ abstract final class EmlParserService {
 
     // 7. Başlık bloğu ile gövde / ilk boundary arasında mutlaka çift satır sonu (\n\n) olmasını sağla
     if (boundaries.isNotEmpty) {
+      int earliestBnd = -1;
       for (final boundary in boundaries) {
-        final firstBnd = '--$boundary';
-        final bndIdx = result.indexOf(firstBnd);
-        if (bndIdx != -1) {
-          final beforeBnd = result.substring(0, bndIdx);
-          if (!beforeBnd.endsWith('\n\n')) {
-            result = '${beforeBnd.trimRight()}\n\n${result.substring(bndIdx)}';
-          }
-          break;
+        final bndIdx = result.indexOf('--$boundary');
+        if (bndIdx != -1 && (earliestBnd == -1 || bndIdx < earliestBnd)) {
+          earliestBnd = bndIdx;
+        }
+      }
+      if (earliestBnd != -1) {
+        final beforeBnd = result.substring(0, earliestBnd);
+        if (!beforeBnd.endsWith('\n\n')) {
+          result = '${beforeBnd.trimRight()}\n\n${result.substring(earliestBnd)}';
         }
       }
     } else {
@@ -292,17 +306,59 @@ abstract final class EmlParserService {
     ).hasMatch(firstLine);
   }
 
-  /// Gövdeye sızmış teknik e-posta üstbilgilerini (Return-Path, Received vb.) temizler.
+  /// Gövdeye sızmış teknik e-posta üstbilgilerini (Return-Path, Received vb.) ve
+  /// ham MIME boundary sınırlarını/alt parça üstbilgilerini temizler ve açar.
   static EmlMessage _sanitizeLeakedHeaders(EmlMessage msg) {
     var text = msg.textBody;
     var html = msg.htmlBody;
+    var attachments = msg.attachments;
+
     if (text != null && _startsWithTransportHeaders(text.trim())) {
       text = _stripLeadingHeadersFromBody(text);
     }
     if (html != null && _startsWithTransportHeaders(html.trim())) {
       html = _stripLeadingHeadersFromBody(html);
     }
-    if (text != msg.textBody || html != msg.htmlBody) {
+
+    // Gövdeye sızmış MIME boundary ve alt parça başlıklarını temizle / aç
+    if (text != null && _hasLeakedMimeBoundary(text)) {
+      final unpacked = _unpackLeakedMimeMultipart(text);
+      if (unpacked.plain != null && unpacked.plain!.trim().isNotEmpty) {
+        text = unpacked.plain;
+      }
+      if ((html == null || html.trim().isEmpty) && unpacked.html != null) {
+        html = unpacked.html;
+      }
+      if (unpacked.attachments.isNotEmpty) {
+        final existingNames = attachments.map((a) => a.fileName).toSet();
+        final newAtts = unpacked.attachments
+            .where((a) => !existingNames.contains(a.fileName))
+            .toList();
+        if (newAtts.isNotEmpty) {
+          attachments = [...attachments, ...newAtts];
+        }
+      }
+    }
+
+    if (html != null && _hasLeakedMimeBoundary(html)) {
+      final unpacked = _unpackLeakedMimeMultipart(html);
+      html = unpacked.html ?? unpacked.plain;
+      if ((text == null || text.trim().isEmpty) && unpacked.plain != null) {
+        text = unpacked.plain;
+      }
+    }
+
+    // Herhangi bir kalan izole boundary veya MIME başlığı sızıntısını temizle
+    if (text != null) {
+      text = _stripRemainingMimeArtifacts(text);
+    }
+    if (html != null) {
+      html = _stripRemainingMimeArtifacts(html, isHtml: true);
+    }
+
+    if (text != msg.textBody ||
+        html != msg.htmlBody ||
+        attachments != msg.attachments) {
       return EmlMessage(
         headers: msg.headers,
         body: EmlBody(
@@ -310,11 +366,169 @@ abstract final class EmlParserService {
           textHtml: html,
           isHtmlPreferred: html != null && html.trim().isNotEmpty,
         ),
-        attachments: msg.attachments,
+        attachments: attachments,
         rawSource: msg.rawSource,
       );
     }
     return msg;
+  }
+
+  /// Verilen metnin açılmamış ham bir MIME boundary ve parça başlıkları içerip içermediğini denetler.
+  static bool _hasLeakedMimeBoundary(String text) {
+    final lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.startsWith('--') && line.length > 4) {
+        for (var j = i + 1; j < lines.length && j <= i + 8; j++) {
+          final nextLine = lines[j].trim();
+          if (RegExp(
+            r'^(?:Content-Type|Content-Transfer-Encoding|Content-Disposition)\s*:',
+            caseSensitive: false,
+          ).hasMatch(nextLine)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// Gövdeye sızmış ham MIME çok parçalı (multipart) yapısını ayrıştırır ve
+  /// temiz düz metin ve HTML bölümlerine dönüştürür.
+  static ({String? plain, String? html, List<EmlAttachment> attachments})
+      _unpackLeakedMimeMultipart(String text) {
+    final lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+    String? boundary;
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i].trim();
+      if (line.startsWith('--') && line.length > 4) {
+        for (var j = i + 1; j < lines.length && j <= i + 8; j++) {
+          final nextLine = lines[j].trim();
+          if (RegExp(
+            r'^(?:Content-Type|Content-Transfer-Encoding|Content-Disposition)\s*:',
+            caseSensitive: false,
+          ).hasMatch(nextLine)) {
+            var b = line.substring(2).trim();
+            if (b.endsWith('--')) b = b.substring(0, b.length - 2).trim();
+            if (b.isNotEmpty) {
+              boundary = b;
+              break;
+            }
+          }
+        }
+        if (boundary != null) break;
+      }
+    }
+
+    if (boundary == null) {
+      return (plain: text, html: null, attachments: const []);
+    }
+
+    final parts = text.split('--$boundary');
+    String? extractedPlain;
+    String? extractedHtml;
+    final extractedAttachments = <EmlAttachment>[];
+
+    for (var partStr in parts) {
+      var p = partStr.trim();
+      if (p.isEmpty || p == '--') continue;
+      if (p.endsWith('--')) {
+        p = p.substring(0, p.length - 2).trim();
+      }
+      final hEnd = _findHeaderEndPosition(p);
+      String pHeaders = '';
+      String pBody = p;
+      if (hEnd != -1) {
+        pHeaders = p.substring(0, hEnd);
+        pBody = p.substring(hEnd).replaceFirst(RegExp(r'^\r?\n'), '');
+      } else {
+        final pLines = p.split('\n');
+        var lastHdr = -1;
+        for (var i = 0; i < pLines.length; i++) {
+          final l = pLines[i].trim();
+          if (RegExp(
+            r'^(?:Content-Type|Content-Transfer-Encoding|Content-Disposition|Content-ID)\s*:',
+            caseSensitive: false,
+          ).hasMatch(l) ||
+              l.startsWith(' ') ||
+              l.startsWith('\t')) {
+            lastHdr = i;
+          } else if (l.isNotEmpty) {
+            break;
+          }
+        }
+        if (lastHdr != -1 && lastHdr + 1 < pLines.length) {
+          pHeaders = pLines.sublist(0, lastHdr + 1).join('\n');
+          pBody = pLines.sublist(lastHdr + 1).join('\n');
+        }
+      }
+
+      final pMap = <String, String>{};
+      for (final l in pHeaders.split(RegExp(r'\r?\n'))) {
+        final c = l.indexOf(':');
+        if (c != -1) {
+          pMap[l.substring(0, c).trim().toLowerCase()] = l.substring(c + 1).trim();
+        }
+      }
+
+      final pType = (pMap['content-type'] ?? '').toLowerCase();
+      final pEnc = _extractTransferEncoding(pMap['content-transfer-encoding']);
+      final pCharset = _extractCharset(pType);
+      final decoded = _decodeBodyContent(pBody, pEnc, pCharset).trim();
+      final disp = (pMap['content-disposition'] ?? '').toLowerCase();
+
+      final isAtt = disp.contains('attachment') || pType.contains('message/rfc822');
+      if (isAtt) {
+        final fnMatch = RegExp(r'filename\s*=\s*"?([^";\r\n]+)"?', caseSensitive: false)
+            .firstMatch(disp);
+        final fn = _decodeHeaderWord(fnMatch?.group(1)?.trim() ?? 'ek');
+        final bytes = _decodeBodyBytes(pBody, pEnc);
+        extractedAttachments.add(EmlAttachment(
+          fileName: fn,
+          mimeType: pType.isNotEmpty ? pType : 'application/octet-stream',
+          sizeBytes: bytes.length,
+          bytes: bytes,
+        ));
+      } else if (pType.contains('text/html') ||
+          decoded.contains('<!DOCTYPE html>') ||
+          (decoded.contains('<html') && decoded.contains('</html>'))) {
+        extractedHtml ??= decoded;
+      } else if (pType.contains('text/plain')) {
+        extractedPlain ??= decoded;
+      } else if (decoded.isNotEmpty && extractedPlain == null) {
+        extractedPlain = decoded;
+      }
+    }
+
+    return (
+      plain: extractedPlain,
+      html: extractedHtml,
+      attachments: extractedAttachments,
+    );
+  }
+
+  /// Gövde içerisinde kalmış izole MIME boundary sınırlarını veya MIME başlıklarını temizler.
+  static String _stripRemainingMimeArtifacts(String text, {bool isHtml = false}) {
+    var cleaned = text;
+
+    if (!isHtml) {
+      cleaned = cleaned.replaceAll(
+        RegExp(r'^--[A-Za-z0-9_.-]{4,}(?:--)?\s*$', multiLine: true),
+        '',
+      );
+      cleaned = _stripLeadingHeadersFromBody(cleaned);
+    } else {
+      cleaned = cleaned.replaceFirst(
+        RegExp(r'^\s*--[A-Za-z0-9_.-]{4,}(?:--)?\s*'),
+        '',
+      );
+      cleaned = cleaned.replaceFirst(
+        RegExp(r'\s*--[A-Za-z0-9_.-]{4,}--\s*$'),
+        '',
+      );
+    }
+
+    return cleaned.trim();
   }
 
   static String _stripLeadingHeadersFromBody(String text) {
@@ -324,7 +538,7 @@ abstract final class EmlParserService {
       final line = lines[idx].trim();
       if (line.isEmpty) {
         idx++;
-        break;
+        continue;
       }
       if (RegExp(r'^[A-Za-z0-9-]+:\s*').hasMatch(line) ||
           line.startsWith(' ') ||
@@ -727,6 +941,17 @@ abstract final class EmlParserService {
             isNestedEml: nested != null,
             nestedMessage: nested,
           ));
+        } else if (pType.contains('multipart/')) {
+          final unpacked = _unpackLeakedMimeMultipart(partStr);
+          if (unpacked.html != null && (htmlBody == null || htmlBody.trim().isEmpty)) {
+            htmlBody = unpacked.html;
+          }
+          if (unpacked.plain != null && (textBody == null || textBody.trim().isEmpty)) {
+            textBody = unpacked.plain;
+          }
+          if (unpacked.attachments.isNotEmpty) {
+            attachments.addAll(unpacked.attachments);
+          }
         } else if (pType.contains('text/html')) {
           htmlBody ??= decoded;
         } else if (pType.contains('text/plain')) {
@@ -734,13 +959,20 @@ abstract final class EmlParserService {
         }
       }
     } else {
-      final enc = _extractTransferEncoding(headersMap['content-transfer-encoding']);
-      final charset = _extractCharset(contentType);
-      final decoded = _decodeBodyContent(bodyBlock, enc, charset);
-      if (contentType.contains('text/html')) {
-        htmlBody = decoded;
+      if (_hasLeakedMimeBoundary(bodyBlock)) {
+        final unpacked = _unpackLeakedMimeMultipart(bodyBlock);
+        textBody = unpacked.plain;
+        htmlBody = unpacked.html;
+        attachments.addAll(unpacked.attachments);
       } else {
-        textBody = decoded;
+        final enc = _extractTransferEncoding(headersMap['content-transfer-encoding']);
+        final charset = _extractCharset(contentType);
+        final decoded = _decodeBodyContent(bodyBlock, enc, charset);
+        if (contentType.contains('text/html')) {
+          htmlBody = decoded;
+        } else {
+          textBody = decoded;
+        }
       }
     }
 

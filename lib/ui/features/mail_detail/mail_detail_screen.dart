@@ -220,8 +220,9 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final t = context.tokens;
     final messageAsync = ref.watch(messageProvider(_messageId));
     if (messageAsync.value case final loaded?) _shownMessage = loaded;
-    final message =
-        messageAsync.value ?? (messageAsync.isLoading ? _shownMessage : null);
+    final isCurrentShown = _shownMessage?.id == _messageId;
+    final message = messageAsync.value ??
+        (isCurrentShown || messageAsync.isLoading ? _shownMessage : null);
     final body = ref.watch(messageBodyProvider(_messageId)).value;
     final bodyFetch = ref.watch(bodyFetchProvider(_messageId));
     final attachments =
@@ -1987,18 +1988,20 @@ class _ActionBar extends ConsumerWidget {
                 icon: const Icon(LucideIcons.archive),
                 tooltip: 'Arşivle',
                 onPressed: () async {
+                  final navigator = Navigator.of(context);
                   await archiveMessages(context, ref, [message.id]);
-                  if (context.mounted) Navigator.of(context).pop();
+                  if (navigator.mounted) navigator.pop();
                 },
               ),
               IconButton(
                 icon: const Icon(LucideIcons.trash2),
                 tooltip: 'Sil',
                 onPressed: () async {
+                  final navigator = Navigator.of(context);
                   final deleted = await deleteWithConfirmation(context, ref, [
                     message.id,
                   ]);
-                  if (deleted && context.mounted) Navigator.of(context).pop();
+                  if (deleted && navigator.mounted) navigator.pop();
                 },
               ),
               _MoreMenu(message: message),
@@ -2028,6 +2031,13 @@ class _MoreMenu extends ConsumerWidget {
         (ref.watch(blockedSendersOfAccountProvider(message.accountId)).value ??
                 const <BlockedSenderRow>[])
             .any((b) => b.email == fromKey);
+    final accounts =
+        ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
+    final ownAccount = ref.watch(accountByIdProvider(message.accountId));
+    final isOwnSender = fromKey.isNotEmpty &&
+        (accounts.any((a) => a.email.trim().toLowerCase() == fromKey) ||
+            (ownAccount != null &&
+                ownAccount.email.trim().toLowerCase() == fromKey));
 
     // Çeviri: her iletide ayrı bir düğme yerine bu menüden başlatılır
     // (durum çubuğu için bkz. `TranslateBar`).
@@ -2053,8 +2063,9 @@ class _MoreMenu extends ConsumerWidget {
         MenuItemButton(
           leadingIcon: const Icon(LucideIcons.mailX, size: IconSize.sm),
           onPressed: () async {
+            final navigator = Navigator.of(context);
             await repository.setSeen([message.id], false);
-            if (context.mounted) Navigator.of(context).pop();
+            if (navigator.mounted) navigator.pop();
           },
           child: const Text('Okunmadı olarak işaretle'),
         ),
@@ -2089,10 +2100,11 @@ class _MoreMenu extends ConsumerWidget {
           menuChildren: folderMenuItems(
             ref,
             (target) async {
+              final navigator = Navigator.of(context);
               final moved = await moveMessagesToFolder(context, ref, [
                 message.id,
               ], target);
-              if (moved && context.mounted) Navigator.of(context).pop();
+              if (moved && navigator.mounted) navigator.pop();
             },
             accountId: message.accountId,
             excludeMailboxId: message.mailboxId,
@@ -2123,9 +2135,10 @@ class _MoreMenu extends ConsumerWidget {
             }),
           ),
         const Divider(height: 1),
-        // Web ile aynı kural: göndericinin durumuna göre TEK seçenek. Listede değilse
+        // Web ile aynı kural: kullanıcı kendi adresini istenmeyen olarak işaretleyemez.
+        // Göndericinin durumuna göre TEK seçenek: listede değilse
         // "İstenmeyen olarak işaretle", listedeyse "İstenmeyen değil olarak işaretle".
-        if (message.fromEmail.isNotEmpty && !message.isLocalOnly)
+        if (message.fromEmail.isNotEmpty && !message.isLocalOnly && !isOwnSender)
           if (listed)
             MenuItemButton(
               leadingIcon: const Icon(
@@ -2133,11 +2146,12 @@ class _MoreMenu extends ConsumerWidget {
                 size: IconSize.sm,
               ),
               onPressed: () async {
+                final navigator = Navigator.of(context);
                 // İstenmeyen'deyse Gelen Kutusu'na döner ve ekran kapanır.
                 final left = await markMessagesAsNotSpam(context, ref, [
                   message.id,
                 ]);
-                if (left && context.mounted) Navigator.of(context).pop();
+                if (left && navigator.mounted) navigator.pop();
               },
               child: const Text('İstenmeyen değil olarak işaretle'),
             )
@@ -2148,11 +2162,12 @@ class _MoreMenu extends ConsumerWidget {
                 size: IconSize.sm,
               ),
               onPressed: () async {
+                final navigator = Navigator.of(context);
                 // Zaten İstenmeyen'deyse ileti yerinde kalır, yalnızca gönderici listelenir.
                 final left = await markMessagesAsSpam(context, ref, [
                   message.id,
                 ]);
-                if (left && context.mounted) Navigator.of(context).pop();
+                if (left && navigator.mounted) navigator.pop();
               },
               child: const Text('İstenmeyen olarak işaretle'),
             ),

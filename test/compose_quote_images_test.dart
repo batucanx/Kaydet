@@ -244,7 +244,15 @@ void main() {
       final id = await seedOriginal();
       await pumpCompose(tester, replyToId: id, mode: ComposeMode.reply);
 
-      final quill = controllerOf(tester);
+      // Alıntı katlanmış durumdadır; üç nokta hap düğmesine basılarak açılır
+      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
+      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
+      final quill = state.quotedControllerForTest!;
       expect(embeddedImages(quill), hasLength(2));
       expect(embeddedImages(quill).every((s) => s.startsWith('data:image/png')), isTrue);
       expectNoLeaks(quill);
@@ -260,7 +268,15 @@ void main() {
       final id = await seedOriginal(withAttachments: true);
       await pumpCompose(tester, replyToId: id, mode: ComposeMode.forward);
 
-      final quill = controllerOf(tester);
+      // Alıntı katlanmış durumdadır; üç nokta hap düğmesine basılarak açılır
+      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
+      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
+      final quill = state.quotedControllerForTest!;
       expect(embeddedImages(quill), hasLength(2));
       expectNoLeaks(quill);
       expect(editorImages(), findsNWidgets(2));
@@ -274,17 +290,15 @@ void main() {
       final id = await seedOriginal(withAttachments: true);
       await pumpCompose(tester, replyToId: id, mode: ComposeMode.forward);
 
-      // `_send` gövdeyi aynen böyle üretir: editör belgesi → e-posta HTML'i.
-      final quill = controllerOf(tester);
+      // `_send` gövdeyi üretirken katlanmış olsa dahi alıntıyı HTML'e ekler.
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
       final outgoing = OutgoingMessage(
         from: const EmailAddress(email: 'info@pazarlik.com.tr'),
         to: const [EmailAddress(email: 'alici@example.com')],
         subject: 'İlet: Hesap özeti',
-        plainText: quill.document
-            .toPlainText()
-            .replaceAll('￼', '')
-            .trim(),
-        html: EmailHtmlCodec.encode(quill.document.toDelta()),
+        plainText: state.bodyPlainTextForTest,
+        html: state.bodyHtmlForTest,
         attachmentPaths: ['${tempDir.path}/fatura.pdf'],
       );
       final built = await tester.runAsync(

@@ -199,6 +199,12 @@ void main() {
       // Ekler listesinde sozlesme.pdf hazır olarak bulunmalı
       expect(find.text('sozlesme.pdf'), findsOneWidget);
 
+      // Alıntı katlanmış durumdadır; açılınca başlıkta Bilgi (CC) satırı görünür
+      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
+      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
       // İletilen ileti başlığında Bilgi (CC) satırı bulunmalı
       expect(
         find.byWidgetPredicate(

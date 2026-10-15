@@ -146,7 +146,10 @@ class FakeImapService implements ImapService {
   }
 
   @override
-  Future<Result<MailboxState>> statusMailbox(String path) async {
+  Future<Result<MailboxState>> statusMailbox(
+    String path, {
+    String? encodedPath,
+  }) async {
     commandLog.add('status:$path');
     final box = _box(path);
     final maxUid = box.keys.isEmpty
@@ -164,6 +167,7 @@ class FakeImapService implements ImapService {
   @override
   Future<Result<MailboxState>> selectMailbox(
     String path, {
+    String? encodedPath,
     bool enableCondStore = false,
   }) async {
     commandLog.add('select:$path');
@@ -209,6 +213,41 @@ class FakeImapService implements ImapService {
       for (final entry in box.entries)
         if (entry.key >= fromUid && entry.key <= toUid) entry.value,
     ]);
+  }
+
+  @override
+  Future<Result<List<FetchedEnvelope>>> fetchEnvelopeSequenceRange({
+    required int fromSeq,
+    required int toSeq,
+  }) async {
+    commandLog.add('fetchSeq:$fromSeq:$toSeq');
+    final box = _box(selectedPath ?? 'INBOX');
+    final sortedEntries = box.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+    if (sortedEntries.isEmpty || toSeq < fromSeq || fromSeq < 1) {
+      return const Ok(<FetchedEnvelope>[]);
+    }
+    final startIdx = (fromSeq - 1).clamp(0, sortedEntries.length);
+    final endIdx = toSeq.clamp(0, sortedEntries.length);
+    if (startIdx >= endIdx) return const Ok(<FetchedEnvelope>[]);
+    return Ok([
+      for (var i = startIdx; i < endIdx; i++) sortedEntries[i].value,
+    ]);
+  }
+
+  @override
+  Future<Result<List<int>>> searchUidsInSet(List<int> uids) async {
+    commandLog.add('search');
+    final box = _box(selectedPath ?? 'INBOX');
+    return Ok(uids.where((u) => box.containsKey(u)).toList());
+  }
+
+  @override
+  Future<Result<int?>> searchSequenceByUid(int uid) async {
+    commandLog.add('searchSeqByUid:$uid');
+    final box = _box(selectedPath ?? 'INBOX');
+    final sortedKeys = box.keys.toList()..sort();
+    final idx = sortedKeys.indexOf(uid);
+    return Ok(idx >= 0 ? idx + 1 : null);
   }
 
   @override
@@ -302,16 +341,27 @@ class FakeImapService implements ImapService {
   Future<Result<int?>> appendMessage({
     required String mimeSource,
     required String targetPath,
+    String? encodedPath,
     List<String> flags = const [],
   }) async {
     commandLog.add('append:$targetPath');
     final box = _box(targetPath);
     final uid =
         box.keys.isEmpty ? 1 : box.keys.reduce((a, b) => a > b ? a : b) + 1;
+    var subject = 'Eklenen ileti';
+    String? messageId;
+    final subjectMatch = RegExp(r'^Subject:\s*(.*?)$', multiLine: true, caseSensitive: false).firstMatch(mimeSource);
+    if (subjectMatch != null && subjectMatch.group(1)!.trim().isNotEmpty) {
+      subject = subjectMatch.group(1)!.trim();
+    }
+    final msgIdMatch = RegExp(r'^Message-ID:\s*(.*?)$', multiLine: true, caseSensitive: false).firstMatch(mimeSource);
+    if (msgIdMatch != null && msgIdMatch.group(1)!.trim().isNotEmpty) {
+      messageId = msgIdMatch.group(1)!.trim();
+    }
     box[uid] = FetchedEnvelope(
       uid: uid,
       date: DateTime.now().toUtc(),
-      subject: 'Eklenen ileti',
+      subject: subject,
       from: null,
       to: const [],
       cc: const [],
@@ -319,6 +369,7 @@ class FakeImapService implements ImapService {
       flags: flags,
       sizeBytes: mimeSource.length,
       hasAttachments: false,
+      messageId: messageId,
     );
     return Ok(uid);
   }

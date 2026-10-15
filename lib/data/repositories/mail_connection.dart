@@ -106,6 +106,7 @@ class MailConnection {
   }) async {
     final selected = await _imap.selectMailbox(
       mailbox.path,
+      encodedPath: mailbox.encodedPath,
       enableCondStore: enableCondStore,
     );
     if (selected is Err<MailboxState>) return selected;

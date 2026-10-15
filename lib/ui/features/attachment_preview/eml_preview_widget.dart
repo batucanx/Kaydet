@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
@@ -133,6 +135,7 @@ class EmlPreviewWidget extends StatefulWidget {
     required this.attachment,
     this.depth = 0,
     this.initialData,
+    this.onZoomChanged,
   });
 
   final String path;
@@ -140,11 +143,22 @@ class EmlPreviewWidget extends StatefulWidget {
   final int depth;
   final ParsedEmlData? initialData;
 
+  /// Üst galerinin (bkz. `AttachmentPreviewScreen`) yatay sayfa kaydırmasını
+  /// kilitleyip açmak için (ör. iç ek listesi kaydırılırken).
+  final ValueChanged<bool>? onZoomChanged;
+
   @override
   State<EmlPreviewWidget> createState() => _EmlPreviewWidgetState();
 }
 
 class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
+  /// WebView tüm dokunuşları (dikey kaydırma, yatay tablo kaydırma, pinch)
+  /// doğrudan kendisi alır; böylece üst `PageView` (birden çok ek varsa)
+  /// mail gövdesi taranırken yanlışlıkla diğer maile geçmez.
+  static final Set<Factory<OneSequenceGestureRecognizer>> _webViewGestures = {
+    Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
+  };
+
   ParsedEmlData? _data;
   bool _loading = true;
   Object? _error;
@@ -206,44 +220,52 @@ class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
   }
 
   Future<void> _initWebView(ParsedEmlData data, KaydetTokens tokens) async {
-    String contentHtml;
-    if (data.htmlBody != null && data.htmlBody!.trim().isNotEmpty) {
-      contentHtml = data.htmlBody!;
-    } else if (data.textBody != null && data.textBody!.trim().isNotEmpty) {
-      contentHtml = MailHtmlDocument.fromPlainText(data.textBody!);
-    } else {
-      contentHtml =
-          '<div style="color:${tokens.isDark ? '#94A3B8' : '#64748B'};padding:16px;">Bu iletinin metin içeriği yok.</div>';
-    }
-
-    String script = '';
     try {
-      script = await MailHtmlDocument.renderScript;
-    } catch (_) {}
+      String contentHtml;
+      if (data.htmlBody != null && data.htmlBody!.trim().isNotEmpty) {
+        contentHtml = data.htmlBody!;
+      } else if (data.textBody != null && data.textBody!.trim().isNotEmpty) {
+        contentHtml = MailHtmlDocument.fromPlainText(data.textBody!);
+      } else {
+        contentHtml =
+            '<div style="color:${tokens.isDark ? '#94A3B8' : '#64748B'};padding:16px;">Bu iletinin metin içeriği yok.</div>';
+      }
 
-    final (preparedHtml, supportsDark) =
-        MailHtmlDocument.prepare(contentHtml, dark: tokens.isDark);
+      String script = '';
+      try {
+        script = await MailHtmlDocument.renderScript;
+      } catch (_) {}
 
-    final fullHtml = MailHtmlDocument.build(
-      body: preparedHtml,
-      tokens: tokens,
-      emailSupportsDark: supportsDark,
-      script: script,
-      documentId: DateTime.now().millisecondsSinceEpoch,
-    );
+      final (preparedHtml, supportsDark) =
+          MailHtmlDocument.prepare(contentHtml, dark: tokens.isDark);
 
-    try {
+      final fullHtml = MailHtmlDocument.build(
+        body: preparedHtml,
+        tokens: tokens,
+        emailSupportsDark: supportsDark,
+        script: script,
+        documentId: DateTime.now().millisecondsSinceEpoch,
+      );
+
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..enableZoom(true)
+        ..setOverScrollMode(WebViewOverScrollMode.never)
+        ..setBackgroundColor(tokens.readingBg)
         ..loadHtmlString(fullHtml);
+
+      final platform = controller.platform;
+      if (platform is AndroidWebViewController) {
+        unawaited(platform.setUseWideViewPort(true));
+      }
 
       if (mounted) {
         setState(() {
           _webViewController = controller;
         });
       }
-    } catch (e) {
-      debugPrint('[EML Preview] WebViewController kurulamadı: $e');
+    } catch (e, st) {
+      debugPrint('[EML Preview] _initWebView error: $e\n$st');
     }
   }
 
@@ -743,9 +765,13 @@ class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
                       ],
                     ),
                     const SizedBox(height: Space.xs),
-                    SizedBox(
-                      height: 48,
-                      child: ListView.separated(
+                    Listener(
+                      onPointerDown: (_) => widget.onZoomChanged?.call(true),
+                      onPointerUp: (_) => widget.onZoomChanged?.call(false),
+                      onPointerCancel: (_) => widget.onZoomChanged?.call(false),
+                      child: SizedBox(
+                        height: 48,
+                        child: ListView.separated(
                         scrollDirection: Axis.horizontal,
                         itemCount: data.attachments.length,
                         separatorBuilder: (_, _) =>
@@ -847,15 +873,19 @@ class _EmlPreviewWidgetState extends State<EmlPreviewWidget> {
                         },
                       ),
                     ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
+          ),
 
-            // Mail Gövdesi (WebView veya Metin)
-            Expanded(
-              child: _webViewController != null
-                  ? WebViewWidget(controller: _webViewController!)
+          // Mail Gövdesi (WebView veya Metin)
+          Expanded(
+            child: _webViewController != null
+                ? WebViewWidget(
+                    controller: _webViewController!,
+                    gestureRecognizers: _webViewGestures,
+                  )
                   : SingleChildScrollView(
                       padding: const EdgeInsets.all(Space.md),
                       child: SelectableText(

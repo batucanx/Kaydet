@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:enough_mail/enough_mail.dart' as em;
 
 import '../../core/result.dart';
 import '../../core/turkish.dart';
@@ -65,12 +66,15 @@ class FolderRepository {
           ? 0
           : mailboxes.map((m) => m.sortOrder).reduce((a, b) => a > b ? a : b) +
                 1;
+      final effectiveDelimiter = delimiter.isEmpty ? '.' : delimiter;
+      final encodedPath = em.Mailbox.encode(path, effectiveDelimiter);
       final id = await _db.upsertMailbox(
         MailboxesCompanion.insert(
           accountId: accountId,
           path: path,
+          encodedPath: Value(encodedPath),
           name: trimmed,
-          delimiter: Value(delimiter.isEmpty ? '.' : delimiter),
+          delimiter: Value(effectiveDelimiter),
           sortOrder: Value(nextOrder),
         ),
       );

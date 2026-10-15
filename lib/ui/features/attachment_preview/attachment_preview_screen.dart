@@ -147,6 +147,30 @@ class _AttachmentPreviewScreenState
           ],
         ),
         actions: [
+          if (showPager) ...[
+            IconButton(
+              icon: const Icon(LucideIcons.chevronLeft, size: 20),
+              tooltip: 'Önceki ek',
+              visualDensity: VisualDensity.compact,
+              onPressed: _currentIndex > 0
+                  ? () => _pageController.previousPage(
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeInOut,
+                      )
+                  : null,
+            ),
+            IconButton(
+              icon: const Icon(LucideIcons.chevronRight, size: 20),
+              tooltip: 'Sonraki ek',
+              visualDensity: VisualDensity.compact,
+              onPressed: _currentIndex < widget.attachments.length - 1
+                  ? () => _pageController.nextPage(
+                        duration: const Duration(milliseconds: 250),
+                        curve: Curves.easeInOut,
+                      )
+                  : null,
+            ),
+          ],
           FutureBuilder<Result<String>>(
             future: _futureFor(_currentIndex),
             builder: (context, snapshot) {
@@ -325,6 +349,7 @@ class _PreviewBody extends StatelessWidget {
       AttachmentKind.email => EmlPreviewWidget(
         path: path,
         attachment: attachment,
+        onZoomChanged: onZoomChanged,
       ),
       AttachmentKind.presentation ||
       AttachmentKind.archive ||

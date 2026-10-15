@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show min;
 import 'dart:typed_data';
 
 import 'attachment_files.dart';
@@ -38,18 +39,34 @@ abstract class ImapService {
   /// Klasörü seçer ve durumunu döner.
   Future<Result<MailboxState>> selectMailbox(
     String path, {
+    String? encodedPath,
     bool enableCondStore = false,
   });
 
   /// Seçili klasörü DEĞİŞTİRMEDEN klasörün durumunu (`STATUS`) sorar: UIDVALIDITY,
   /// UIDNEXT ve ileti sayısı. Ucuz bir "değişti mi?" yoklaması içindir.
-  Future<Result<MailboxState>> statusMailbox(String path);
+  Future<Result<MailboxState>> statusMailbox(
+    String path, {
+    String? encodedPath,
+  });
 
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
   Future<Result<List<int>>> searchAllUids();
 
   /// Verilen UID aralığının başlıklarını çeker.
   Future<Result<List<FetchedEnvelope>>> fetchEnvelopes(List<int> uids);
+
+  /// Belirtilen sıra numarası (sequence number) aralığındaki iletilerin başlıklarını çeker.
+  Future<Result<List<FetchedEnvelope>>> fetchEnvelopeSequenceRange({
+    required int fromSeq,
+    required int toSeq,
+  });
+
+  /// Verilen UID listesinden sunucuda hâlâ var olanları döner (silinenleri tespit etmek için).
+  Future<Result<List<int>>> searchUidsInSet(List<int> uids);
+
+  /// Bir UID'nin IMAP sıra numarasını (sequence number) döner. Bulunamazsa `null` döner.
+  Future<Result<int?>> searchSequenceByUid(int uid);
 
   /// Belirtilen UID'den küçük en yeni [count] iletinin başlığını çeker.
   Future<Result<List<FetchedEnvelope>>> fetchEnvelopeRange({
@@ -97,6 +114,7 @@ abstract class ImapService {
   Future<Result<int?>> appendMessage({
     required String mimeSource,
     required String targetPath,
+    String? encodedPath,
     List<String> flags = const [],
   });
 
@@ -355,7 +373,7 @@ class EnoughMailImapService implements ImapService {
   Future<Result<List<RemoteMailbox>>> listMailboxes() => _guard(() async {
     final boxes = await _requireClient.listMailboxes(recursive: true);
     return boxes.map(_toRemoteMailbox).toList();
-  });
+  }, timeout: const Duration(seconds: 60));
 
   RemoteMailbox _toRemoteMailbox(em.Mailbox box) {
     SpecialUse? flagUse;
@@ -387,30 +405,66 @@ class EnoughMailImapService implements ImapService {
   @override
   Future<Result<MailboxState>> selectMailbox(
     String path, {
+    String? encodedPath,
     bool enableCondStore = false,
   }) => _guard(() async {
-    final box = await _requireClient.selectMailboxByPath(
-      path,
-      enableCondStore: enableCondStore,
-    );
-    _selectedPath = path;
-    return MailboxState(
+    final client = _requireClient;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    final effectivePath = (encodedPath != null && encodedPath.isNotEmpty)
+        ? encodedPath
+        : em.Mailbox.encode(path, separator);
+
+    em.Mailbox box;
+    try {
+      box = await client.selectMailboxByPath(
+        effectivePath,
+        enableCondStore: enableCondStore,
+      );
+    } on em.ImapException catch (error) {
+      // Bazı IMAP sunucuları UTF-7 yerine doğrudan UTF-8 yolunu bekleyebilir (RFC 6855 UTF8=ACCEPT).
+      // Eğer denenen yol path'ten farklıysa unencoded path ile de bir kez dene.
+      if (effectivePath != path &&
+          (error.message?.toUpperCase().contains('NONEXISTENT') ?? false)) {
+        box = await client.selectMailboxByPath(
+          path,
+          enableCondStore: enableCondStore,
+        );
+      } else {
+        rethrow;
+      }
+    }
+    _selectedPath = effectivePath;
+    final state = MailboxState(
       uidValidity: box.uidValidity ?? 0,
       uidNext: box.uidNext ?? 0,
       messageCount: box.messagesExists,
       highestModSeq: box.highestModSequence,
       permanentFlags: box.permanentMessageFlags,
     );
+    print(
+      '[IMAP SELECT] path="$path", encoded="$effectivePath", '
+      'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
+      'UIDNEXT=${state.uidNext}, HIGHESTMODSEQ=${state.highestModSeq}',
+    );
+    return state;
   });
 
   @override
-  Future<Result<MailboxState>> statusMailbox(String path) => _guard(() async {
-    final box = await _requireClient.statusMailbox(
+  Future<Result<MailboxState>> statusMailbox(
+    String path, {
+    String? encodedPath,
+  }) => _guard(() async {
+    final client = _requireClient;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    final effectivePath = (encodedPath != null && encodedPath.isNotEmpty)
+        ? encodedPath
+        : em.Mailbox.encode(path, separator);
+    final box = await client.statusMailbox(
       em.Mailbox(
-        encodedName: path,
-        encodedPath: path,
+        encodedName: effectivePath,
+        encodedPath: effectivePath,
         flags: const [],
-        pathSeparator: '/',
+        pathSeparator: separator,
       ),
       [
         em.StatusFlags.uidValidity,
@@ -418,11 +472,17 @@ class EnoughMailImapService implements ImapService {
         em.StatusFlags.messages,
       ],
     );
-    return MailboxState(
+    final state = MailboxState(
       uidValidity: box.uidValidity ?? 0,
       uidNext: box.uidNext ?? 0,
       messageCount: box.messagesExists,
     );
+    print(
+      '[IMAP STATUS] path="$path", encoded="$effectivePath", '
+      'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
+      'UIDNEXT=${state.uidNext}',
+    );
+    return state;
   });
 
   @override
@@ -476,6 +536,52 @@ class EnoughMailImapService implements ImapService {
     );
     return result.messages.map(_toEnvelope).toList();
   }, timeout: _envelopeResponseTimeout + _outerSlack);
+
+  @override
+  Future<Result<List<FetchedEnvelope>>> fetchEnvelopeSequenceRange({
+    required int fromSeq,
+    required int toSeq,
+  }) => _guard(() async {
+    if (toSeq < fromSeq || fromSeq < 1) return <FetchedEnvelope>[];
+    final sequence = em.MessageSequence.fromRange(
+      fromSeq,
+      toSeq,
+      isUidSequence: false,
+    );
+    final result = await _requireClient.fetchMessages(
+      sequence,
+      _envelopeCriteria,
+      responseTimeout: _envelopeResponseTimeout,
+    );
+    return result.messages.map(_toEnvelope).toList();
+  }, timeout: _envelopeResponseTimeout + _outerSlack);
+
+  @override
+  Future<Result<List<int>>> searchUidsInSet(List<int> uids) =>
+      _guard(() async {
+        if (uids.isEmpty) return <int>[];
+        final found = <int>[];
+        const chunkSize = 150;
+        for (var i = 0; i < uids.length; i += chunkSize) {
+          final chunk = uids.sublist(i, min(i + chunkSize, uids.length));
+          final result = await _requireClient.uidSearchMessages(
+            searchCriteria: 'UID ${chunk.join(',')}',
+          );
+          final matches = result.matchingSequence?.toList();
+          if (matches != null) {
+            found.addAll(matches);
+          }
+        }
+        return found;
+      });
+
+  @override
+  Future<Result<int?>> searchSequenceByUid(int uid) => _guard(() async {
+    final result = await _requireClient.searchMessages(
+      searchCriteria: 'UID $uid',
+    );
+    return result.matchingSequence?.toList().firstOrNull;
+  });
 
   FetchedEnvelope _toEnvelope(em.MimeMessage message) {
     EmailAddress? toAddress(em.MailAddress? address) => address == null
@@ -934,15 +1040,36 @@ class EnoughMailImapService implements ImapService {
   Future<Result<int?>> appendMessage({
     required String mimeSource,
     required String targetPath,
+    String? encodedPath,
     List<String> flags = const [],
   }) => _guard(() async {
-    final result = await _requireClient.appendMessageText(
-      mimeSource,
-      targetMailboxPath: targetPath,
-      flags: flags.isEmpty ? null : flags,
-      responseTimeout: _appendResponseTimeout,
-    );
-    return result.responseCodeAppendUid?.targetSequence.toList().firstOrNull;
+    final client = _requireClient;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    final effectivePath = (encodedPath != null && encodedPath.isNotEmpty)
+        ? encodedPath
+        : em.Mailbox.encode(targetPath, separator);
+
+    try {
+      final result = await client.appendMessageText(
+        mimeSource,
+        targetMailboxPath: effectivePath,
+        flags: flags.isEmpty ? null : flags,
+        responseTimeout: _appendResponseTimeout,
+      );
+      return result.responseCodeAppendUid?.targetSequence.toList().firstOrNull;
+    } on em.ImapException catch (error) {
+      if (effectivePath != targetPath &&
+          (error.message?.toUpperCase().contains('NONEXISTENT') ?? false)) {
+        final result = await client.appendMessageText(
+          mimeSource,
+          targetMailboxPath: targetPath,
+          flags: flags.isEmpty ? null : flags,
+          responseTimeout: _appendResponseTimeout,
+        );
+        return result.responseCodeAppendUid?.targetSequence.toList().firstOrNull;
+      }
+      rethrow;
+    }
   }, timeout: _appendResponseTimeout + _outerSlack);
 
   @override

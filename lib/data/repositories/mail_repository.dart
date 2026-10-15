@@ -7,14 +7,15 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../core/result.dart';
-import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
+import '../../domain/repositories/draft_repository.dart';
 import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/label_keywords.dart';
-import '../../domain/use_cases/text_extraction.dart';
 import '../database/app_database.dart';
 import '../services/attachment_files.dart';
+import '../services/draft_remote_data_source.dart';
 import '../services/smtp_service.dart';
+import 'draft_repository_impl.dart';
 import 'mail_connection.dart';
 import 'sync_engine.dart';
 
@@ -72,16 +73,27 @@ class MailRepository {
     required MailConnection connection,
     required SyncEngine syncEngine,
     required SmtpService smtpService,
+    DraftRepository? draftRepository,
     this.onMessagesHandled,
   }) : _db = database,
        _connection = connection,
        _sync = syncEngine,
-       _smtp = smtpService;
+       _smtp = smtpService,
+       _draftRepository = draftRepository ??
+           DraftRepositoryImpl(
+             database: database,
+             remoteDataSource: ImapDraftRemoteDataSource(connection),
+             connection: connection,
+             syncEngine: syncEngine,
+           );
 
   final AppDatabase _db;
   final MailConnection _connection;
   final SyncEngine _sync;
   final SmtpService _smtp;
+  final DraftRepository _draftRepository;
+
+  DraftRepository get draftRepository => _draftRepository;
 
   /// İletiler bu cihazda "ele alındığında" (okundu işaretlendi, arşivlendi,
   /// silindi, taşındı) çağrılır — bildirimleri kaldırmak için. Repository
@@ -396,6 +408,10 @@ class MailRepository {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return;
 
+    for (final id in messageIds) {
+      await _db.cancelPendingDraftOperations(id);
+    }
+
     final remote = rows.where((r) => !r.isLocalOnly && r.uid != null).toList();
     await _db.transaction(() async {
       if (remote.isNotEmpty) {
@@ -577,6 +593,10 @@ class MailRepository {
     if (row == null) return const Err(UnknownFailure(detail: 'ileti yok'));
     if (row.uid == null) return okVoid; // yerel taslak
 
+    if (row.isDraft) {
+      return _draftRepository.ensureDraftBodyLoaded(messageId);
+    }
+
     // `bodyFetchedAt` tek başına yetmez: gövde satırı yoksa ileti "indirilmiş"
     // görünse bile boştur (eski sürümlerde "Önbelleği temizle" gövdeleri silip
     // bu alanı bırakıyordu; o iletiler burada kendiliğinden onarılır).
@@ -728,7 +748,8 @@ class MailRepository {
 
   // ------------------------------------------------------ taslak & gönderim
 
-  /// Taslağı yerel olarak kaydeder (otomatik kaydetme dahil).
+  /// Taslağı yerel olarak kaydeder ve [syncRemote] true ise arka planda
+  /// sunucu senkronizasyonunu başlatır.
   Future<int> saveDraft({
     required int accountId,
     int? draftId,
@@ -742,97 +763,26 @@ class MailRepository {
     int? replyToMessageId,
     String? inReplyTo,
     String? references,
+    bool syncRemote = true,
   }) async {
-    final drafts = await _db.mailboxBySpecialUse(accountId, SpecialUse.drafts);
-    final account = await _db.accountById(accountId);
-    final mailboxId =
-        drafts?.id ??
-        (await _db.mailboxBySpecialUse(accountId, SpecialUse.inbox))?.id;
-    if (mailboxId == null) return -1;
-
-    final companion = MessagesCompanion(
-      accountId: Value(accountId),
-      mailboxId: Value(mailboxId),
-      dateUtc: Value(DateTime.now().toUtc()),
-      subject: Value(subject),
-      subjectNormalized: Value(normalizeSubject(subject)),
-      fromName: Value(account?.displayName ?? ''),
-      fromEmail: Value(account?.email ?? ''),
-      toAddrJson: Value(EmailAddress.encodeList(EmailAddress.parseInput(to))),
-      ccJson: Value(EmailAddress.encodeList(EmailAddress.parseInput(cc))),
-      bccJson: Value(EmailAddress.encodeList(EmailAddress.parseInput(bcc))),
-      preview: Value(TextExtraction.buildPreview(body)),
-      isSeen: const Value(true),
-      isDraft: const Value(true),
-      isLocalOnly: const Value(true),
-      hasAttachments: Value(attachmentPaths.isNotEmpty),
-      outboxState: const Value(OutboxState.none),
-      replyToMessageId: Value(replyToMessageId),
-      inReplyTo: Value(inReplyTo),
-      referencesRaw: Value(references),
+    final id = await _draftRepository.saveDraftLocal(
+      accountId: accountId,
+      draftId: draftId,
+      to: to,
+      cc: cc,
+      bcc: bcc,
+      subject: subject,
+      body: body,
+      html: html,
+      attachmentPaths: attachmentPaths,
+      replyToMessageId: replyToMessageId,
+      inReplyTo: inReplyTo,
+      references: references,
     );
-
-    final int id;
-    if (draftId != null && draftId > 0) {
-      await _db.updateMessage(draftId, companion);
-      id = draftId;
-    } else {
-      id = await _db.insertLocalMessage(companion);
+    if (id > 0 && syncRemote) {
+      unawaited(_draftRepository.syncDraftRemote(id));
     }
-
-    await _db.upsertBody(messageId: id, plainText: body, html: html);
-    await _syncDraftAttachments(id, attachmentPaths);
     return id;
-  }
-
-  Future<void> _syncDraftAttachments(int messageId, List<String> paths) async {
-    final existing = await _db.attachmentsOf(messageId);
-    for (final row in existing.where((a) => a.isOutgoing)) {
-      if (!paths.contains(row.localPath)) {
-        await _db.removeAttachment(row.id);
-      }
-    }
-    final known = existing.map((a) => a.localPath).toSet();
-    for (final path in paths) {
-      if (known.contains(path)) continue;
-      final file = File(path);
-      final rawName = p.basename(path);
-      final cleanName = AttachmentFiles.cleanPickedName(
-        rawName,
-        sourcePath: path,
-      );
-      await _db.addAttachment(
-        AttachmentsCompanion.insert(
-          messageId: messageId,
-          fileName: Value(cleanName),
-          sizeBytes: Value(file.existsSync() ? file.lengthSync() : 0),
-          localPath: Value(path),
-          isOutgoing: const Value(true),
-          mimeType: Value(_guessMime(cleanName)),
-        ),
-      );
-    }
-  }
-
-  static String _guessMime(String path) {
-    final ext = p.extension(path).toLowerCase();
-    return switch (ext) {
-      '.pdf' => 'application/pdf',
-      '.png' => 'image/png',
-      '.jpg' || '.jpeg' => 'image/jpeg',
-      '.gif' => 'image/gif',
-      '.webp' => 'image/webp',
-      '.txt' => 'text/plain',
-      '.csv' => 'text/csv',
-      '.zip' => 'application/zip',
-      '.doc' => 'application/msword',
-      '.docx' =>
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      '.xls' => 'application/vnd.ms-excel',
-      '.xlsx' =>
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      _ => 'application/octet-stream',
-    };
   }
 
   /// İletiyi gönderim kuyruğuna alır.
@@ -862,6 +812,9 @@ class MailRepository {
     bool markSourceForwarded = false,
     Duration? undoDelay = const Duration(seconds: 5),
   }) async {
+    final draftRow = draftId != null ? await _db.messageById(draftId) : null;
+    final draftServerUid = draftRow?.uid;
+
     final id = await saveDraft(
       accountId: accountId,
       draftId: draftId,
@@ -875,6 +828,7 @@ class MailRepository {
       replyToMessageId: replyToMessageId,
       inReplyTo: inReplyTo,
       references: references,
+      syncRemote: false,
     );
     if (id < 0) return id;
 
@@ -911,7 +865,10 @@ class MailRepository {
           accountId: accountId,
           type: PendingOpType.send,
           payloadJson: Value(
-            jsonEncode({'messageId': id}),
+            jsonEncode({
+              'messageId': id,
+              'draftServerUid': ?draftServerUid,
+            }),
           ),
           nextAttemptAt: Value(effectiveNextAttempt),
         ),
@@ -1267,10 +1224,26 @@ class MailRepository {
 
     switch (op.type) {
       case PendingOpType.appendDraft:
-        return _appendLocalMessage(accountId, payload);
+        if (payload['isSentCopy'] == true) {
+          return _appendLocalMessage(accountId, payload);
+        }
+        final messageId = payload['messageId'] as int?;
+        if (messageId == null) return okVoid;
+        return _draftRepository.syncDraftRemote(messageId);
 
       case PendingOpType.send:
         return _sendQueued(accountId, payload, wasReclaimed: wasReclaimed);
+
+      case PendingOpType.deleteDraft:
+        final messageId = payload['messageId'] as int?;
+        if (messageId != null) {
+          await _draftRepository.discardDraft(messageId);
+          return okVoid;
+        }
+        return _connection.exclusive<void>(
+          accountId,
+          () => _executeMailboxOperation(accountId, op, payload),
+        );
 
       case PendingOpType.markSeen:
       case PendingOpType.markUnseen:
@@ -1280,7 +1253,6 @@ class MailRepository {
       case PendingOpType.removeKeyword:
       case PendingOpType.move:
       case PendingOpType.deletePermanently:
-      case PendingOpType.deleteDraft:
         // Klasör seçimi + komut TEK mantıksal işlemdir: araya başka bir klasör
         // ya da hesap seçimi girerse UID'ler yanlış iletilere uygulanır
         // (`deletePermanently` için bu, başka iletilerin sunucudan kalıcı
@@ -1609,6 +1581,16 @@ class MailRepository {
       ),
     );
 
+    // Varsa sunucudaki Taslaklar (IMAP Drafts) kopyasını temizle
+    final draftServerUid = payload['draftServerUid'] as int?;
+    if (draftServerUid != null) {
+      await _draftRepository.cleanupSentDraft(
+        accountId: accountId,
+        draftId: messageId,
+        serverUid: draftServerUid,
+      );
+    }
+
     // Gönderilenler klasörüne yazma AYRI bir adımdır.
     await _appendToSent(accountId, messageId, sentMessage.mimeSource);
     return okVoid;
@@ -1692,10 +1674,11 @@ class MailRepository {
         subject: row.subject,
         plainText: body?.plainText ?? '',
         html: body?.html,
-        attachmentPaths: attachments
-            .where((a) => a.isOutgoing && a.localPath != null)
-            .map((a) => a.localPath!)
-            .toList(),
+        attachmentPaths: [
+          for (final a in attachments)
+            if (a.localPath != null && File(a.localPath!).existsSync())
+              a.localPath!,
+        ],
         inReplyTo: row.inReplyTo,
         references: row.referencesRaw,
         messageId: row.messageIdHeader,

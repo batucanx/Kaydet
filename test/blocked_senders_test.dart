@@ -213,6 +213,40 @@ void main() {
       expect(imap.commandLog.where((c) => c.startsWith('move:')), isEmpty);
     });
 
+    test('kullanıcı kendi iletisini istenmeyen olarak işaretleyemez, ileti taşınmaz ve engellenmez', () async {
+      imap.seedInbox([
+        envelope(uid: 10, fromEmail: 'info@pazarlik.com.tr'),
+      ]);
+      await syncBox(inbox);
+      final ownMsg = (await db.messagesFromSenders(mailboxId: inbox.id, emails: ['info@pazarlik.com.tr'])).first;
+
+      expect(await blocking.markSpam([ownMsg.id]), isFalse);
+      expect(await blocking.hasOnlyOwnSenders([ownMsg.id]), isTrue);
+      await repository.waitForQueue();
+
+      expect(await db.blockedSendersOf(accountId), isEmpty);
+      expect(imap.store['INBOX']!.keys, [10]);
+      expect(imap.store['INBOX.Junk']?.keys ?? const [], isEmpty);
+    });
+
+    test('çoklu seçimde kendi iletisi filtrelenir, yalnızca diğer gönderici İstenmeyen\'e gider', () async {
+      imap.seedInbox([
+        envelope(uid: 11, fromEmail: 'info@pazarlik.com.tr'),
+        envelope(uid: 12, fromEmail: noisy),
+      ]);
+      await syncBox(inbox);
+      final ownMsg = (await db.messagesFromSenders(mailboxId: inbox.id, emails: ['info@pazarlik.com.tr'])).first;
+      final noisyMsg = (await db.messagesFromSenders(mailboxId: inbox.id, emails: [noisy])).first;
+
+      expect(await blocking.hasOnlyOwnSenders([ownMsg.id, noisyMsg.id]), isFalse);
+      expect(await blocking.markSpam([ownMsg.id, noisyMsg.id]), isTrue);
+      await repository.waitForQueue();
+
+      expect((await db.blockedSendersOf(accountId)).map((b) => b.email), [noisy]);
+      expect(imap.store['INBOX']!.keys, [11]);
+      expect(imap.store['INBOX.Junk']!.values.map((e) => e.from!.email), [noisy]);
+    });
+
     test('istenmeyen değil: gönderici listeden çıkar, İstenmeyen\'deki ileti Gelen Kutusu\'na döner, başka gönderici kalır', () async {
       imap.store['INBOX.Junk'] = {
         5: envelope(uid: 5, fromEmail: noisy),

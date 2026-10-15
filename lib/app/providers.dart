@@ -17,11 +17,15 @@ import '../data/services/managesieve_service.dart';
 import '../data/repositories/settings_sync_service.dart';
 import '../data/services/quick_templates_store.dart';
 import '../data/services/settings_sync_state_store.dart';
+import '../data/repositories/draft_repository_impl.dart';
 import '../data/repositories/folder_repository.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
 import '../data/repositories/sync_engine.dart';
+import '../data/services/draft_remote_data_source.dart';
+import '../domain/repositories/draft_repository.dart';
+import '../domain/use_cases/save_draft_use_case.dart';
 import '../data/services/app_settings.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
@@ -102,6 +106,23 @@ final newMailNotifierProvider = Provider<NewMailNotifier>(
   ),
 );
 
+final draftRemoteDataSourceProvider = Provider<DraftRemoteDataSource>((ref) {
+  return ImapDraftRemoteDataSource(ref.watch(mailConnectionProvider));
+});
+
+final draftRepositoryProvider = Provider<DraftRepository>((ref) {
+  return DraftRepositoryImpl(
+    database: ref.watch(databaseProvider),
+    remoteDataSource: ref.watch(draftRemoteDataSourceProvider),
+    connection: ref.watch(mailConnectionProvider),
+    syncEngine: ref.watch(syncEngineProvider),
+  );
+});
+
+final saveDraftUseCaseProvider = Provider<SaveDraftUseCase>((ref) {
+  return SaveDraftUseCase(ref.watch(draftRepositoryProvider));
+});
+
 final mailRepositoryProvider = Provider<MailRepository>((ref) {
   final notifications = ref.watch(notificationServiceProvider);
   return MailRepository(
@@ -109,6 +130,7 @@ final mailRepositoryProvider = Provider<MailRepository>((ref) {
     connection: ref.watch(mailConnectionProvider),
     syncEngine: ref.watch(syncEngineProvider),
     smtpService: ref.watch(smtpServiceProvider),
+    draftRepository: ref.watch(draftRepositoryProvider),
     // İleti bu cihazda okunduğunda/arşivlendiğinde/silindiğinde bildirimi de
     // gölgeden kalkar. Bildirim eklentisi yoksa (testler) hata yutulur.
     onMessagesHandled: (ids) =>
@@ -762,10 +784,17 @@ class MessageItem extends MailListItem {
 }
 
 /// Klasör ilk kez eşitlenirken (yerel veri henüz eksik) gösterilen tek öğe:
-/// ortada dönen yükleme göstergesi. Böylece kullanıcı klasörü boş sanmaz ve
+/// iskelet shimmer yükleme görünümü. Böylece kullanıcı klasörü boş sanmaz ve
 /// iletiler parça parça dolmaz; indirme bitince liste tek seferde gelir.
 class FolderLoadingItem extends MailListItem {
   const FolderLoadingItem();
+}
+
+/// Klasör senkronizasyonu başarısız olduğunda ve yerelde ileti yokken
+/// gösterilen durum: "Klasör yüklenemedi" + "Tekrar dene".
+class FolderErrorItem extends MailListItem {
+  const FolderErrorItem({required this.error});
+  final AppFailure error;
 }
 
 /// Klasör/filtre sonucu boşsa gösterilecek tek öğe — [filterActive] hangi
@@ -818,27 +847,18 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
             .watch(unifiedMailboxesProvider(unifiedUse))
             .map((m) => m.id)
             .toSet();
-  final neverSyncedFolder = mailbox != null && mailbox.uidNext == null;
-  final syncInFlight = ref.watch(
-    syncControllerProvider.select((s) => s.isSyncing),
-  );
-  // Eşitleme henüz BAŞLAMAMIŞ olsa da (`lastSyncAt` eşitleme başında yazılır)
-  // klasör "yükleniyor" sayılır; aksi hâlde klasöre girilip eşitleme
-  // başlayana kadarki aralıkta "Bu klasör boş" yanıp sönerdi. Çevrimdışı ya da
-  // hatalıysa sonsuz yüklemeye girmemek için boş durum gösterilir.
-  final syncUnavailable = ref.watch(
-    syncControllerProvider.select((s) => s.isOffline || s.lastError != null),
-  );
-  final coldFolderStillLoading =
-      neverSyncedFolder &&
-      (syncInFlight || (mailbox.lastSyncAt == null && !syncUnavailable));
+
+  final syncState = ref.watch(syncControllerProvider);
+  final syncInFlight = syncState.isSyncing;
+  final isOffline = syncState.isOffline;
+  final folderError = mailbox != null ? syncState.folderErrors[mailbox.id] : null;
+  final syncError = folderError ?? syncState.lastError;
+
+  final neverSyncedFolder = mailbox != null && mailbox.lastSyncAt == null;
+  final isFolderLoading =
+      syncInFlight || (neverSyncedFolder && !isOffline && syncError == null);
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
-    // Sabitlenenler bölümü yalnızca Gelen Kutusu'nda gösterilir — diğer
-    // klasörlere geçildiğinde ya da seçim modunda/bir filtre etkinken
-    // kaybolmalı.
-    // Tüm Hesaplar Gelen Kutusu'nda da gösterilir (tüm hesapların
-    // sabitlenenleri birleşik; bkz. [pinnedMessagesProvider]).
     final showPinned =
         folder != null &&
         !folder.isFlaggedView &&
@@ -856,7 +876,19 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
     final items = <MailListItem>[if (showPinned) const PinnedSectionItem()];
 
     if (visible.isEmpty) {
-      items.add(EmptyListItem(filterActive: filterActive));
+      if (filterActive) {
+        items.add(const EmptyListItem(filterActive: true));
+        return items;
+      }
+      if (syncError != null && !isOffline) {
+        items.add(FolderErrorItem(error: syncError));
+        return items;
+      }
+      if (isFolderLoading) {
+        items.add(const FolderLoadingItem());
+        return items;
+      }
+      items.add(const EmptyListItem(filterActive: false));
       return items;
     }
 
@@ -922,9 +954,14 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
         : sample.mailboxId == folder.mailboxId;
   }
 
-  // Soğuk klasörde (ilk indirme sürerken) gelen kısmi/bayat satırlar
-  // gösterilmez: indirme bitene kadar yalnızca yükleme göstergesi çıkar.
-  if (coldFolderStillLoading && !messages.hasError) {
+  if (syncError != null &&
+      (!messages.hasValue || messages.value!.isEmpty) &&
+      !isOffline &&
+      !filterActive) {
+    return AsyncData<List<MailListItem>>([FolderErrorItem(error: syncError)]);
+  }
+
+  if (isFolderLoading && (!messages.hasValue || messages.value!.isEmpty)) {
     return const AsyncData<List<MailListItem>>([FolderLoadingItem()]);
   }
 

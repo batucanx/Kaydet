@@ -159,6 +159,39 @@ void main() {
       expect(outcome.deletedCount, 1);
       expect(await db.uidsOf(inbox.id), [2]);
     });
+
+    test('ilk indirmede UID SEARCH ALL çağrılmaz, sequence range ile çekilir',
+        () async {
+      final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
+      imap.seedInbox(list);
+      imap.commandLog.clear();
+
+      final outcome = await syncInbox();
+
+      expect(outcome.initialDownload, isTrue);
+      expect(outcome.newMessageIds, hasLength(50));
+      expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
+      expect(imap.commandLog.any((c) => c == 'fetchSeq:51:100'), isTrue);
+    });
+
+    test('loadOlder tüm UIDleri çekmeden sequence range ile sayfalama yapar',
+        () async {
+      final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
+      imap.seedInbox(list);
+      await syncInbox();
+      imap.commandLog.clear();
+
+      final loaded = await sync.loadOlder(
+        accountId: accountId,
+        mailbox: await freshInbox(),
+        count: 50,
+      );
+
+      expect(loaded.isOk, isTrue);
+      expect(loaded.valueOrNull, 50);
+      expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
+      expect(imap.commandLog.any((c) => c == 'fetchSeq:1:50'), isTrue);
+    });
   });
 
   group('geçici hata', () {

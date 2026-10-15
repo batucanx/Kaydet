@@ -128,9 +128,18 @@ Future<bool> markMessagesAsSpam(
 }) async {
   if (messageIds.isEmpty) return false;
   final overlay = Overlay.of(context, rootOverlay: true);
-  final moved = await ref
-      .read(blockedSenderRepositoryProvider)
-      .markSpam(messageIds);
+  final blocking = ref.read(blockedSenderRepositoryProvider);
+  if (await blocking.hasOnlyOwnSenders(messageIds)) {
+    if (overlay.mounted) {
+      KaydetNotice.show(
+        overlay,
+        message: 'Kendi adresinizi istenmeyen olarak işaretleyemezsiniz',
+        bottomInset: bottomInset,
+      );
+    }
+    return false;
+  }
+  final moved = await blocking.markSpam(messageIds);
   if (overlay.mounted) {
     final one = messageIds.length == 1;
     KaydetNotice.show(
@@ -198,8 +207,12 @@ Future<bool> moveMessagesToFolder(
   if (messageIds.isEmpty) return false;
   final overlay = Overlay.of(context, rootOverlay: true);
   if (target.specialUse == SpecialUse.junk) {
-    await markMessagesAsSpam(context, ref, messageIds, bottomInset: bottomInset);
-    return true;
+    return await markMessagesAsSpam(
+      context,
+      ref,
+      messageIds,
+      bottomInset: bottomInset,
+    );
   }
   if (target.specialUse == SpecialUse.inbox &&
       !await confirmJunkRestore(context, ref, messageIds)) {

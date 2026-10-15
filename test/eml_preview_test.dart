@@ -1,14 +1,17 @@
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/domain/use_cases/attachment_type.dart';
 import 'package:kaydet/ui/core/widgets/attachment_icon.dart';
+import 'package:kaydet/ui/features/attachment_preview/attachment_preview_screen.dart';
 import 'package:kaydet/ui/features/attachment_preview/eml_preview_widget.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 import 'helpers/fake_webview_platform.dart';
 
@@ -184,6 +187,118 @@ void main() {
       expect(parsed.from.name, 'Barış Özkan');
       expect(parsed.textBody, contains('Ş, ğ, ü, ç, ö, ı.'));
     });
+
+    test('parses multipart with preamble and does not leak MIME boundary or headers into body', () {
+      const raw = '''From: Denizli Emlak <denizlie@test.com>
+To: info@test.com
+Subject: =?UTF-8?Q?Ta=C5=9F=C4=B1nmaz_Ticareti_Yetki_Belgesi_Eklendi?=
+Date: Sat, 10 Oct 2026 13:16:00 +0300
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="B_ALT_6aca1082324c3"
+
+This is a multi-part message in MIME format.
+
+--B_ALT_6aca1082324c3
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+|
+
+Evrak eklendi!
+
+AHMET RÜÇHAN YAYLAK (REAL OFFICE20 GAYRİMENKUL), Taşınmaz Ticareti Yetki Belgesi ekledi
+
+Belgeyi onaylama ekranına gitmek için tıklayın
+
+Bu e-posta otomatik olarak
+gönderilmiştir.
+
+--B_ALT_6aca1082324c3
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+<!DOCTYPE html>
+<html>
+<body>
+<p>Evrak eklendi!</p>
+<p>AHMET RÜÇHAN YAYLAK (REAL OFFICE20 GAYRİMENKUL), Taşınmaz Ticareti Yetki Belgesi ekledi</p>
+<a href="https://example.com">Belgeyi onaylama ekranına gitmek için tıklayın</a>
+<p>Bu e-posta otomatik olarak gönderilmiştir.</p>
+</body>
+</html>
+
+--B_ALT_6aca1082324c3--
+''';
+
+      final parsed = EmlParser.parseText(raw);
+
+      expect(parsed.subject, 'Taşınmaz Ticareti Yetki Belgesi Eklendi');
+      expect(parsed.from.email, 'denizlie@test.com');
+
+      // Neither body should leak boundaries or MIME headers
+      expect(parsed.textBody, isNotNull);
+      expect(parsed.textBody, isNot(contains('--B_ALT')));
+      expect(parsed.textBody, isNot(contains('Content-Type:')));
+      expect(parsed.textBody, isNot(contains('Content-Transfer-Encoding:')));
+      expect(parsed.textBody, contains('Evrak eklendi!'));
+      expect(parsed.textBody, contains('AHMET RÜÇHAN YAYLAK'));
+
+      expect(parsed.htmlBody, isNotNull);
+      expect(parsed.htmlBody, isNot(contains('--B_ALT')));
+      expect(parsed.htmlBody, isNot(contains('Content-Type:')));
+      expect(parsed.htmlBody, contains('Evrak eklendi!'));
+      expect(parsed.htmlBody, contains('<a href="https://example.com">'));
+    });
+
+    test('recovers from missing Content-Type header when body contains multipart boundaries', () {
+      const raw = '''From: Denizli Emlak <denizli@test.com>
+To: info@test.com
+Subject: Taşınmaz Ticareti Yetki Belgesi Eklendi
+Date: Sat, 10 Oct 2026 13:16:00 +0300
+
+--B_ALT_6aca1082324c3
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Evrak eklendi!
+AHMET RÜÇHAN YAYLAK
+
+--B_ALT_6aca1082324c3
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+<p>Evrak eklendi!</p>
+
+--B_ALT_6aca1082324c3--
+''';
+
+      final parsed = EmlParser.parseText(raw);
+
+      expect(parsed.textBody, isNot(contains('--B_ALT')));
+      expect(parsed.textBody, isNot(contains('Content-Type:')));
+      expect(parsed.textBody, contains('Evrak eklendi!'));
+      expect(parsed.htmlBody, isNotNull);
+      expect(parsed.htmlBody, contains('<p>Evrak eklendi!</p>'));
+    });
+
+    test('cleans isolated leaked boundary delimiter at top of plain text body', () {
+      const raw = '''From: Test <test@test.com>
+Subject: Test Isolated
+Date: Sat, 10 Oct 2026 13:16:00 +0300
+Content-Type: text/plain; charset=utf-8
+
+--B_ALT_6aca1082324c3
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Metin govdesi burada yer aliyor.
+''';
+
+      final parsed = EmlParser.parseText(raw);
+      expect(parsed.textBody, isNot(contains('--B_ALT')));
+      expect(parsed.textBody, isNot(contains('Content-Type: text/plain')));
+      expect(parsed.textBody, contains('Metin govdesi burada yer aliyor.'));
+    });
   });
 
   group('EmlPreviewWidget UI', () {
@@ -334,6 +449,125 @@ void main() {
       expect(find.text('Bilgi (CC):'), findsOneWidget);
       expect(find.text('Gizli (BCC):'), findsOneWidget);
       expect(find.text('Yanıtla:'), findsOneWidget);
+    });
+
+    testWidgets('WebViewWidget has EagerGestureRecognizer to prevent scroll conflict with PageView', (tester) async {
+      final parsed = ParsedEmlData(
+        subject: 'Gesture Test',
+        from: (name: 'Ahmet', email: 'ahmet@kaydet.test'),
+        to: [(name: 'Mehmet', email: 'mehmet@kaydet.test')],
+        cc: const [],
+        bcc: const [],
+        date: DateTime(2026, 10, 9, 10, 0),
+        htmlBody: '<p>Kaydırma testi metni</p>',
+        attachments: const [],
+      );
+
+      const row = AttachmentRow(
+        id: 5,
+        messageId: 1,
+        partId: '5',
+        fileName: 'gesture.eml',
+        mimeType: 'message/rfc822',
+        sizeBytes: 250,
+        isInline: false,
+        isOutgoing: false,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: EmlPreviewWidget(
+              path: '/dummy.eml',
+              attachment: row,
+              initialData: parsed,
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump();
+      await fakePlatform.untilMessageLoaded(tester);
+
+      final webViewFinder = find.byType(WebViewWidget);
+      expect(webViewFinder, findsOneWidget);
+      final webViewWidget = tester.widget<WebViewWidget>(webViewFinder);
+      expect(webViewWidget.gestureRecognizers, isNotNull);
+      expect(
+        webViewWidget.gestureRecognizers
+            .any((factory) => factory.constructor() is EagerGestureRecognizer),
+        isTrue,
+      );
+    });
+
+    testWidgets('AttachmentPreviewScreen displays navigation chevrons for multiple attachments and navigates', (tester) async {
+      final attachments = [
+        const AttachmentRow(
+          id: 10,
+          messageId: 1,
+          partId: '10',
+          fileName: 'posta1.eml',
+          mimeType: 'message/rfc822',
+          sizeBytes: 500,
+          isInline: false,
+          isOutgoing: false,
+        ),
+        const AttachmentRow(
+          id: 11,
+          messageId: 1,
+          partId: '11',
+          fileName: 'posta2.eml',
+          mimeType: 'message/rfc822',
+          sizeBytes: 600,
+          isInline: false,
+          isOutgoing: false,
+        ),
+      ];
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            home: AttachmentPreviewScreen(
+              attachments: attachments,
+              initialIndex: 0,
+              localPathOf: (att) => '/fake/${att.fileName}',
+            ),
+          ),
+        ),
+      );
+
+      await tester.pump();
+
+      // Pager indicator
+      expect(find.text('1 / 2'), findsOneWidget);
+      expect(find.byTooltip('Önceki ek'), findsOneWidget);
+      expect(find.byTooltip('Sonraki ek'), findsOneWidget);
+
+      final prevBtn = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, LucideIcons.chevronLeft),
+      );
+      final nextBtn = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, LucideIcons.chevronRight),
+      );
+
+      // İlk sayfada önceki devre dışı, sonraki aktif
+      expect(prevBtn.onPressed, isNull);
+      expect(nextBtn.onPressed, isNotNull);
+
+      // Sonraki oka tıkla
+      await tester.tap(find.widgetWithIcon(IconButton, LucideIcons.chevronRight));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('2 / 2'), findsOneWidget);
+      final prevBtn2 = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, LucideIcons.chevronLeft),
+      );
+      final nextBtn2 = tester.widget<IconButton>(
+        find.widgetWithIcon(IconButton, LucideIcons.chevronRight),
+      );
+      expect(prevBtn2.onPressed, isNotNull);
+      expect(nextBtn2.onPressed, isNull);
     });
   });
 }

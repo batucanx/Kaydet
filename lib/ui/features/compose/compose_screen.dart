@@ -35,6 +35,7 @@ import '../../../domain/use_cases/signature_formatter.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../settings/new_signature_sheet.dart';
 import 'widgets/compose_image_embed_builder.dart';
+import 'widgets/quoted_fold_widget.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/attachment_icon.dart';
@@ -121,10 +122,10 @@ class ComposeScreen extends ConsumerStatefulWidget {
   final String? initialBody;
 
   @override
-  ConsumerState<ComposeScreen> createState() => _ComposeScreenState();
+  ConsumerState<ComposeScreen> createState() => ComposeScreenState();
 }
 
-class _ComposeScreenState extends ConsumerState<ComposeScreen> {
+class ComposeScreenState extends ConsumerState<ComposeScreen> {
   final _to = TextEditingController();
   final _cc = TextEditingController();
   final _bcc = TextEditingController();
@@ -182,6 +183,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   String? _inReplyTo;
   String? _references;
   final List<String> _attachments = [];
+
+  /// Yanıtlanan/iletilen iletiler için alıntıyı katlama durumu (Web ile tam parite)
+  bool _hasQuotedContent = false;
+  bool _isQuoteExpanded = false;
+  String _quoteHeader = '';
+  Delta? _quotedDelta;
+  String _quotedPlainText = '';
+  QuillController? _quotedController;
+  final FocusNode _quotedFocus = FocusNode(debugLabel: 'quoted_focus');
 
   /// Henüz kalıcı depoya kopyalanmayı bekleyen (boyut kontrolü + `persist`)
   /// ekler — listede bir yükleniyor ikonuyla gösterilir (bkz. `_AttachmentList`).
@@ -281,6 +291,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     _hasRecipientChips.dispose();
     _quill.removeListener(_onChanged);
     _quill.dispose();
+    _quotedController?.dispose();
+    _quotedFocus.dispose();
     for (final controller in [_to, _cc, _bcc, _subject]) {
       controller.dispose();
     }
@@ -312,14 +324,14 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final missingAttachments = <String>[];
     if (widget.draftId != null) {
       final id = widget.draftId!;
-      // Üçü de bağımsız; ayrı ayrı `await` etmek yerine hepsini hemen
-      // başlatıp en yavaşı kadar beklemek toplam süreyi üçe bölür.
-      final rowFuture = db.messageById(id);
-      final bodyFuture = db.bodyOf(id);
-      final attachmentsFuture = db.attachmentsOf(id);
-      final row = await rowFuture;
-      final body = await bodyFuture;
+      final row = await db.messageById(id);
       if (row != null) {
+        // Eğer sunucu taslağı ise ve gövde henüz çekilmemişse indir
+        if (row.uid != null &&
+            (row.bodyFetchedAt == null || await db.bodyOf(id) == null)) {
+          await ref.read(draftRepositoryProvider).ensureDraftBodyLoaded(id);
+        }
+        final body = await db.bodyOf(id);
         // Taslak hangi hesapta oluşturulduysa "Gönderen" o kalır — GENEL
         // aktif hesap taslaktan sonra değişmiş olabilir.
         _fromAccountId = row.accountId;
@@ -338,9 +350,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _inReplyTo = row.inReplyTo;
         _references = row.referencesRaw;
         _showCcBcc = _cc.text.isNotEmpty || _bcc.text.isNotEmpty;
-        final existing = await attachmentsFuture;
+        final existing = await db.attachmentsOf(id);
         for (final attachment in existing.where(
-          (a) => a.isOutgoing && a.localPath != null,
+          (a) => a.localPath != null,
         )) {
           final path = attachment.localPath!;
           // Cihazdan silinmiş (geçici klasör temizlenmiş) bir ek gönderimde
@@ -500,21 +512,53 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       String quoteText, {
       Delta? quoted,
     }) {
+      // 1. Ana metin düzenleyicisi: Kullanıcının hemen yazması için boş bir satır ve imza
       final docDelta = Delta();
+      docDelta.insert('\n');
       if (sigDelta.isNotEmpty) {
         for (final op in sigDelta.toList()) {
           docDelta.push(op);
         }
       }
-      if (quoted != null) {
-        docDelta.insert(quotePrefix);
-        for (final op in quoted.toList()) {
-          docDelta.push(op);
-        }
-      } else {
-        docDelta.insert('$quotePrefix$quoteText\n');
-      }
       _quill.document = Document.fromDelta(docDelta);
+      _quill.updateSelection(
+        const TextSelection.collapsed(offset: 0),
+        ChangeSource.local,
+      );
+
+      // 2. Alıntılanan içerik katlama durumu (Web ile tam parite)
+      final hasContent =
+          (quoted != null && quoted.isNotEmpty) || quoteText.trim().isNotEmpty;
+      if (hasContent) {
+        _hasQuotedContent = true;
+        _isQuoteExpanded = false;
+        _quoteHeader = quotePrefix;
+        _quotedDelta = quoted;
+        _quotedPlainText = quoteText;
+
+        final quoteDocDelta = Delta();
+        quoteDocDelta.insert(quotePrefix.trimLeft());
+        if (!quotePrefix.endsWith('\n')) {
+          quoteDocDelta.insert('\n');
+        }
+        if (quoted != null) {
+          for (final op in quoted.toList()) {
+            quoteDocDelta.push(op);
+          }
+        } else {
+          quoteDocDelta.insert('$quoteText\n');
+        }
+        _quotedController?.dispose();
+        _quotedController = QuillController(
+          document: Document.fromDelta(quoteDocDelta),
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+      } else {
+        _hasQuotedContent = false;
+        _isQuoteExpanded = false;
+        _quotedController?.dispose();
+        _quotedController = null;
+      }
     }
 
     bool isSelf(EmailAddress a) =>
@@ -547,18 +591,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         );
 
       case ComposeMode.replyAll:
-        // Kendi adresimiz ve asıl alıcılar Bilgi listesinden çıkarılır.
-        final primaryEmails = {
-          for (final a in primary) a.email.trim().toLowerCase(),
-          from.email.trim().toLowerCase(),
-        };
-        final seenCc = <String>{};
-        final others = [...to, ...cc]
-            .where((a) => !isSelf(a))
-            .where((a) => !primaryEmails.contains(a.email.trim().toLowerCase()))
-            .where((a) => seenCc.add(a.email.trim().toLowerCase()))
-            .toList();
-        _to.text = primaryText;
+        // Gmail / Outlook gibi: Kime = gönderen + orijinalin diğer "Kime"
+        // alıcıları, Bilgi = orijinalin "Bilgi" alıcıları. Her adres bir kez,
+        // kendi adresimiz hiçbir alanda yer almaz.
+        final seen = <String>{};
+        List<EmailAddress> once(Iterable<EmailAddress> list) => [
+          for (final a in list)
+            if (!isSelf(a) &&
+                a.email.trim().isNotEmpty &&
+                seen.add(a.email.trim().toLowerCase()))
+              a,
+        ];
+        final toList = once([...(primary.isEmpty ? [from] : primary), ...to]);
+        final others = once(cc);
+        _to.text = toList.isEmpty
+            ? primaryText
+            : toList.map((a) => a.formatted).join(', ');
         _cc.text = others.map((a) => a.formatted).join(', ');
         _showCcBcc = others.isNotEmpty;
         _subject.text = _prefixSubject(row.subject, 'Yanıt');
@@ -612,17 +660,78 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return '$prefix: $trimmed';
   }
 
+  /// Kullanıcının ana düzenleyicide yazdığı metin (gömülü görsellerin yer tutucu
+  /// karakteri `U+FFFC` atılmış).
+  String get _userPlainText =>
+      _quill.document.toPlainText().replaceAll('\uFFFC', '').trim();
+
   /// Gömülü görsellerin yer tutucu karakteri (`U+FFFC`) düz metin parçasına
-  /// ve önizlemeye sızmasın diye atılır.
-  String get _bodyPlainText =>
-      _quill.document.toPlainText().replaceAll('￼', '').trim();
+  /// ve önizlemeye sızmasın diye atılır. Katlanmış alıntı varsa o da eklenir.
+  String get _bodyPlainText {
+    final userText = _userPlainText;
+    if (_hasQuotedContent) {
+      final quoteText = _quotedController != null
+          ? _quotedController!.document
+              .toPlainText()
+              .replaceAll('\uFFFC', '')
+              .trim()
+          : '$_quoteHeader\n$_quotedPlainText'.trim();
+      if (userText.isEmpty) return quoteText;
+      if (quoteText.isEmpty) return userText;
+      return '$userText\n\n$quoteText';
+    }
+    return userText;
+  }
 
   /// Zengin metni gönderim/kaydetme için e-posta HTML'ine çevirir (bkz.
   /// [EmailHtmlCodec.encode]); içerik boşsa `null` döner (düz taslak olarak
-  /// kalır).
+  /// kalır). Katlanmış alıntı varsa o da HTML'e dahil edilir.
   String? get _bodyHtml {
-    if (_quill.document.length <= 1 && _bodyPlainText.isEmpty) return null;
-    return EmailHtmlCodec.encode(_quill.document.toDelta());
+    final fullDelta = _getFullDelta();
+    if (fullDelta.isEmpty) return null;
+    final plain = _bodyPlainText;
+    if (fullDelta.length <= 1 && plain.isEmpty) return null;
+    return EmailHtmlCodec.encode(fullDelta);
+  }
+
+  /// Kullanıcının yazdığı içerik ile katlanmış alıntıyı birleştiren Delta.
+  Delta _getFullDelta() {
+    final userDelta = _quill.document.toDelta();
+    if (!_hasQuotedContent) return userDelta;
+
+    final quotedDelta = _quotedController?.document.toDelta();
+    if (quotedDelta == null || quotedDelta.isEmpty) {
+      if (_quoteHeader.isEmpty && _quotedPlainText.isEmpty) {
+        return userDelta;
+      }
+    }
+
+    final fullDelta = Delta();
+    final hasUserContent =
+        _quill.document.length > 1 || _userPlainText.isNotEmpty;
+    if (hasUserContent) {
+      for (final op in userDelta.toList()) {
+        fullDelta.push(op);
+      }
+      fullDelta.insert('\n');
+    }
+
+    if (quotedDelta != null && quotedDelta.isNotEmpty) {
+      for (final op in quotedDelta.toList()) {
+        fullDelta.push(op);
+      }
+    } else {
+      final header = _quoteHeader.trimLeft();
+      if (header.isNotEmpty) {
+        fullDelta.insert(header);
+        if (!header.endsWith('\n')) fullDelta.insert('\n');
+      }
+      if (_quotedPlainText.isNotEmpty) {
+        fullDelta.insert('${_quotedPlainText.trim()}\n');
+      }
+    }
+
+    return fullDelta;
   }
 
   bool get _hasContent =>
@@ -635,9 +744,9 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   bool get _bodyDiffersFromSignature {
     final signature = _defaultSignatureRow;
-    if (signature == null) return _bodyPlainText.isNotEmpty;
+    if (signature == null) return _userPlainText.isNotEmpty;
     // Embed karakterlerini (\uFFFC) temizleyerek kullanıcının girdiği metne odaklan.
-    final cleanDocText = _bodyPlainText.replaceAll('\uFFFC', '').trim();
+    final cleanDocText = _userPlainText;
     final sigText = signature.body.trim();
     if (cleanDocText.isNotEmpty) {
       return cleanDocText != sigText;
@@ -656,6 +765,67 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     });
     return extraEmbeds.isNotEmpty;
   }
+
+  void _removeQuote() {
+    final prevExpanded = _isQuoteExpanded;
+    final prevController = _quotedController;
+    final prevHeader = _quoteHeader;
+    final prevDelta = _quotedDelta;
+    final prevPlainText = _quotedPlainText;
+
+    setState(() {
+      _hasQuotedContent = false;
+      _isQuoteExpanded = false;
+    });
+    _onChanged();
+
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Alıntı kaldırıldı'),
+        action: SnackBarAction(
+          label: 'Geri Al',
+          onPressed: () {
+            if (!mounted) return;
+            setState(() {
+              _hasQuotedContent = true;
+              _isQuoteExpanded = prevExpanded;
+              _quotedController = prevController;
+              _quoteHeader = prevHeader;
+              _quotedDelta = prevDelta;
+              _quotedPlainText = prevPlainText;
+            });
+            _onChanged();
+          },
+        ),
+      ),
+    );
+  }
+
+  @visibleForTesting
+  bool get hasQuotedContentForTest => _hasQuotedContent;
+
+  @visibleForTesting
+  bool get isQuoteExpandedForTest => _isQuoteExpanded;
+
+  @visibleForTesting
+  QuillController? get quotedControllerForTest => _quotedController;
+
+  @visibleForTesting
+  String get quoteHeaderForTest => _quoteHeader;
+
+  @visibleForTesting
+  String get bodyPlainTextForTest => _bodyPlainText;
+
+  @visibleForTesting
+  String? get bodyHtmlForTest => _bodyHtml;
+
+  @visibleForTesting
+  void toggleQuoteForTest() =>
+      setState(() => _isQuoteExpanded = !_isQuoteExpanded);
+
+  @visibleForTesting
+  void removeQuoteForTest() => _removeQuote();
 
   /// [_fromAccountId] için varsayılan imza satırı.
   SignatureRow? get _defaultSignatureRow {
@@ -688,8 +858,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final accountId = _fromAccountId;
     if (accountId == null || !_hasContent) return;
     final id = await ref
-        .read(mailRepositoryProvider)
-        .saveDraft(
+        .read(saveDraftUseCaseProvider)
+        .call(
           accountId: accountId,
           draftId: _draftId,
           to: _to.text,
@@ -1630,20 +1800,35 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                         key: _editorKey,
                         controller: _quill,
                         focusNode: _bodyFocus,
-                        config: const QuillEditorConfig(
+                        config: QuillEditorConfig(
                           scrollable: false,
                           expands: false,
                           autoFocus: false,
                           padding: EdgeInsets.zero,
                           placeholder: 'İletinizi buraya yazın…',
                           textCapitalization: TextCapitalization.sentences,
-                          minHeight: 220,
+                          minHeight: _hasQuotedContent ? 80 : 220,
                           customStyleBuilder: _composeCustomStyle,
-                          embedBuilders: [ComposeImageEmbedBuilder()],
+                          embedBuilders: const [ComposeImageEmbedBuilder()],
                         ),
                       ),
                     ),
                   ),
+                  if (_hasQuotedContent) ...[
+                    QuotedFoldWidget(
+                      isExpanded: _isQuoteExpanded,
+                      controller: _quotedController,
+                      focusNode: _quotedFocus,
+                      headerText: _quoteHeader,
+                      fallbackText: _quotedPlainText,
+                      customStyleBuilder: _composeCustomStyle,
+                      onToggle: () => setState(
+                        () => _isQuoteExpanded = !_isQuoteExpanded,
+                      ),
+                      onRemove: _removeQuote,
+                    ),
+                    const SizedBox(height: Space.md),
+                  ],
                 ],
               ),
             ),

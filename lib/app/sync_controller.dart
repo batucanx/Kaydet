@@ -23,6 +23,7 @@ class SyncState {
     this.lastSyncAt,
     this.hasMore = true,
     this.unreachableAccounts = const {},
+    this.folderErrors = const {},
   });
 
   final bool isSyncing;
@@ -37,6 +38,9 @@ class SyncState {
   /// eşitleme zamanıdır (hiç olmadıysa `null`).
   final Map<int, DateTime?> unreachableAccounts;
 
+  /// Klasör bazlı son senkronizasyon hataları (mailboxId -> AppFailure).
+  final Map<int, AppFailure> folderErrors;
+
   SyncState copyWith({
     bool? isSyncing,
     bool? isLoadingMore,
@@ -46,6 +50,7 @@ class SyncState {
     DateTime? lastSyncAt,
     bool? hasMore,
     Map<int, DateTime?>? unreachableAccounts,
+    Map<int, AppFailure>? folderErrors,
   }) => SyncState(
     isSyncing: isSyncing ?? this.isSyncing,
     isLoadingMore: isLoadingMore ?? this.isLoadingMore,
@@ -54,6 +59,7 @@ class SyncState {
     lastSyncAt: lastSyncAt ?? this.lastSyncAt,
     hasMore: hasMore ?? this.hasMore,
     unreachableAccounts: unreachableAccounts ?? this.unreachableAccounts,
+    folderErrors: folderErrors ?? this.folderErrors,
   );
 }
 
@@ -71,6 +77,9 @@ class SyncController extends Notifier<SyncState> {
   Timer? _settingsRefresh;
   StreamSubscription<int?>? _remotePushes;
   Timer? _pushDebounce;
+
+  /// Klasör bazlı hatalar
+  final Map<int, AppFailure> _folderErrors = {};
 
   /// Bir tur sürerken uzak push geldi: tur bitince hemen yeniden eşitlenir.
   bool _pushSyncPending = false;
@@ -354,9 +363,8 @@ class SyncController extends Notifier<SyncState> {
     // "ulaşılamıyor" işaretlenir. Etkin olmayan hesap için de izlenir (rozet).
     if (failure is ConnectionFailure) {
       _noteConnectionFailure(accountId);
-      return;
     }
-    if (!_isCurrent(accountId) || !failure.isActionable) return;
+    if (!_isCurrent(accountId)) return;
     state = state.copyWith(lastError: failure);
   }
 
@@ -529,6 +537,7 @@ class SyncController extends Notifier<SyncState> {
     final accountId = ref.read(accountIdProvider);
     final unifiedUse = ref.read(selectedFolderProvider)?.unifiedUse;
     if (accountId == null) return;
+    if (!allAccounts && _backingOff(accountId)) return;
     if (_running || _foldersSyncing) {
       // Sürmekte olan tur BAŞKA bir klasör içindir (ör. yeni hesabın ilk
       // Gelen Kutusu indirmesi). Çağrı sessizce düşseydi kullanıcının seçtiği
@@ -554,7 +563,12 @@ class SyncController extends Notifier<SyncState> {
     }
 
     _running = true;
-    state = state.copyWith(isSyncing: true, clearError: true);
+    _folderErrors.remove(mailbox.id);
+    state = state.copyWith(
+      isSyncing: true,
+      clearError: true,
+      folderErrors: Map.of(_folderErrors),
+    );
     try {
       final engine = ref.read(syncEngineProvider);
       final outcome = await engine.syncMailbox(
@@ -563,11 +577,21 @@ class SyncController extends Notifier<SyncState> {
       );
       if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
+        _folderErrors[mailbox.id] = outcome.failure;
+        state = state.copyWith(
+          lastError: outcome.failure,
+          folderErrors: Map.of(_folderErrors),
+        );
         _reportFailure(accountId, outcome.failure);
         return;
       }
+      _folderErrors.remove(mailbox.id);
       _noteReachable(accountId);
-      state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
+      state = state.copyWith(
+        lastSyncAt: DateTime.now(),
+        clearError: true,
+        folderErrors: Map.of(_folderErrors),
+      );
       _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
       await ref.read(mailRepositoryProvider).processQueue(accountId);
       _startBodyPrefetch(engine, accountId, mailbox);
@@ -879,9 +903,9 @@ class SyncController extends Notifier<SyncState> {
 
   void _drainPendingFolderSync() {
     if (_disposed || _running || _foldersSyncing || _paused) return;
-    if (_serverChangePending) {
-      _serverChangePending = false;
-      scheduleMicrotask(() => _fireAndForget(syncCurrentFolder()));
+    if (_folderSyncPending) {
+      _folderSyncPending = false;
+      scheduleMicrotask(() => _fireAndForget(syncFolders(force: true)));
       return;
     }
     if (_pushSyncPending) {
@@ -889,9 +913,11 @@ class SyncController extends Notifier<SyncState> {
       scheduleMicrotask(() => _fireAndForget(_syncForRemotePush()));
       return;
     }
-    if (!_folderSyncPending) return;
-    _folderSyncPending = false;
-    scheduleMicrotask(() => _fireAndForget(syncFolders(force: true)));
+    if (_serverChangePending) {
+      _serverChangePending = false;
+      scheduleMicrotask(() => _fireAndForget(syncCurrentFolder()));
+      return;
+    }
   }
 
   void _startFolderPolling() {

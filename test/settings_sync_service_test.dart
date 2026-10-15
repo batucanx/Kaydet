@@ -24,11 +24,13 @@ class _SettingsImap extends FakeImapService {
   Future<Result<int?>> appendMessage({
     required String mimeSource,
     required String targetPath,
+    String? encodedPath,
     List<String> flags = const [],
   }) async {
     final result = await super.appendMessage(
       mimeSource: mimeSource,
       targetPath: targetPath,
+      encodedPath: encodedPath,
       flags: flags,
     );
     final uid = (result as Ok<int?>).value!;

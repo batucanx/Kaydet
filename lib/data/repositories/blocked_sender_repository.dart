@@ -56,6 +56,31 @@ class BlockedSenderRepository {
   /// Posta sunucusundaki filtre: engellenenin gelecekteki iletileri sunucuda kendiliğinden İstenmeyen'e ayrılır.
   final SenderFilterSync? _senderFilter;
 
+  Future<bool> isOwnAddress(int accountId, String email) async {
+    final address = email.trim().toLowerCase();
+    if (address.isEmpty) return false;
+    final account = await _db.accountById(accountId);
+    if (account != null && account.email.trim().toLowerCase() == address) {
+      return true;
+    }
+    final all = await _db.allAccounts();
+    return all.any((a) => a.email.trim().toLowerCase() == address);
+  }
+
+  /// Verilen iletilerin tümünün göndericisi kullanıcının kendi hesabı/adresleri mi?
+  Future<bool> hasOnlyOwnSenders(List<int> messageIds) async {
+    final rows = await _db.messagesByIds(messageIds);
+    if (rows.isEmpty) return false;
+    final all = await _db.allAccounts();
+    final ownEmails = {
+      for (final a in all) a.email.trim().toLowerCase(),
+    };
+    return rows.every((r) {
+      final email = r.fromEmail.trim().toLowerCase();
+      return email.isNotEmpty && ownEmails.contains(email);
+    });
+  }
+
   Future<BlockResult> block({
     required int accountId,
     required String email,
@@ -65,8 +90,7 @@ class BlockedSenderRepository {
     if (!EmailAddress.isValidEmail(address)) {
       return const BlockResult(BlockOutcome.invalidAddress);
     }
-    final account = await _db.accountById(accountId);
-    if (account != null && account.email.trim().toLowerCase() == address) {
+    if (await isOwnAddress(accountId, address)) {
       return const BlockResult(BlockOutcome.ownAddress);
     }
 
@@ -93,21 +117,35 @@ class BlockedSenderRepository {
   /// "İstenmeyen olarak işaretle" (web ile aynı kural): göndericiler listeye girer, Gelen Kutusu'ndaki
   /// iletileri İstenmeyen'e taşınır ve bundan sonra gelenler de oraya gider. Verilen iletiler
   /// hangi klasördeyse İstenmeyen'e taşınır; zaten İstenmeyen'dekiler yerinde kalır, yalnızca
-  /// göndericisi listelenir. Dönüş: en az bir ileti İstenmeyen'e taşındı mı.
+  /// göndericisi listelenir. Kullanıcı kendi adresini istenmeyen olarak işaretleyemez.
+  /// Dönüş: en az bir ileti İstenmeyen'e taşındı mı.
   Future<bool> markSpam(List<int> messageIds) async {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return false;
 
+    final all = await _db.allAccounts();
+    final ownEmails = {
+      for (final a in all) a.email.trim().toLowerCase(),
+    };
+
+    final eligibleRows = rows.where((row) {
+      final email = row.fromEmail.trim().toLowerCase();
+      return email.isNotEmpty && !ownEmails.contains(email);
+    }).toList();
+
+    if (eligibleRows.isEmpty) return false;
+
     final listed = <(int, String)>{};
-    for (final row in rows) {
+    for (final row in eligibleRows) {
       final email = row.fromEmail.trim().toLowerCase();
       if (row.isLocalOnly || email.isEmpty) continue;
       if (!listed.add((row.accountId, email))) continue;
       await block(accountId: row.accountId, email: email, name: row.fromName);
     }
 
-    final movedAny = (await _rowsInJunk(rows)).length < rows.length;
-    await _mail.moveToMailbox(messageIds: messageIds, target: SpecialUse.junk);
+    final eligibleIds = eligibleRows.map((r) => r.id).toList();
+    final movedAny = (await _rowsInJunk(eligibleRows)).length < eligibleRows.length;
+    await _mail.moveToMailbox(messageIds: eligibleIds, target: SpecialUse.junk);
     return movedAny;
   }
 
