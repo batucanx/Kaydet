@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'dart:math' show max, min;
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 
 import '../../core/result.dart';
 import '../../core/turkish.dart';
@@ -267,11 +268,13 @@ class SyncEngine {
     // --- 2. Yeni iletiler -------------------------------------------------
     final localHighest = await _db.highestUid(mailbox.id);
     final localCount = await _db.countMessages(mailbox.id);
-    print(
-      '[SYNC_ENGINE] Mailbox "${mailbox.path}" (id: ${mailbox.id}, encoded: "${mailbox.encodedPath}"): '
-      'remoteExists=${state.messageCount}, uidValidity=${state.uidValidity}, '
-      'uidNext=${state.uidNext}, localHighest=$localHighest, localDbCount=$localCount',
-    );
+    if (kDebugMode) {
+      print(
+        '[SYNC_ENGINE] Mailbox "${mailbox.path}" (id: ${mailbox.id}, encoded: "${mailbox.encodedPath}"): '
+        'remoteExists=${state.messageCount}, uidValidity=${state.uidValidity}, '
+        'uidNext=${state.uidNext}, localHighest=$localHighest, localDbCount=$localCount',
+      );
+    }
     List<int> newIds = const [];
 
     final neverSynced = mailbox.uidNext == null;
@@ -284,7 +287,7 @@ class SyncEngine {
         final fromSeq = (state.messageCount - initialFetchCount + 1)
             .clamp(1, state.messageCount);
         final toSeq = state.messageCount;
-        print('[SYNC_ENGINE] Initial fetch for "${mailbox.path}": seq $fromSeq..$toSeq');
+        if (kDebugMode) print('[SYNC_ENGINE] Initial fetch for "${mailbox.path}": seq $fromSeq..$toSeq');
         final fetched = await _fetchSequenceAndStore(
           accountId,
           mailbox,
@@ -293,10 +296,12 @@ class SyncEngine {
         );
         if (fetched is Err<List<int>>) return Err(fetched.failure);
         newIds = (fetched as Ok<List<int>>).value;
-        print(
-          '[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}": '
-          'UIDs=${newIds.take(10).toList()}${newIds.length > 10 ? '...' : ''}',
-        );
+        if (kDebugMode) {
+          print(
+            '[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}": '
+            'UIDs=${newIds.take(10).toList()}${newIds.length > 10 ? '...' : ''}',
+          );
+        }
         final diverted = await _divertBlockedSenders(accountId, mailbox);
         newIds = [
           for (final id in newIds)
@@ -340,7 +345,7 @@ class SyncEngine {
         ? min(localHighest + 1, mailbox.uidNext ?? localHighest + 1)
         : (mailbox.uidNext ?? 1);
     if (state.uidNext > fromUid) {
-      print('[SYNC_ENGINE] Incremental UID fetch for "${mailbox.path}": $fromUid..${state.uidNext - 1}');
+      if (kDebugMode) print('[SYNC_ENGINE] Incremental UID fetch for "${mailbox.path}": $fromUid..${state.uidNext - 1}');
       // Uzun süre çevrimdışı kalan / çok mail alan kullanıcıda tek bir dev
       // FETCH zaman aşımına düşer ve her turda aynı yerde tıkanırdı. Aralık
       // parçalara bölünür; her parça yazıldıkça `localHighest` ilerler, hata
@@ -362,13 +367,13 @@ class SyncEngine {
         collected.addAll((fetched as Ok<List<int>>).value);
       }
       newIds = collected;
-      print('[SYNC_ENGINE] Fetched ${newIds.length} new envelopes for "${mailbox.path}"');
+      if (kDebugMode) print('[SYNC_ENGINE] Fetched ${newIds.length} new envelopes for "${mailbox.path}"');
     } else if (state.uidNext <= 0 && state.messageCount > mailbox.totalCount) {
       // Sunucu UIDNEXT bildirmiyor (state.uidNext == 0): yeni iletileri sıra numarası artışıyla çek.
       final fromSeq = (mailbox.totalCount + 1).clamp(1, state.messageCount);
       final toSeq = state.messageCount;
       if (toSeq >= fromSeq) {
-        print('[SYNC_ENGINE] Sequence fetch for server without UIDNEXT: seq $fromSeq..$toSeq');
+        if (kDebugMode) print('[SYNC_ENGINE] Sequence fetch for server without UIDNEXT: seq $fromSeq..$toSeq');
         final fetched = await _fetchSequenceAndStore(
           accountId,
           mailbox,
@@ -377,7 +382,7 @@ class SyncEngine {
         );
         if (fetched is Err<List<int>>) return Err(fetched.failure);
         newIds = (fetched as Ok<List<int>>).value;
-        print('[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}"');
+        if (kDebugMode) print('[SYNC_ENGINE] Fetched ${newIds.length} envelopes for "${mailbox.path}"');
       }
     }
 

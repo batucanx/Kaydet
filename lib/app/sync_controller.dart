@@ -217,12 +217,15 @@ class SyncController extends Notifier<SyncState> {
     _watchRemotePushes();
     // Bildirimlerden kalan ileti özetleri, eşitleme beklenmeden listeye düşer.
     _fireAndForget(ref.read(pushStubsProvider.notifier).refresh());
-    await syncAll();
-    _lastFolderSync = DateTime.now();
+    // Zamanlayıcılar ve sunucu olayı dinleyicisi ilk turu BEKLEMEDEN kurulur:
+    // yavaş bir ilk tur (ağır `LIST`, yavaş bağlantı) bunları da geciktirmesin.
+    // Tur sürerken tetiklenenler `_running` korumasıyla sıraya alınır.
     _startFolderPolling();
     _startMailPolling();
     _startSettingsPolling();
     _watchServerChanges();
+    await syncAll();
+    _lastFolderSync = DateTime.now();
   }
 
   /// iOS'ta uygulama ön plandayken gelen uzak push (yeni ileti) anında
@@ -469,6 +472,35 @@ class SyncController extends Notifier<SyncState> {
 
     try {
       final engine = ref.read(syncEngineProvider);
+
+      // Kullanıcının baktığı şey Gelen Kutusu: klasör zaten yerelde biliniyorsa
+      // ağır `LIST` (tüm klasör ağacı) BEKLENMEDEN önce o eşitlenir; klasör
+      // listesi hemen ardından yenilenir. İlk kurulumda (klasör henüz yok) ya
+      // da bu erken tur başarısız olursa eski sıra (LIST → Gelen Kutusu) işler.
+      Result<SyncOutcome>? early;
+      final cachedInbox = await ref
+          .read(databaseProvider)
+          .mailboxBySpecialUse(accountId, SpecialUse.inbox);
+      if (cachedInbox != null) {
+        early = await engine.syncMailbox(
+          accountId: accountId,
+          mailbox: cachedInbox,
+        );
+        if (!_isCurrent(accountId)) return;
+        if (early is Err<SyncOutcome>) {
+          if (early.failure is ConnectionFailure) {
+            _reportFailure(accountId, early.failure);
+            return;
+          }
+          // Klasör satırı bayat olabilir (ör. sunucuda değişmiş): LIST sonrası
+          // normal yol yeniden dener ve hatayı kendisi bildirir.
+          early = null;
+        } else {
+          _noteReachable(accountId);
+          state = state.copyWith(lastSyncAt: DateTime.now(), clearError: true);
+        }
+      }
+
       final mailboxes = await engine.syncMailboxes(accountId);
       if (!_isCurrent(accountId)) return;
       if (mailboxes is Err<List<MailboxRow>>) {
@@ -481,10 +513,9 @@ class SyncController extends Notifier<SyncState> {
       final inbox = boxes.where((m) => m.specialUse == SpecialUse.inbox);
       if (inbox.isEmpty) return;
 
-      final outcome = await engine.syncMailbox(
-        accountId: accountId,
-        mailbox: inbox.first,
-      );
+      final outcome =
+          early ??
+          await engine.syncMailbox(accountId: accountId, mailbox: inbox.first);
       if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
         _reportFailure(accountId, outcome.failure);
@@ -941,7 +972,9 @@ class SyncController extends Notifier<SyncState> {
     final accountId = ref.read(accountIdProvider);
     if (accountId == null) return;
     if (_foldersSyncing || _running) {
-      _folderSyncPending = true;
+      // Periyodik yoklama (force değil) sürmekte olan turun ardına yığılmaz:
+      // sonraki tık zaten yeniden dener. Yalnızca açık istekler sıraya alınır.
+      if (force) _folderSyncPending = true;
       return;
     }
     final last = _lastFolderSync;

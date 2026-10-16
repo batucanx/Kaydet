@@ -8,6 +8,7 @@ import 'attachment_files.dart';
 import 'inline_image_collector.dart';
 import 'mail_text_decoder.dart';
 import 'package:enough_mail/enough_mail.dart' as em;
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:synchronized/synchronized.dart';
 
 import '../../core/result.dart';
@@ -448,11 +449,13 @@ class EnoughMailImapService implements ImapService {
       highestModSeq: box.highestModSequence,
       permanentFlags: box.permanentMessageFlags,
     );
-    print(
-      '[IMAP SELECT] path="$path", encoded="$effectivePath", '
-      'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
-      'UIDNEXT=${state.uidNext}, HIGHESTMODSEQ=${state.highestModSeq}',
-    );
+    if (kDebugMode) {
+      print(
+        '[IMAP SELECT] path="$path", encoded="$effectivePath", '
+        'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
+        'UIDNEXT=${state.uidNext}, HIGHESTMODSEQ=${state.highestModSeq}',
+      );
+    }
     return state;
   });
 
@@ -484,11 +487,13 @@ class EnoughMailImapService implements ImapService {
       uidNext: box.uidNext ?? 0,
       messageCount: box.messagesExists,
     );
-    print(
-      '[IMAP STATUS] path="$path", encoded="$effectivePath", '
-      'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
-      'UIDNEXT=${state.uidNext}',
-    );
+    if (kDebugMode) {
+      print(
+        '[IMAP STATUS] path="$path", encoded="$effectivePath", '
+        'EXISTS=${state.messageCount}, UIDVALIDITY=${state.uidValidity}, '
+        'UIDNEXT=${state.uidNext}',
+      );
+    }
     return state;
   });
 
