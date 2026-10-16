@@ -5,7 +5,7 @@ import { SecretBox } from '../src/crypto.js';
 import { openDatabase } from '../src/db.js';
 import { Notifier } from '../src/notifier.js';
 import { Repository } from '../src/repository.js';
-import { backoffDelay, describeMessage } from '../src/watcher.js';
+import { backoffDelay, describeMessage, staggerOffsets } from '../src/watcher.js';
 
 const TOKEN = 'ab'.repeat(32);
 
@@ -269,5 +269,36 @@ describe('Notifier (Android / FCM)', () => {
     const apnsSend = vi.fn();
     await new Notifier(repo, { send: apnsSend }).notify(account, [msg(1)]);
     expect(apnsSend).not.toHaveBeenCalled();
+  });
+});
+
+describe('staggerOffsets', () => {
+  const opts = { globalMs: 100, perHostMs: 1000 };
+
+  it('farklı sunucular yalnızca genel aralıkla ayrılır', () => {
+    expect(staggerOffsets(['a.com', 'b.com', 'c.com'], opts)).toEqual([0, 100, 200]);
+  });
+
+  it('aynı sunucuya bağlantılar perHostMs aralıkla gider (büyük/küçük harf fark etmez)', () => {
+    expect(staggerOffsets(['x.com', 'X.com', 'x.com'], opts)).toEqual([0, 1000, 2000]);
+  });
+
+  it('aynı sunucunun beklemesi diğer sunucuları geciktirmez', () => {
+    // 2. hesap x.com için 1000'e gider; y.com onu beklemeden hemen sonraki boş aralığa girer.
+    expect(staggerOffsets(['x.com', 'x.com', 'y.com'], opts)).toEqual([0, 1000, 100]);
+  });
+
+  it('hiçbir iki başlatma aynı anda olmaz ve aynı sunucu aralığı korunur', () => {
+    const hosts = Array.from({ length: 200 }, (_, i) => `h${i % 5}.com`);
+    const at = staggerOffsets(hosts, opts);
+    expect(new Set(at).size).toBe(at.length);
+    for (let h = 0; h < 5; h++) {
+      const mine = at.filter((_, i) => i % 5 === h).sort((a, b) => a - b);
+      for (let i = 1; i < mine.length; i++) expect(mine[i]! - mine[i - 1]!).toBeGreaterThanOrEqual(1000);
+    }
+  });
+
+  it('boş listede boş döner', () => {
+    expect(staggerOffsets([], opts)).toEqual([]);
   });
 });

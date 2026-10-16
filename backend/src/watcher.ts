@@ -241,14 +241,82 @@ export class AccountWatcher {
   }
 }
 
+export interface StaggerOptions {
+  /** Art arda iki başlatma arasındaki en kısa süre (tüm hesaplar için). */
+  globalMs: number;
+  /** Aynı IMAP sunucusuna iki bağlantı arasındaki en kısa süre. */
+  perHostMs: number;
+}
+
+/**
+ * Sunucu yeniden başlayınca yüzlerce hesap aynı saniyede bağlanmasın: sağlayıcılar
+ * (Yandex, ortak hosting) kısa sürede çok bağlantıyı hız sınırıyla ya da geçici
+ * IP/hesap engeliyle karşılar. Varsayılan: toplamda saniyede ~10, aynı sunucuya
+ * saniyede 2 bağlantı.
+ */
+export const DEFAULT_STAGGER: StaggerOptions = { globalMs: 100, perHostMs: 500 };
+
+/**
+ * Hesap başına başlatma gecikmelerini hesaplar (ms). Her sunucu kendi
+ * `perHostMs` aralığını izler; bir sunucunun bekleyen hesapları diğer
+ * sunucuları GECİKTİRMEZ. `globalMs` yalnızca iki başlatmanın aynı anda
+ * olmasını önler (farklı sunucuların bağlantıları arasında en az bu kadar fark).
+ */
+export function staggerOffsets(
+  hosts: string[],
+  { globalMs, perHostMs }: StaggerOptions,
+): number[] {
+  const nextByHost = new Map<string, number>();
+  const usedSlots = new Set<number>();
+  return hosts.map((host) => {
+    const key = host.toLowerCase();
+    let slot = Math.ceil((nextByHost.get(key) ?? 0) / globalMs);
+    while (usedSlots.has(slot)) slot++;
+    usedSlots.add(slot);
+    const at = slot * globalMs;
+    nextByHost.set(key, at + perHostMs);
+    return at;
+  });
+}
+
 /** Hesap kaydı/silinmesi olaylarında izleyicileri başlatıp durdurur. */
 export class WatcherManager implements AccountHooks {
   private readonly watchers = new Map<number, AccountWatcher>();
+  /** Henüz başlamamış (kademeli sıradaki) hesapların zamanlayıcıları. */
+  private readonly pending = new Map<number, NodeJS.Timeout>();
 
-  constructor(private readonly deps: WatcherDeps) {}
+  constructor(
+    private readonly deps: WatcherDeps,
+    private readonly stagger: StaggerOptions = DEFAULT_STAGGER,
+  ) {}
 
+  /** Açılışta tüm hesapları KADEMELİ başlatır (bkz. `staggerOffsets`). */
   startAll(): void {
-    for (const account of this.deps.repo.listAccounts()) this.begin(account);
+    const accounts = this.deps.repo.listAccounts();
+    const offsets = staggerOffsets(
+      accounts.map((a) => a.imap_host),
+      this.stagger,
+    );
+    const last = offsets[offsets.length - 1] ?? 0;
+    if (accounts.length > 1) {
+      this.deps.log?.(
+        `${accounts.length} hesap kademeli başlatılıyor (yaklaşık ${Math.ceil(last / 1000)} sn)`,
+      );
+    }
+    accounts.forEach((account, i) => {
+      const delay = offsets[i] ?? 0;
+      if (delay === 0) {
+        this.begin(account);
+        return;
+      }
+      const timer = setTimeout(() => {
+        this.pending.delete(account.id);
+        // Beklerken silinmiş ya da güncellenmiş olabilir: güncel kaydı kullan.
+        const current = this.deps.repo.getAccount(account.id);
+        if (current) this.begin(current);
+      }, delay);
+      this.pending.set(account.id, timer);
+    });
   }
 
   onAccountUpserted(account: AccountRow): void {
@@ -260,6 +328,8 @@ export class WatcherManager implements AccountHooks {
   }
 
   async stopAll(): Promise<void> {
+    for (const timer of this.pending.values()) clearTimeout(timer);
+    this.pending.clear();
     const all = [...this.watchers.values()];
     this.watchers.clear();
     await Promise.all(all.map((w) => w.stop()));
@@ -280,6 +350,11 @@ export class WatcherManager implements AccountHooks {
   }
 
   private end(id: number): void {
+    const timer = this.pending.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.pending.delete(id);
+    }
     const watcher = this.watchers.get(id);
     if (!watcher) return;
     this.watchers.delete(id);
