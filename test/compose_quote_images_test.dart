@@ -111,7 +111,10 @@ void main() {
       '<tr><td><img src="https://t.example.com/p.gif" width="1" height="1">'
       '</td></tr></table>';
 
-  Future<int> seedOriginal({bool withAttachments = false}) async {
+  Future<int> seedOriginal({
+    bool withAttachments = false,
+    String html = originalHtml,
+  }) async {
     await db.upsertServerMessages([
       MessagesCompanion.insert(
         accountId: accountId,
@@ -136,7 +139,7 @@ void main() {
           MessageBodiesCompanion.insert(
             messageId: Value(msg.id),
             plainText: const Value('Sayın müşterimiz, hesap özetiniz ektedir.'),
-            html: const Value(originalHtml),
+            html: Value(html),
           ),
         );
     if (withAttachments) {
@@ -278,6 +281,64 @@ void main() {
       expect(editorImages(), findsNWidgets(2));
       expect(find.text('fatura.pdf'), findsOneWidget);
       expect(find.text('logo.png'), findsNothing);
+    });
+
+    // Fatura / bülten benzeri iletiler: düzen (tablo, stil, buton) Delta'ya
+    // çevrilmeden, orijinal HTML olarak giden iletiye taşınır.
+    const styledHtml =
+        '<table width="600" style="background:#fff"><tr><td>'
+        '<h1 style="color:#2a9d3f">Evrak eklendi!</h1>'
+        '<a href="https://example.com/onay" '
+        'style="background:#d00;color:#fff;padding:12px">Belgeyi onayla</a>'
+        '<script>alert(1)</script>'
+        '</td></tr></table>';
+
+    appTest('Yanıtla: giden HTML orijinal tablo, stil ve butonu bozmadan taşır', (
+      tester,
+    ) async {
+      final id = await seedOriginal(html: styledHtml);
+      await pumpCompose(tester, replyToId: id, mode: ComposeMode.reply);
+
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
+      final html = state.bodyHtmlForTest!;
+
+      expect(html, contains('<blockquote'));
+      expect(html, contains('yazdı:'));
+      expect(html, contains('<table'));
+      expect(html, contains('color:#2a9d3f'));
+      expect(html, contains('href="https://example.com/onay"'));
+      expect(html, contains('background:#d00'));
+      expect(html, isNot(contains('<script')));
+    });
+
+    appTest('İlet: giden HTML alıntı kutusuna sarılmadan, orijinal haliyle gelir', (
+      tester,
+    ) async {
+      final id = await seedOriginal(html: styledHtml);
+      await pumpCompose(tester, replyToId: id, mode: ComposeMode.forward);
+
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
+      final html = state.bodyHtmlForTest!;
+
+      expect(html, contains('İletilen ileti'));
+      expect(html, isNot(contains('<blockquote')));
+      expect(html, contains('<table'));
+      expect(html, contains('background:#d00'));
+    });
+
+    appTest('Alıntı kaldırılınca giden HTML orijinali içermez', (tester) async {
+      final id = await seedOriginal(html: styledHtml);
+      await pumpCompose(tester, replyToId: id, mode: ComposeMode.reply);
+
+      final state =
+          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
+      state.removeQuoteForTest();
+      await tester.pump();
+
+      final html = state.bodyHtmlForTest ?? '';
+      expect(html, isNot(contains('Evrak eklendi')));
     });
 
     appTest('Gönder: HTML’deki görseller Content-ID’li MIME parçası olur', (

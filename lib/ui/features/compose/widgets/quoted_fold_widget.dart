@@ -4,6 +4,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../core/theme/tokens.dart';
 import 'compose_image_embed_builder.dart';
+import 'quoted_html_view.dart';
 
 /// Yanıtlanan, tümü yanıtlanan veya iletilen iletilerde alıntılanan önceki iletiyi
 /// katlanmış (`···`) olarak gösteren ve tıklandığında açıp kapatan bileşen.
@@ -18,7 +19,17 @@ class QuotedFoldWidget extends StatelessWidget {
     this.headerText = '',
     this.fallbackText = '',
     this.customStyleBuilder,
+    this.quotedHtml,
+    this.onHtmlUnavailable,
+    this.onHtmlChanged,
   });
+
+  /// Kullanıcı HTML alıntıyı düzenlediğinde güncel HTML ile çağrılır.
+  final ValueChanged<String>? onHtmlChanged;
+
+  /// Orijinal HTML; verilirse açık alıntı WebView'da birebir gösterilir.
+  final String? quotedHtml;
+  final VoidCallback? onHtmlUnavailable;
 
   final bool isExpanded;
   final VoidCallback onToggle;
@@ -211,7 +222,15 @@ class QuotedFoldWidget extends StatelessWidget {
               ),
             ),
           ),
-          child: controller != null
+          child: (quotedHtml != null && onHtmlUnavailable != null)
+              ? QuotedHtmlView(
+                  key: const ValueKey('quoted_html_view'),
+                  header: headerText,
+                  html: quotedHtml!,
+                  onUnavailable: onHtmlUnavailable!,
+                  onChanged: onHtmlChanged,
+                )
+              : controller != null
               ? DefaultTextStyle(
                   style: Theme.of(context).textTheme.bodyMedium!.copyWith(
                         color: t.textSecondary,
@@ -225,7 +244,7 @@ class QuotedFoldWidget extends StatelessWidget {
                       scrollable: false,
                       expands: false,
                       autoFocus: false,
-                      showCursor: false,
+                      showCursor: true,
                       padding: EdgeInsets.zero,
                       customStyleBuilder: customStyleBuilder,
                       embedBuilders: const [ComposeImageEmbedBuilder()],

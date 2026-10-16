@@ -1985,6 +1985,39 @@ class _SelectionActionBar extends ConsumerWidget {
                 },
               ),
               _BarAction(
+                icon: LucideIcons.trash2,
+                label: 'Sil',
+                onTap: () async {
+                  final deleted = await deleteWithConfirmation(
+                    context,
+                    ref,
+                    ids,
+                    bottomInset: _ComposeFab.footprint,
+                  );
+                  if (deleted) done();
+                },
+              ),
+              _BarAction(
+                icon: LucideIcons.folderInput,
+                label: 'Taşı',
+                menuChildren: folderMenuItems(
+                  ref,
+                  (target) async {
+                    if (await moveMessagesToFolder(
+                      context,
+                      ref,
+                      ids,
+                      target,
+                      bottomInset: _ComposeFab.footprint,
+                    )) {
+                      done();
+                    }
+                  },
+                  accountId: selectionAccountId,
+                  mixedAccounts: mixedAccounts,
+                ),
+              ),
+              _BarAction(
                 icon: LucideIcons.ellipsisVertical,
                 label: 'Diğer',
                 menuChildren: [
@@ -2037,39 +2070,6 @@ class _SelectionActionBar extends ConsumerWidget {
                     child: const Text('Etiketle'),
                   ),
                 ],
-              ),
-              _BarAction(
-                icon: LucideIcons.trash2,
-                label: 'Sil',
-                onTap: () async {
-                  final deleted = await deleteWithConfirmation(
-                    context,
-                    ref,
-                    ids,
-                    bottomInset: _ComposeFab.footprint,
-                  );
-                  if (deleted) done();
-                },
-              ),
-              _BarAction(
-                icon: LucideIcons.folderInput,
-                label: 'Taşı',
-                menuChildren: folderMenuItems(
-                  ref,
-                  (target) async {
-                    if (await moveMessagesToFolder(
-                      context,
-                      ref,
-                      ids,
-                      target,
-                      bottomInset: _ComposeFab.footprint,
-                    )) {
-                      done();
-                    }
-                  },
-                  accountId: selectionAccountId,
-                  mixedAccounts: mixedAccounts,
-                ),
               ),
             ],
           ),

@@ -32,7 +32,7 @@ import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../attachment_preview/attachment_preview_screen.dart';
 import '../compose/compose_launcher.dart';
-import '../compose/compose_screen.dart' show ComposeMode;
+import '../compose/compose_screen.dart' show ComposeMode, ComposeSendQueued;
 import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
 import 'translate_bar.dart';
@@ -1948,13 +1948,19 @@ class _ActionBar extends ConsumerWidget {
     final selfEmail = ref.watch(accountByIdProvider(message.accountId))?.email;
     final showReplyAll = message.hasMultipleRecipients(selfEmail);
 
-    Future<void> startCompose(ComposeMode mode) => openCompose(
-      context,
-      ref,
-      replyToId: message.id,
-      mode: mode,
-      noticeBottomInset: height,
-    );
+    Future<void> startCompose(ComposeMode mode) async {
+      final outcome = await openCompose(
+        context,
+        ref,
+        replyToId: message.id,
+        mode: mode,
+        noticeBottomInset: height,
+      );
+      // Yanıt/ileti gönderildiyse kullanıcı ileti içinde kalmaz; listeye döner.
+      if (outcome is ComposeSendQueued && context.mounted) {
+        await Navigator.of(context).maybePop();
+      }
+    }
 
     return Container(
       decoration: BoxDecoration(

@@ -85,6 +85,34 @@ class SettingsScreen extends ConsumerWidget {
             dividerIndent: dividerIndent,
             children: [
               SettingsTile(
+                icon: LucideIcons.layers3,
+                title: 'Gruplandırma',
+                subtitle: settings.groupMessages
+                    ? 'Aynı konuşmadaki iletiler birlikte gösterilir'
+                    : 'Her ileti ayrı satırda gösterilir',
+                trailing: Semantics(
+                  label: 'İletileri gruplandır',
+                  value: settings.groupMessages ? 'Açık' : 'Kapalı',
+                  // Küçültülmüş, kenarlıksız modern anahtar.
+                  child: Transform.scale(
+                    scale: 0.78,
+                    child: Switch(
+                      value: settings.groupMessages,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      trackOutlineColor: WidgetStateProperty.all(
+                        Colors.transparent,
+                      ),
+                      thumbIcon: WidgetStateProperty.all(
+                        const Icon(null, size: 0),
+                      ),
+                      onChanged: (value) => ref
+                          .read(settingsProvider.notifier)
+                          .setGroupMessages(value),
+                    ),
+                  ),
+                ),
+              ),
+              SettingsTile(
                 icon: LucideIcons.palette,
                 title: 'Görünüm',
                 subtitle: themeLabel,
@@ -134,23 +162,6 @@ class SettingsScreen extends ConsumerWidget {
                   color: t.textTertiary,
                 ),
                 onTap: () => context.pushScreen(const SwipeSettingsScreen()),
-              ),
-              SettingsTile(
-                icon: LucideIcons.layers3,
-                title: 'Gruplandırma',
-                subtitle: settings.groupMessages
-                    ? 'Aynı konuşmadaki iletiler birlikte gösterilir'
-                    : 'Her ileti ayrı satırda gösterilir',
-                trailing: Semantics(
-                  label: 'İletileri gruplandır',
-                  value: settings.groupMessages ? 'Açık' : 'Kapalı',
-                  child: Switch.adaptive(
-                    value: settings.groupMessages,
-                    onChanged: (value) => ref
-                        .read(settingsProvider.notifier)
-                        .setGroupMessages(value),
-                  ),
-                ),
               ),
               SettingsTile(
                 iconAsset: 'assets/icons/settings_labels.png',

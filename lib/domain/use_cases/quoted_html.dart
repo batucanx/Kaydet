@@ -51,6 +51,46 @@ abstract final class QuotedHtml {
     return delta;
   }
 
+  /// Yanıtla / İlet için orijinal HTML'i BOZMADAN taşınacak parçaya çevirir:
+  /// tablolar, satır içi stiller, `<style>` blokları, düğmeler ve görseller
+  /// olduğu gibi kalır (Gmail/Outlook/Yandex'in alıntılaması gibi). Yalnızca
+  /// çalıştırılabilir/aktif içerik (betik, iframe, form, `on*` öznitelikleri,
+  /// `javascript:` bağlantıları) ve taşınamayan görseller ayıklanır.
+  ///
+  /// Görünür içerik yoksa `null` döner.
+  static String? faithfulHtml(String html) {
+    final doc = html_parser.parse(html);
+    final body = doc.body;
+    if (body == null) return null;
+    sanitizeImages(body);
+
+    for (final el in body.querySelectorAll(
+      'script, iframe, object, embed, form, meta, link, base, noscript',
+    ).toList()) {
+      el.remove();
+    }
+    for (final el in body.querySelectorAll('*')) {
+      for (final name in el.attributes.keys.toList()) {
+        final key = name.toString().toLowerCase();
+        final value = el.attributes[name]?.trim().toLowerCase() ?? '';
+        if (key.startsWith('on') ||
+            ((key == 'href' || key == 'src' || key == 'action') &&
+                value.startsWith('javascript:'))) {
+          el.attributes.remove(name);
+        }
+      }
+    }
+
+    final hasText = body.text.trim().isNotEmpty;
+    if (!hasText && body.querySelector('img') == null) return null;
+
+    final styles = StringBuffer();
+    for (final s in doc.querySelectorAll('style')) {
+      styles.write(s.outerHtml);
+    }
+    return '$styles${body.innerHtml}';
+  }
+
   /// Ağaçtaki `<img>`leri belge için güvenli hâle getirir: yalnızca `http(s)`
   /// ve geçerli `data:image/*;base64` kaynakları kalır; `cid:`, `file:`,
   /// `blob:`, göreli yol vb. ile izleme pikselleri (≤2 px) kaldırılır.

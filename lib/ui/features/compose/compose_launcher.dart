@@ -27,7 +27,10 @@ import 'send_feedback.dart';
 /// [noticeBottomInset], çağıran ekranın altında bildirimin kapatmaması
 /// gereken bir öğe varsa (FAB, alt eylem çubuğu) onun yüksekliğidir — bkz.
 /// [KaydetNotice.show].
-Future<void> openCompose(
+///
+/// Dönen değer ekranın sonucudur; çağıran, ileti gönderildiyse
+/// ([ComposeSendQueued]) kendi ekranından da çıkabilir.
+Future<ComposeOutcome?> openCompose(
   BuildContext context,
   WidgetRef ref, {
   int? draftId,
@@ -87,6 +90,7 @@ Future<void> openCompose(
       }
     },
   );
+  return outcome;
 }
 
 /// Widget ağacının dışından — bildirimdeki "Yanıtla" eylemi gibi — yazma

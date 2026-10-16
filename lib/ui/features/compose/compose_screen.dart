@@ -189,6 +189,15 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool _isQuoteExpanded = false;
   String _quoteHeader = '';
   Delta? _quotedDelta;
+
+  /// Orijinal iletinin bozulmamış HTML'i; giden iletide alıntı olarak olduğu
+  /// gibi taşınır (bkz. `QuotedHtml.faithfulHtml`).
+  String? _quotedHtml;
+  bool _quotedPreviewFallback = false;
+
+  /// Kullanıcı HTML alıntıyı düzenlediyse düz metin karşılığı (alternatif
+  /// `text/plain` parçası için); düzenlenmediyse `null`.
+  String? _quotedEditedPlain;
   String _quotedPlainText = '';
   QuillController? _quotedController;
   final FocusNode _quotedFocus = FocusNode(debugLabel: 'quoted_focus');
@@ -535,6 +544,14 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
         _quoteHeader = quotePrefix;
         _quotedDelta = quoted;
         _quotedPlainText = quoteText;
+        try {
+          final html = body?.html;
+          _quotedHtml = (html == null || html.trim().isEmpty)
+              ? null
+              : QuotedHtml.faithfulHtml(html);
+        } on Object {
+          _quotedHtml = null;
+        }
 
         final quoteDocDelta = Delta();
         quoteDocDelta.insert(quotePrefix.trimLeft());
@@ -670,7 +687,10 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   String get _bodyPlainText {
     final userText = _userPlainText;
     if (_hasQuotedContent) {
-      final quoteText = _quotedController != null
+      final edited = _quotedEditedPlain;
+      final quoteText = (edited != null && !_quotedPreviewFallback)
+          ? '$_quoteHeader\n$edited'.trim()
+          : _quotedController != null
           ? _quotedController!.document
               .toPlainText()
               .replaceAll('\uFFFC', '')
@@ -687,6 +707,23 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// [EmailHtmlCodec.encode]); içerik boşsa `null` döner (düz taslak olarak
   /// kalır). Katlanmış alıntı varsa o da HTML'e dahil edilir.
   String? get _bodyHtml {
+    final quotedHtml = _quotedHtml;
+    if (_hasQuotedContent && quotedHtml != null && !_quotedPreviewFallback) {
+      // Orijinal ileti HTML'i bozulmadan taşınır; Delta'ya çevrilmez.
+      final userDelta = _quill.document.toDelta();
+      final hasUser = _userPlainText.isNotEmpty ||
+          userDelta.toList().any((op) => op.data is Map);
+      final userHtml = hasUser ? EmailHtmlCodec.encode(userDelta) : '';
+      final header = const HtmlEscape()
+          .convert(_quoteHeader.trim())
+          .replaceAll('\n', '<br>');
+      final wrapped = widget.mode == ComposeMode.forward
+          ? '<div>$header</div><br><div>$quotedHtml</div>'
+          : '<div>$header</div><blockquote type="cite" '
+              'style="margin:0 0 0 .8ex;border-left:1px solid #ccc;'
+              'padding-left:1ex">$quotedHtml</blockquote>';
+      return '$userHtml$wrapped';
+    }
     final fullDelta = _getFullDelta();
     if (fullDelta.isEmpty) return null;
     final plain = _bodyPlainText;
@@ -764,6 +801,24 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
       return false;
     });
     return extraEmbeds.isNotEmpty;
+  }
+
+  /// WebView'daki alıntı düzenlendi: gönderilecek HTML ve düz metin karşılığı
+  /// güncellenir. Betik/olay nitelikleri `faithfulHtml` ile yine ayıklanır.
+  /// WebView yeniden kurulduğunda (katla/aç) düzenlenmiş HTML gösterilir.
+  void _onQuotedHtmlEdited(String html) {
+    if (!mounted || !_hasQuotedContent) return;
+    String? cleaned;
+    try {
+      cleaned = html.trim().isEmpty ? '' : QuotedHtml.faithfulHtml(html) ?? '';
+    } on Object {
+      return;
+    }
+    _quotedHtml = cleaned;
+    _quotedEditedPlain = cleaned.isEmpty
+        ? ''
+        : TextExtraction.htmlToPlain(cleaned).trim();
+    _onChanged();
   }
 
   void _removeQuote() {
@@ -1822,6 +1877,15 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
                       headerText: _quoteHeader,
                       fallbackText: _quotedPlainText,
                       customStyleBuilder: _composeCustomStyle,
+                      quotedHtml: _quotedPreviewFallback ? null : _quotedHtml,
+                      onHtmlChanged: _onQuotedHtmlEdited,
+                      // WebView kurulamazsa yalnızca ÖNİZLEME editöre düşer;
+                      // gönderilen HTML `_quotedHtml` ile yine bozulmaz.
+                      onHtmlUnavailable: () {
+                        if (mounted) {
+                          setState(() => _quotedPreviewFallback = true);
+                        }
+                      },
                       onToggle: () => setState(
                         () => _isQuoteExpanded = !_isQuoteExpanded,
                       ),
