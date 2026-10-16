@@ -1846,6 +1846,16 @@ class _PinnedMailRow extends ConsumerWidget {
   }
 }
 
+List<String> _labelNamesOf(String json) {
+  try {
+    final decoded = jsonDecode(json);
+    if (decoded is List) return decoded.whereType<String>().toList();
+  } on FormatException {
+    // Bozuk etiket verisi menüyü engellemez.
+  }
+  return const [];
+}
+
 /// Seçim modundaki alt eylem çubuğu.
 class _SelectionActionBar extends ConsumerWidget {
   const _SelectionActionBar({required this.ids});
@@ -1975,12 +1985,58 @@ class _SelectionActionBar extends ConsumerWidget {
                 },
               ),
               _BarAction(
-                icon: allFlagged ? LucideIcons.pinOff : LucideIcons.pin,
-                label: allFlagged ? 'Kaldır' : 'Sabitle',
-                onTap: () async {
-                  await repository.setFlagged(ids, !allFlagged);
-                  done();
-                },
+                icon: LucideIcons.ellipsisVertical,
+                label: 'Diğer',
+                menuChildren: [
+                  MenuItemButton(
+                    leadingIcon: Icon(
+                      allFlagged ? LucideIcons.pinOff : LucideIcons.pin,
+                      size: IconSize.sm,
+                    ),
+                    onPressed: () async {
+                      await repository.setFlagged(ids, !allFlagged);
+                      done();
+                    },
+                    child: Text(allFlagged ? 'Sabitlemeyi kaldır' : 'Sabitle'),
+                  ),
+                  SubmenuButton(
+                    animated: true,
+                    leadingIcon: const Icon(
+                      LucideIcons.tag,
+                      size: IconSize.sm,
+                    ),
+                    menuChildren: labelMenuItems(
+                      context,
+                      ref,
+                      (label) async {
+                        await repository.setLabel(
+                          messageIds: ids,
+                          labelName: label,
+                          add: true,
+                        );
+                        done();
+                      },
+                      accountId: selectionAccountId,
+                      mixedAccounts: mixedAccounts,
+                      // Yalnızca seçimin TÜMÜNDE bulunan etiketler "uygulanmış"
+                      // sayılır; dokununca hepsinden kaldırılır.
+                      applied: selected.isEmpty
+                          ? const {}
+                          : selected
+                                .map((m) => _labelNamesOf(m.labelsJson).toSet())
+                                .reduce((a, b) => a.intersection(b)),
+                      onRemoved: (label) async {
+                        await repository.setLabel(
+                          messageIds: ids,
+                          labelName: label,
+                          add: false,
+                        );
+                        done();
+                      },
+                    ),
+                    child: const Text('Etiketle'),
+                  ),
+                ],
               ),
               _BarAction(
                 icon: LucideIcons.trash2,

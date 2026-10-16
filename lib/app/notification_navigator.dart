@@ -3,88 +3,196 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/mail_log.dart';
+import '../data/database/app_database.dart' show MessageRow;
+import '../data/repositories/notification_target_resolver.dart';
 import '../data/services/notification_service.dart';
 import '../domain/models/mail_models.dart';
 import '../ui/core/navigation/kaydet_route.dart';
+import '../ui/core/widgets/kaydet_notice.dart';
 import '../ui/features/compose/compose_launcher.dart';
 import '../ui/features/compose/compose_screen.dart' show ComposeMode;
 import '../ui/features/mail_detail/mail_detail_screen.dart';
 import 'navigation.dart';
+import 'notification_intent.dart';
 import 'providers.dart';
-import 'sync_controller.dart';
 
-/// Bildirime dokunulunca Gelen Kutusu kökünü HEMEN gösterir, ardından ilgili
-/// iletiyi açar; "Yanıtla"ya dokunulunca o iletinin yanıt ekranını açar.
+/// Bildirime dokunulunca hedef iletiyi (ya da "Yanıtla" ise yanıt ekranını)
+/// açar — Gelen Kutusu'nda bırakmaz.
 ///
-/// Sıra her zaman aynıdır (profesyonel posta uygulamalarındaki gibi):
-/// 1. gezinme yığını kök kabuğa sıfırlanır (açık ileti/ayar/sheet/yan menü
-///    kapanır) ve Gelen Kutusu seçilir — yerel (Drift) veriden, ağ beklemeden;
-/// 2. ileti yerelde varsa üstüne açılır; yoksa eşitleme ARKA PLANDA sürer ve
-///    ileti gelince (kullanıcı bu arada başka yere gitmediyse) açılır.
-/// Bildirim kaynaklı hiçbir adım IMAP/ağ sonucunu beklemeden gezintiyi
-/// geciktirmez.
+/// Bildirim gezintisi, normal açılıştan (Splash → Gelen Kutusu) ayrı ve
+/// ÖNCELİKLİ bir niyettir. Akış (soğuk, sıcak, arka plan, ön plan — hepsinde
+/// aynı):
+///
+/// 1. **Yakala** — dokunuş anında [NotificationIntake], hedefi süreç ömürlü
+///    [PendingNotificationIntents]'e yazar (`runApp`ten önce). Sağlayıcılar,
+///    veritabanı ya da eşitleme bu bilgiyi kaybettiremez.
+/// 2. **Tüket** — bu sınıf niyeti alır ve tüketilmiş işaretler (aynı bildirim
+///    ikinci kez ekran açmaz).
+/// 3. **Hazır ol** — oturum/veritabanı ve ana kabuk (splash bitti) beklenir;
+///    sabit gecikme DEĞİL, gerçek hazır olma sinyalleri.
+/// 4. **Çöz** — [NotificationTargetResolver]: yerelde varsa hemen; yoksa
+///    yalnızca o ileti sunucudan getirilir. TÜM Gelen Kutusu'nun eşitlenmesi
+///    beklenmez; tam eşitleme kendi yolunda arka planda sürer.
+/// 5. **Aç** — gezinme yığını kök kabuğa sıfırlanır, iletinin klasörü seçilir,
+///    ileti üstüne açılır. Çözüm bitmeden Gelen Kutusu seçimi/yığın
+///    DEĞİŞTİRİLMEZ.
+///
+/// İleti çözülemezse sessizce Gelen Kutusu'nda bırakılmaz: nedeni söyleyen bir
+/// bildirim gösterilir.
 ///
 /// `NotificationService`'in arka plan işleyicisi (Arşivle/Sil) ayrı bir
 /// izole'de çalışır ve buraya bağlanamaz (bkz. `background_sync.dart` →
 /// `notificationBackgroundHandler`); bu sınıf yalnızca uygulamayı öne getiren
-/// dokunuşları — gövde ve "Yanıtla" — uygulama canlıyken ve soğuk
-/// başlangıçta ele alır.
+/// dokunuşları — gövde ve "Yanıtla" — ele alır.
 class NotificationNavigator {
-  NotificationNavigator._(this._ref) {
-    _sub = NotificationService.taps.listen(_handle);
-    _remoteSub = NotificationService.mailTaps.listen(
-      (_) => unawaited(_handleRemoteTap()),
-    );
+  NotificationNavigator._(this._ref, this._store) {
+    _sub = _store.changes.listen((_) => _onCaptured());
+    // Niyet, bu sınıf kurulmadan önce (ör. `main()` içinde) yakalanmış olabilir.
+    scheduleMicrotask(() => unawaited(_drain()));
   }
 
   final Ref _ref;
-  late final StreamSubscription<NotificationTap> _sub;
-  late final StreamSubscription<void> _remoteSub;
+  final PendingNotificationIntents _store;
+  late final StreamSubscription<void> _sub;
 
-  /// Her yeni dokunuşta artar: önceki dokunuşun arka plandaki "ileti gelince
-  /// aç" beklemesi, yenisi geldiğinde kendiliğinden vazgeçer.
+  /// Her yeni niyette artar: önceki niyetin sürmekte olan açılışı yenisi
+  /// geldiğinde (ya da kullanıcı vazgeçince) kendiliğinden bırakılır.
   int _generation = 0;
+  bool _draining = false;
+  bool _disposed = false;
 
-  /// Aynı bildirimin iki kez işlenmesini önler: soğuk başlangıçta hem
-  /// `appLaunchDetails` hem eklentinin dokunma geri çağrısı aynı dokunuşu
-  /// bildirebilir.
-  String? _lastKey;
-  DateTime _lastAt = DateTime.fromMillisecondsSinceEpoch(0);
-  static const Duration _dedupeWindow = Duration(seconds: 3);
-
-  bool _isDuplicate(String key) {
-    final now = DateTime.now();
-    if (key == _lastKey && now.difference(_lastAt) < _dedupeWindow) {
-      return true;
-    }
-    _lastKey = key;
-    _lastAt = now;
-    return false;
-  }
+  /// Üst sınır: açılış animasyonu/oturum kontrolü hiç bitmezse sonsuza dek
+  /// beklenmez.
+  static const Duration _shellTimeout = Duration(seconds: 30);
 
   void _dispose() {
+    _disposed = true;
     _sub.cancel();
-    _remoteSub.cancel();
+    notificationOpening.value = false;
   }
 
-  /// Uygulama bir bildirime dokunularak açıldıysa (soğuk başlangıç) aynı
-  /// hedefe gider. İlk kare çizildikten sonra çağrılmalı.
-  Future<void> handleColdStart() async {
-    // iOS uzak (APNs) bildirimi: yük yerel eklentiye değil AppDelegate'e düşer.
-    // Bu çağrı beklenmez; yerel bildirim kontrolünü geciktirmez.
-    unawaited(_handleRemoteTap());
-    final details = await _ref
-        .read(notificationServiceProvider)
-        .appLaunchDetails();
-    if (details?.didNotificationLaunchApp != true) return;
-    final tap = NotificationService.tapFromResponse(
-      details!.notificationResponse,
+  void _onCaptured() {
+    _generation++;
+    unawaited(_drain());
+  }
+
+  /// Uygulama ilk karesini çizdikten sonra çağrılır: bekleyen bir niyet varsa
+  /// işlenir. Dokunuşun kendisi `main()` içinde zaten yakalanmıştır.
+  Future<void> handleColdStart() => _drain();
+
+  /// Kullanıcı "açılıyor" katmanında vazgeçti.
+  void cancelOpening() {
+    _generation++;
+    notificationOpening.value = false;
+    MailLog.navigation('opening cancelled by user');
+  }
+
+  Future<void> _drain() async {
+    if (_draining || _disposed) return;
+    _draining = true;
+    try {
+      while (!_disposed) {
+        final intent = _store.take();
+        if (intent == null) break;
+        await _open(intent, _generation);
+      }
+    } finally {
+      _draining = false;
+      if (_store.pending == null) notificationOpening.value = false;
+    }
+  }
+
+  // ------------------------------------------------------------------ akış
+
+  Future<void> _open(NotificationIntent intent, int generation) async {
+    bool stale() => generation != _generation || _disposed;
+
+    final cold = !appShellReady.value;
+    MailLog.app(
+      '${cold ? 'cold' : 'warm'} start, '
+      'lifecycle=${WidgetsBinding.instance.lifecycleState?.name ?? 'unknown'}',
     );
-    if (tap != null) await _handle(tap);
+    MailLog.notification('consumed ${intent.summary}');
+    notificationOpening.value = true;
+    try {
+      // Oturum + veritabanı: ilk sorgu cevaplanınca ikisi de hazırdır.
+      final account = await _ref.read(activeAccountProvider.future);
+      if (stale()) return;
+      MailLog.database('ready');
+      if (account == null) {
+        // Giriş ekranı: açılacak bir hesap yok.
+        MailLog.auth('no signed-in account; notification target dropped');
+        return;
+      }
+      MailLog.auth('ready account=${account.id}');
+
+      if (!await _awaitShell()) return;
+      if (stale()) return;
+
+      final resolution = await _resolve(intent, activeAccountId: account.id);
+      if (stale()) return;
+
+      final message = resolution.message;
+      if (message == null) {
+        _reportFailure(resolution.failure ?? TargetFailure.unavailable);
+        return;
+      }
+
+      if (message.accountId != _ref.read(accountIdProvider)) {
+        // Yerel bir yazma; eski hesabın bağlantısı arka planda kapatılır.
+        await _ref.read(accountRepositoryProvider).switchAccount(
+          message.accountId,
+        );
+        if (stale()) return;
+      }
+
+      resetToInboxRoot(mailboxId: message.mailboxId);
+      await WidgetsBinding.instance.endOfFrame;
+      if (stale()) return;
+      _push(intent, message);
+    } on Object catch (error, stack) {
+      MailLog.navigation('open failed: ${error.runtimeType}');
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'notification navigator',
+        ),
+      );
+      if (!stale()) _reportFailure(TargetFailure.unavailable);
+    } finally {
+      if (generation == _generation) notificationOpening.value = false;
+    }
   }
 
-  /// Soğuk açılışta ana kabuk (açılış animasyonu + oturum kontrolü) hazır
-  /// olana dek bekler; giriş ekranında kalındıysa `false` döner.
+  Future<TargetResolution> _resolve(
+    NotificationIntent intent, {
+    required int activeAccountId,
+  }) async {
+    final resolver = _ref.read(notificationTargetResolverProvider);
+    if (intent.isLocal) return resolver.resolveLocalRow(intent.messageRowId!);
+
+    final accountId = intent.accountId ?? activeAccountId;
+    if (await _ref.read(databaseProvider).accountById(accountId) == null) {
+      MailLog.auth('notification account=$accountId is not on this device');
+      return const TargetResolution.failed(TargetFailure.accountMissing);
+    }
+    if (accountId != _ref.read(accountIdProvider)) {
+      // Bildirim başka bir hesaba ait: hedef çözülmeden doğru hesaba geçilir,
+      // yanlış hesabın Gelen Kutusu'nda aranmaz.
+      await _ref.read(accountRepositoryProvider).switchAccount(accountId);
+    }
+    return resolver.resolve(
+      accountId: accountId,
+      uid: intent.uid!,
+      folderPath: intent.folderPath,
+      uidValidity: intent.uidValidity,
+      messageIdHeader: intent.messageIdHeader,
+    );
+  }
+
+  /// Ana kabuk (splash bitti, oturum var) ekrana gelene dek bekler.
   Future<bool> _awaitShell() async {
     if (appShellReady.value) return true;
     final ready = Completer<bool>();
@@ -95,21 +203,48 @@ class NotificationNavigator {
     appShellReady.addListener(listener);
     try {
       return await ready.future.timeout(
-        const Duration(seconds: 8),
-        onTimeout: () => false,
+        _shellTimeout,
+        onTimeout: () {
+          MailLog.app('shell not ready after $_shellTimeout');
+          return false;
+        },
       );
     } finally {
       appShellReady.removeListener(listener);
     }
   }
 
-  /// Yığını kök kabuğa sıfırlar ve Gelen Kutusu'nu seçer. Eşzamanlıdır ve
-  /// yalnızca yerel durumla çalışır; ağ beklemez.
+  void _reportFailure(TargetFailure failure) {
+    final message = switch (failure) {
+      TargetFailure.accountMissing =>
+        'Bu ileti için hesap bu cihazda bulunamadı.',
+      TargetFailure.notFound => 'Bu ileti artık kullanılamıyor.',
+      TargetFailure.unavailable =>
+        'İleti şu an açılamadı. Bağlantınızı kontrol edip Gelen Kutusu\'ndan '
+            'açabilirsiniz.',
+    };
+    MailLog.navigation('target unresolved: ${failure.name}');
+    final overlay = rootNavigatorKey.currentState?.overlay;
+    if (overlay == null) return;
+    KaydetNotice.show(
+      overlay,
+      message: message,
+      duration: const Duration(seconds: 5),
+    );
+  }
+
+  // --------------------------------------------------------------- gezinme
+
+  /// Yığını kök kabuğa sıfırlar ve [mailboxId] klasörünü seçer. Eşzamanlıdır
+  /// ve yalnızca yerel durumla çalışır; ağ beklemez.
   ///
   /// - Açık ileti/ayar/yazma ekranı ve sheet'ler `popUntil` ile kapanır.
   /// - Yan menü kabuk rotasının YEREL geçmişinde yaşar, `popUntil` ona
   ///   dokunmaz; bu yüzden ayrıca kapatılır.
   /// - Seçim modu, sayfalama ve sekme sıfırlanır (bkz. `AppShell._popToInbox`).
+  ///
+  /// Yalnızca hedef ileti çözüldükten SONRA çağrılır; çözülemeyen bir
+  /// bildirim kullanıcının mevcut ekranını bozmaz.
   void resetToInboxRoot({int? mailboxId}) {
     rootNavigatorKey.currentState?.popUntil((route) => route.isFirst);
     final scaffold = shellScaffoldKey.currentState;
@@ -129,119 +264,28 @@ class NotificationNavigator {
     }
   }
 
-  /// Kullanıcı kök Gelen Kutusu'nda mı (üstünde başka rota yok, yan menü
-  /// kapalı)? Arka plandan gelen ileti ancak o zaman otomatik açılır.
-  bool _stillAtRoot() {
-    final navigator = rootNavigatorKey.currentState;
-    if (navigator == null || navigator.canPop()) return false;
-    return shellScaffoldKey.currentState?.isDrawerOpen != true;
-  }
-
-  /// iOS'ta uzak bildirime dokunulunca hesap + IMAP uid'sinden iletiyi bulur
-  /// ve açar. Önce Gelen Kutusu kökü gösterilir; ileti henüz yerelde yoksa
-  /// (push eşitlemeden önce geldi) eşitleme arka planda sürer ve ileti
-  /// gelince açılır.
-  Future<void> _handleRemoteTap() async {
-    final target = await _ref
-        .read(notificationServiceProvider)
-        .takePendingMailOpen();
-    if (target == null) return;
-    if (_isDuplicate('remote:${target.accountId}:${target.uid}')) return;
-    final generation = ++_generation;
-
-    if (!await _awaitShell() || generation != _generation) return;
-
-    final accountId = target.accountId ?? _ref.read(accountIdProvider);
-    if (accountId == null) return;
-    if (accountId != _ref.read(accountIdProvider)) {
-      // Yerel bir yazma; eski hesabın bağlantısı arka planda kapatılır.
-      await _ref.read(accountRepositoryProvider).switchAccount(accountId);
-      if (generation != _generation) return;
-    }
-
-    final db = _ref.read(databaseProvider);
-    final inbox = await db.mailboxBySpecialUse(accountId, SpecialUse.inbox);
-    if (generation != _generation) return;
-    resetToInboxRoot(mailboxId: inbox?.id);
-    if (inbox == null) return;
-
-    unawaited(_openWhenAvailable(generation, inbox.id, target.uid));
-  }
-
-  /// İleti yerelde varsa hemen, yoksa eşitleme arka planda çalışırken
-  /// yoklayarak açar. Bu arada yeni bir dokunuş geldiyse ya da kullanıcı
-  /// başka bir yere gittiyse vazgeçer.
-  Future<void> _openWhenAvailable(
-    int generation,
-    int mailboxId,
-    int uid,
-  ) async {
-    final db = _ref.read(databaseProvider);
-    for (var attempt = 0; attempt < 8; attempt++) {
-      if (generation != _generation) return;
-      final message = await db.messageByUid(mailboxId, uid);
-      if (message != null) {
-        if (generation != _generation) return;
-        await _pushOnInbox(
-          NotificationTap(message.id, NotificationTapKind.open),
-        );
-        return;
-      }
-      if (attempt == 0 || attempt == 3) {
-        // Sürmekte olan bir tur varsa kuyruğa alınır; bitince çalışır.
-        unawaited(
-          _ref.read(syncControllerProvider.notifier).syncCurrentFolder(),
-        );
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 700));
-    }
-  }
-
-  Future<void> _handle(NotificationTap tap) async {
-    if (_isDuplicate('local:${tap.kind.name}:${tap.messageId}')) return;
-    final generation = ++_generation;
-
-    if (!await _awaitShell() || generation != _generation) return;
-
-    final db = _ref.read(databaseProvider);
-    final message = await db.messageById(tap.messageId);
-    if (message == null || generation != _generation) return;
-
-    if (message.accountId != _ref.read(accountIdProvider)) {
-      await _ref
-          .read(accountRepositoryProvider)
-          .switchAccount(message.accountId);
-      if (generation != _generation) return;
-    }
-    resetToInboxRoot(mailboxId: message.mailboxId);
-    await _pushOnInbox(tap);
-  }
-
-  /// Kök Gelen Kutusu bir kare çizildikten SONRA hedef ekranı açar: kullanıcı
-  /// önce normal Gelen Kutusu'nu görür, ileti/yanıt onun üstüne gelir.
-  Future<void> _pushOnInbox(NotificationTap tap) async {
-    await WidgetsBinding.instance.endOfFrame;
-    if (!_stillAtRoot()) return;
+  void _push(NotificationIntent intent, MessageRow message) {
     final navigator = rootNavigatorKey.currentState;
     if (navigator == null) return;
 
-    switch (tap.kind) {
+    switch (intent.kind) {
       case NotificationTapKind.open:
+        MailLog.navigation('opening message row=${message.id}');
         unawaited(
           navigator.push<void>(
             KaydetRoute<void>(
-              builder: (_) => MailDetailScreen(messageId: tap.messageId),
+              builder: (_) => MailDetailScreen(messageId: message.id),
             ),
           ),
         );
       case NotificationTapKind.reply:
-        final repository = _ref.read(mailRepositoryProvider);
+        MailLog.navigation('opening reply row=${message.id}');
         unawaited(
           openComposeFromNavigator(
             navigator,
-            replyToId: tap.messageId,
+            replyToId: message.id,
             mode: ComposeMode.reply,
-            repository: repository,
+            repository: _ref.read(mailRepositoryProvider),
           ),
         );
     }
@@ -249,7 +293,10 @@ class NotificationNavigator {
 }
 
 final notificationNavigatorProvider = Provider<NotificationNavigator>((ref) {
-  final navigator = NotificationNavigator._(ref);
+  final navigator = NotificationNavigator._(
+    ref,
+    ref.watch(pendingNotificationIntentsProvider),
+  );
   ref.onDispose(navigator._dispose);
   return navigator;
 });

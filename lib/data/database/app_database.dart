@@ -705,36 +705,47 @@ class AppDatabase extends _$AppDatabase {
   /// [excludeDrafts] `true` olduğunda taslak iletiler hiç listelenmez — Gelen
   /// Kutusu'nda taslak görünmemeli (bkz. `messageListProvider`).
   ///
-  /// [orderById] `true` olduğunda kayıt ekleme sırası (`id DESC`) kullanılır —
-  /// Çöp Kutusu'nda son silinen (= en son eklenen) iletinin en üstte görünmesi
-  /// için. Diğer klasörlerde varsayılan `dateUtc DESC` sırası korunur.
+  /// Sıralama tüm klasörlerde (Çöp Kutusu, Arşiv vb. dahil) iletinin tarihine
+  /// göre yeniden eskiye (`dateUtc DESC`) yapılır; eşit tarihte `id DESC`.
   /// [sentMailboxId] verilirse, bu klasördeki konuşmalara ait gönderilen (sent)
   /// yanıt iletileri de listeye dahil edilir — böylece webmail/sunucu tarafındaki
   /// konuşma görünümüyle birebir eşleşir.
+  ///
+  /// [completeThreads] (konuşma gruplaması açıkken) `limit` yalnızca bu
+  /// klasörün en yeni [limit] iletisini (çapa) sayar; bu iletilerin
+  /// konuşmalarına ait yerelde bulunan DİĞER tüm iletiler (klasörün daha eski
+  /// üyeleri ve [sentMailboxId]'deki yanıtlar) kotaya takılmadan eklenir.
+  /// Aksi hâlde konuşma sayısı sayfa sınırında kesilir ve gönderilen
+  /// yanıtlar gelen iletilerin yerini yerdi.
   Stream<List<MessageRow>> watchMessages({
     required int accountId,
     required int mailboxId,
     int? sentMailboxId,
     int limit = 100,
-    bool orderById = false,
     bool excludeDrafts = false,
+    bool completeThreads = false,
   }) {
     final query = select(messages);
-    if (sentMailboxId != null && sentMailboxId != mailboxId) {
+    final hasSent = sentMailboxId != null && sentMailboxId != mailboxId;
+    if (hasSent || completeThreads) {
+      const orderSql = 'date_utc DESC, id DESC';
+      final draftSql = excludeDrafts ? ' AND is_draft = 0' : '';
+      final anchors =
+          'SELECT id, thread_id FROM messages '
+          'WHERE account_id = $accountId AND mailbox_id = $mailboxId '
+          'AND is_deleted = 0$draftSql ORDER BY $orderSql LIMIT $limit';
+      final threadBoxes = hasSent
+          ? 'mailbox_id IN ($mailboxId, $sentMailboxId)'
+          : 'mailbox_id = $mailboxId';
       query.where(
         (m) =>
             m.accountId.equals(accountId) &
             m.isDeleted.equals(false) &
             (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)) &
             CustomExpression<bool>('''
-              (mailbox_id = $mailboxId OR (
-                mailbox_id = $sentMailboxId AND (
-                  thread_id != '' AND thread_id IN (
-                    SELECT thread_id FROM messages
-                    WHERE account_id = $accountId AND mailbox_id = $mailboxId AND thread_id != '' AND is_deleted = 0
-                  )
-                )
-              ))
+              (id IN (SELECT id FROM ($anchors))
+               OR (thread_id != '' AND $threadBoxes AND thread_id IN (
+                     SELECT thread_id FROM ($anchors) WHERE thread_id != '')))
             '''),
       );
     } else {
@@ -748,71 +759,12 @@ class AppDatabase extends _$AppDatabase {
     }
 
     query.orderBy([
-      (m) => orderById
-          ? OrderingTerm(expression: m.id, mode: OrderingMode.desc)
-          : OrderingTerm(
-              expression: m.dateUtc,
-              mode: OrderingMode.desc,
-            ),
+      (m) => OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+      (m) => OrderingTerm(expression: m.id, mode: OrderingMode.desc),
     ]);
-    query.limit(limit);
+    // Konuşma tamamlamalı sorguda sınır çapa alt sorgusunda uygulanır.
+    if (!(hasSent || completeThreads)) query.limit(limit);
     return query.watch();
-  }
-
-  /// Bir konuşmaya ait tüm iletileri çeker (gelen + gönderilen).
-  /// En yeniden en eskiye sıralıdır.
-  Stream<List<MessageRow>> watchThreadMessages({
-    required int accountId,
-    required String threadId,
-    String? subjectNormalized,
-  }) {
-    final cleanSubj = subjectNormalized?.trim() ?? '';
-    return (select(messages)
-          ..where((m) {
-            final forAccount =
-                m.accountId.equals(accountId) & m.isDeleted.equals(false);
-            if (threadId.isNotEmpty && cleanSubj.isNotEmpty) {
-              return forAccount &
-                  (m.threadId.equals(threadId) |
-                      m.subjectNormalized.equals(cleanSubj));
-            } else if (threadId.isNotEmpty) {
-              return forAccount & m.threadId.equals(threadId);
-            } else {
-              return forAccount & m.subjectNormalized.equals(cleanSubj);
-            }
-          })
-          ..orderBy([
-            (m) =>
-                OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
-          ]))
-        .watch();
-  }
-
-  Future<List<MessageRow>> getThreadMessages({
-    required int accountId,
-    required String threadId,
-    String? subjectNormalized,
-  }) {
-    final cleanSubj = subjectNormalized?.trim() ?? '';
-    return (select(messages)
-          ..where((m) {
-            final forAccount =
-                m.accountId.equals(accountId) & m.isDeleted.equals(false);
-            if (threadId.isNotEmpty && cleanSubj.isNotEmpty) {
-              return forAccount &
-                  (m.threadId.equals(threadId) |
-                      m.subjectNormalized.equals(cleanSubj));
-            } else if (threadId.isNotEmpty) {
-              return forAccount & m.threadId.equals(threadId);
-            } else {
-              return forAccount & m.subjectNormalized.equals(cleanSubj);
-            }
-          })
-          ..orderBy([
-            (m) =>
-                OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
-          ]))
-        .get();
   }
 
   /// Birden çok klasörün (genelde farklı hesapların aynı türdeki klasörleri)
@@ -890,13 +842,40 @@ class AppDatabase extends _$AppDatabase {
             ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.equals(uid)))
           .getSingleOrNull();
 
-  Future<MessageRow?> messageByMessageIdHeader(int mailboxId, String messageId) =>
+  Future<MessageRow?> messageByMessageIdHeader(
+    int mailboxId,
+    String messageId,
+  ) =>
       (select(messages)
             ..where(
               (m) =>
                   m.mailboxId.equals(mailboxId) &
                   m.messageIdHeader.equals(messageId),
             )
+            ..limit(1))
+          .getSingleOrNull();
+
+  /// [accountId] hesabının HERHANGİ bir klasöründe Message-ID'ye göre ileti.
+  ///
+  /// UID klasöre özgüdür: ileti arşive/çöpe taşınmış ya da klasör yeniden
+  /// numaralanmış olabilir. Message-ID bunlardan etkilenmez (bkz.
+  /// `NotificationTargetResolver`). Taslaklar ve yerel-only satırlar (`uid`
+  /// boş) sonuçta tercih edilmez.
+  Future<MessageRow?> messageByMessageIdHeaderInAccount(
+    int accountId,
+    String messageId,
+  ) =>
+      (select(messages)
+            ..where(
+              (m) =>
+                  m.accountId.equals(accountId) &
+                  m.messageIdHeader.equals(messageId) &
+                  m.uid.isNotNull(),
+            )
+            ..orderBy([
+              (m) =>
+                  OrderingTerm(expression: m.dateUtc, mode: OrderingMode.desc),
+            ])
             ..limit(1))
           .getSingleOrNull();
 
@@ -1077,10 +1056,22 @@ class AppDatabase extends _$AppDatabase {
             row.messageIdHeader.present &&
             row.messageIdHeader.value != null &&
             row.messageIdHeader.value!.isNotEmpty) {
-          existing = await messageByMessageIdHeader(
+          final byHeader = await messageByMessageIdHeader(
             mailboxId,
             row.messageIdHeader.value!,
           );
+          // Message-ID ile eşleştirme YALNIZCA şu durumlarda geçerlidir:
+          //  - yerel satır henüz sunucuya yazılmamış (giden/taslak, UID yok),
+          //  - ya da taslak: web'de düzenlenen taslak yeni UID ile gelir.
+          // Aksi hâlde sunucuda AYRI bir UID'si olan iletiler (aynı Message-ID'li
+          // çift teslimatlar, yeniden gönderimler) tek satıra çöküp biri sessizce
+          // kaybolurdu — webmail ikisini de gösterirken uygulama birini gösterirdi.
+          if (byHeader != null &&
+              (byHeader.isLocalOnly ||
+                  byHeader.uid == null ||
+                  (row.isDraft.present && row.isDraft.value))) {
+            existing = byHeader;
+          }
         }
         if (existing == null) {
           final id = await into(messages).insert(row);
@@ -1090,7 +1081,9 @@ class AppDatabase extends _$AppDatabase {
           if (existing.isLocalOnly &&
               row.dateUtc.present &&
               existing.dateUtc.isAfter(row.dateUtc.value)) {
-            await (update(messages)..where((m) => m.id.equals(existing!.id))).write(
+            await (update(
+              messages,
+            )..where((m) => m.id.equals(existing!.id))).write(
               MessagesCompanion(
                 uid: row.uid,
                 mailboxId: row.mailboxId,
@@ -1286,19 +1279,6 @@ class AppDatabase extends _$AppDatabase {
             )
             ..orderBy([(m) => OrderingTerm(expression: m.dateUtc)]))
           .watch();
-
-  Future<List<MessageRow>> pendingOutbox(int accountId) =>
-      (select(messages)
-            ..where(
-              (m) =>
-                  m.accountId.equals(accountId) &
-                  m.outboxState.isIn([
-                    OutboxState.queued.index,
-                    OutboxState.failed.index,
-                  ]),
-            )
-            ..orderBy([(m) => OrderingTerm(expression: m.dateUtc)]))
-          .get();
 
   // ------------------------------------------------------------------ gövde
 
@@ -1738,23 +1718,6 @@ class AppDatabase extends _$AppDatabase {
                 t.targetLanguage.equals(targetLanguage),
           ))
           .getSingleOrNull();
-
-  /// İletinin daha önce algılanmış kaynak dili; yoksa `null`.
-  Future<String?> getMessageLanguage(int messageId) async {
-    final row = await (select(
-      messageLanguages,
-    )..where((t) => t.messageId.equals(messageId))).getSingleOrNull();
-    return row?.language;
-  }
-
-  Future<void> saveMessageLanguage(int messageId, String language) =>
-      into(messageLanguages).insertOnConflictUpdate(
-        MessageLanguagesCompanion.insert(
-          messageId: Value(messageId),
-          language: language,
-          detectedAt: Value(DateTime.now()),
-        ),
-      );
 
   /// Çeviriyi kaydeder; (ileti, kaynak dil, hedef dil) için zaten kayıt varsa
   /// günceller — tekil anahtar yüzünden yinelenen kayıt oluşmaz.

@@ -12,7 +12,7 @@ import '../services/push_backend_client.dart';
 class RegistrationSnapshot {
   const RegistrationSnapshot({this.token, this.fingerprints = const {}});
 
-  /// Kayıtların yapıldığı APNs token'ı.
+  /// Kayıtların yapıldığı push token'ı (iOS'ta APNs, Android'de FCM).
   final String? token;
 
   /// Hesap kimliği → o hesabın sunucuya kaydedilen parmak izi.
@@ -180,7 +180,7 @@ class RemotePushSync {
       for (final remoteId in remoteAccountIds) {
         if (!currentIds.contains(remoteId)) {
           try {
-            await _api.deleteAccount(apnsToken: token, clientAccountId: remoteId);
+            await _api.deleteAccount(pushToken: token, clientAccountId: remoteId);
             fingerprints.remove(remoteId);
           } on Object catch (e) {
             _logFailure('sunucudaki yetim hesap silinemedi', e);
@@ -192,7 +192,7 @@ class RemotePushSync {
       for (final id in fingerprints.keys.toList()) {
         if (currentIds.contains(id)) continue;
         try {
-          await _api.deleteAccount(apnsToken: token, clientAccountId: id);
+          await _api.deleteAccount(pushToken: token, clientAccountId: id);
           fingerprints.remove(id);
         } on Object catch (e) {
           _logFailure('hesap silinemedi', e);
@@ -224,7 +224,7 @@ class RemotePushSync {
       try {
         await _api.upsertAccount(
           RemotePushAccount(
-            apnsToken: token,
+            pushToken: token,
             environment: environment,
             clientAccountId: account.id,
             host: account.imapHost,

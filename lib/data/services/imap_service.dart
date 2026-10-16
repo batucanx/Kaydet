@@ -101,10 +101,17 @@ abstract class ImapService {
   /// yapılır: UID'ler klasöre özgüdür, araya giren başka bir eşitleme farklı
   /// klasörü SELECT ederse `UID MOVE` yanlış klasörde çalışır ve sunucu yine
   /// de "OK" döner (iletiler taşınmaz).
+  ///
+  /// [sourceEncodedPath] / [targetEncodedPath] sunucuya gerçekte gönderilen
+  /// (modified UTF-7) yollardır. Verilmezse yol türetilir; ASCII olmayan klasör
+  /// adlarında (ör. "Çöp Kutusu") ham yol göndermek `NONEXISTENT` ile
+  /// başarısız olur.
   Future<Result<void>> moveMessages({
     required List<int> uids,
     required String targetPath,
     String? sourcePath,
+    String? sourceEncodedPath,
+    String? targetEncodedPath,
   });
 
   /// İletileri kalıcı olarak siler (yalnızca Çöp Kutusu içinde kullanılır).
@@ -988,20 +995,35 @@ class EnoughMailImapService implements ImapService {
     required List<int> uids,
     required String targetPath,
     String? sourcePath,
+    String? sourceEncodedPath,
+    String? targetEncodedPath,
   }) => _guard(() async {
     if (uids.isEmpty) return;
     final sequence = em.MessageSequence.fromIds(uids, isUid: true);
     final client = _requireClient;
-    if (sourcePath != null && _selectedPath != sourcePath) {
-      await client.selectMailboxByPath(sourcePath);
-      _selectedPath = sourcePath;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    String wirePath(String path, String? encoded) =>
+        (encoded != null && encoded.isNotEmpty)
+        ? encoded
+        : em.Mailbox.encode(path, separator);
+
+    // `_selectedPath` SELECT'te sunucuya giden (kodlanmış) yolu tutar; ham yolla
+    // karşılaştırmak ASCII olmayan adlarda hep "farklı" çıkıp yanlış yolla
+    // yeniden SELECT ederdi.
+    if (sourcePath != null) {
+      final wireSource = wirePath(sourcePath, sourceEncodedPath);
+      if (_selectedPath != wireSource) {
+        await client.selectMailboxByPath(wireSource);
+        _selectedPath = wireSource;
+      }
     }
+    final wireTarget = wirePath(targetPath, targetEncodedPath);
     if (client.serverInfo.supportsMove) {
-      await client.uidMove(sequence, targetMailboxPath: targetPath);
+      await client.uidMove(sequence, targetMailboxPath: wireTarget);
       return;
     }
     // MOVE desteklenmiyorsa: KOPYALA + \Deleted + EXPUNGE
-    await client.uidCopy(sequence, targetMailboxPath: targetPath);
+    await client.uidCopy(sequence, targetMailboxPath: wireTarget);
     await client.uidStore(
       sequence,
       [em.MessageFlags.deleted],

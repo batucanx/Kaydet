@@ -10,6 +10,7 @@ import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
 import 'push_protocol.dart';
+import 'push_service.dart';
 import 'remote_push_flag.dart';
 
 /// Ön plan servisinin içinde çalışan görev — uygulama kapalıyken bile Gelen
@@ -36,6 +37,14 @@ class PushTaskHandler extends TaskHandler {
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    // Sistem servisi açılışta kendiliğinden başlatmış olabilir; sunucu push'u
+    // (FCM) çalışıyorsa ya da kullanıcı kapattıysa kalıcı bildirimi hiç
+    // göstermeden kapan (bkz. `PushController`).
+    if (!await PushService.readNeeded()) {
+      _destroyed = true;
+      await FlutterForegroundTask.stopService();
+      return;
+    }
     final database = _database = AppDatabase();
     _secureStore = FlutterSecureStore();
     _notifier = NewMailNotifier(
@@ -54,11 +63,6 @@ class PushTaskHandler extends TaskHandler {
     });
 
     await _reconcile();
-
-    // Ana isolate'ten güncel arayüz durumunu iste (bkz. `PushProtocol.hello`).
-    FlutterForegroundTask.sendDataToMain(
-      PushProtocol.message(PushProtocol.hello),
-    );
   }
 
   @override
@@ -84,9 +88,6 @@ class PushTaskHandler extends TaskHandler {
   void onReceiveData(Object data) {
     if (data is! Map) return;
     switch (data[PushProtocol.typeKey]) {
-      case PushProtocol.ui:
-        // Arayüz durumu artık bildirimi etkilemez; mesaj yok sayılır.
-        break;
       case PushProtocol.accounts:
         unawaited(_reconcile());
     }

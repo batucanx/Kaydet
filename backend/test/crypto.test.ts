@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SecretBox } from '../src/crypto.js';
 import { openDatabase } from '../src/db.js';
@@ -37,5 +40,25 @@ describe('openDatabase', () => {
       .prepare("select name from sqlite_master where type='table' and name in ('devices','accounts')")
       .all();
     expect(tables).toHaveLength(2);
+  });
+
+  it('açılamayan dosyada :memory:\'ye düşmek yerine hata verir', () => {
+    const missing = join(tmpdir(), 'kaydet-yok-' + Date.now(), 'x.sqlite');
+    // Üst dizin openDatabase tarafından oluşturulur; bir dosyanın "altına"
+    // dizin açmaya çalışarak gerçekten açılamayan bir yol üretiriz.
+    const file = join(mkdtempSync(join(tmpdir(), 'kaydet-')), 'dosya');
+    writeFileSync(file, 'x');
+    expect(() => openDatabase(join(file, 'alt', 'db.sqlite'))).toThrow();
+    expect(() => openDatabase(missing)).not.toThrow();
+  });
+
+  it('verisini yeniden açıldığında korur', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'kaydet-')), 'k.sqlite');
+    const a = openDatabase(path);
+    a.prepare("insert into devices (push_token, environment, created_at) values ('t','production',1)").run();
+    a.close();
+    const b = openDatabase(path);
+    expect(b.prepare('select count(*) as n from devices').get()).toEqual({ n: 1 });
+    b.close();
   });
 });

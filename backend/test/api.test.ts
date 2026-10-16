@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, type AccountHooks } from '../src/app.js';
 import { SecretBox } from '../src/crypto.js';
 import { openDatabase } from '../src/db.js';
+import { InstallRegistry } from '../src/installs.js';
 import { Repository } from '../src/repository.js';
 
 const API_KEY = 'k'.repeat(40);
 const TOKEN = 'ab'.repeat(32);
-const auth = { authorization: `Bearer ${API_KEY}` };
+const INSTALL = { 'x-install-id': 'a'.repeat(32), 'x-install-secret': 'b'.repeat(64) };
+const auth = { authorization: `Bearer ${API_KEY}`, ...INSTALL };
 
 const body = (over: Record<string, unknown> = {}) => ({
   apnsToken: TOKEN,
@@ -18,14 +20,14 @@ const body = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function setup() {
+function setup(androidPush = false) {
   const db = openDatabase(':memory:');
   const repo = new Repository(db, new SecretBox('c'.repeat(64)));
   const hooks: AccountHooks = {
     onAccountUpserted: vi.fn(),
     onAccountsRemoved: vi.fn(),
   };
-  return { db, repo, hooks, app: buildApp({ repo, apiKey: API_KEY, hooks }) };
+  return { db, repo, hooks, app: buildApp({ repo, installs: new InstallRegistry(db), apiKey: API_KEY, hooks, androidPush }) };
 }
 
 describe('API', () => {
@@ -51,7 +53,7 @@ describe('API', () => {
     const bad = await s.app.inject({
       method: 'PUT',
       url: '/v1/accounts',
-      headers: { authorization: 'Bearer yanlis' },
+      headers: { authorization: 'Bearer yanlis', ...INSTALL },
       payload: body(),
     });
     expect(none.statusCode).toBe(401);
@@ -152,5 +154,75 @@ describe('API', () => {
       headers: auth,
     });
     expect(badRes.statusCode).toBe(400);
+  });
+
+  describe('Android (FCM)', () => {
+    const FCM = 'f'.repeat(30) + ':' + 'A'.repeat(120);
+    const androidBody = (over: Record<string, unknown> = {}) => {
+      const { apnsToken: _omit, ...rest } = body();
+      return { ...rest, pushToken: FCM, platform: 'android', ...over };
+    };
+
+    it('FCM yapılandırılmamışsa 503 android_push_unavailable döner', async () => {
+      const res = await put(androidBody());
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error).toBe('android_push_unavailable');
+      expect(s.hooks.onAccountUpserted).not.toHaveBeenCalled();
+    });
+
+    it('yapılandırılmışsa Android cihazı platformuyla kaydeder', async () => {
+      const a = setup(true);
+      const res = await a.app.inject({
+        method: 'PUT', url: '/v1/accounts', headers: auth, payload: androidBody(),
+      });
+      expect(res.statusCode).toBe(204);
+      const row = a.db.prepare('SELECT push_token, platform, environment FROM devices').get();
+      expect(row).toEqual({ push_token: FCM, platform: 'android', environment: 'production' });
+    });
+
+    it('FCM token ı büyük/küçük harf korunarak saklanır; iOS token ı küçültülür', async () => {
+      const a = setup(true);
+      await a.app.inject({ method: 'PUT', url: '/v1/accounts', headers: auth, payload: androidBody() });
+      await a.app.inject({
+        method: 'PUT', url: '/v1/accounts', headers: auth,
+        payload: body({ apnsToken: 'AB'.repeat(32), clientAccountId: 2 }),
+      });
+      const tokens = (a.db.prepare('SELECT push_token FROM devices ORDER BY id').all() as any[]).map((r) => r.push_token);
+      expect(tokens).toEqual([FCM, 'ab'.repeat(32)]);
+    });
+
+    it('biçimi platforma göre doğrular', async () => {
+      const a = setup(true);
+      const hexForAndroid = await a.app.inject({
+        method: 'PUT', url: '/v1/accounts', headers: auth, payload: androidBody({ pushToken: TOKEN }),
+      });
+      const fcmForIos = await a.app.inject({
+        method: 'PUT', url: '/v1/accounts', headers: auth, payload: body({ apnsToken: undefined, pushToken: FCM }),
+      });
+      expect(hexForAndroid.statusCode).toBe(400);
+      expect(fcmForIos.statusCode).toBe(400);
+    });
+
+    it('pushToken ile iOS kaydı, eski apnsToken ile aynı cihaza düşer', async () => {
+      await put(body());
+      const res = await s.app.inject({
+        method: 'GET', url: `/v1/accounts?pushToken=${TOKEN}&platform=ios`, headers: auth,
+      });
+      expect(res.json()).toEqual({ clientAccountIds: [1] });
+    });
+
+    it('Android cihazı pushToken ile listelenir ve silinir', async () => {
+      const a = setup(true);
+      await a.app.inject({ method: 'PUT', url: '/v1/accounts', headers: auth, payload: androidBody() });
+      const list = await a.app.inject({
+        method: 'GET', url: `/v1/accounts?pushToken=${FCM}&platform=android`, headers: auth,
+      });
+      expect(list.json()).toEqual({ clientAccountIds: [1] });
+      const del = await a.app.inject({
+        method: 'DELETE', url: '/v1/devices', headers: auth, payload: { pushToken: FCM, platform: 'android' },
+      });
+      expect(del.statusCode).toBe(204);
+      expect(a.db.prepare('SELECT COUNT(*) AS n FROM devices').get()).toEqual({ n: 0 });
+    });
   });
 });

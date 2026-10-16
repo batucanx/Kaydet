@@ -8,19 +8,10 @@ abstract final class PushProtocol {
 
   // ---- ana isolate → servis
 
-  /// Arayüz durumu: kullanıcı şu an hangi Gelen Kutusu'nu görüyor?
-  /// `inboxId` yoksa (`null`) hiçbir Gelen Kutusu görünmüyordur.
-  static const String ui = 'ui';
-  static const String inboxIdKey = 'inboxId';
-
   /// Hesap eklendi/silindi/yeniden giriş yapıldı — izleyiciler yeniden kurulur.
   static const String accounts = 'accounts';
 
   // ---- servis → ana isolate
-
-  /// Servis ayağa kalktı; ana isolate güncel arayüz durumunu göndermeli
-  /// (servis başlarken gelen mesajlar kaybolabilir, bu yüzden servis ister).
-  static const String hello = 'hello';
 
   /// Servis veritabanına yazdı. Drift akışları isolate'ler arası değişikliği
   /// kendiliğinden görmez; ana isolate tabloları "güncellendi" işaretler.

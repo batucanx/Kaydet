@@ -5,9 +5,9 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/services/app_settings.dart';
-import '../domain/models/mail_models.dart';
 import 'providers.dart';
 import 'push_protocol.dart';
+import 'remote_push_controller.dart';
 import 'push_service.dart';
 
 /// Ana isolate'te ön plan servisini ayarlara göre açıp kapatır ve servisle
@@ -46,6 +46,9 @@ class PushController extends Notifier<void> {
       settingsProvider.select((s) => (s.notificationsEnabled, s.syncFrequency)),
       (_, _) => unawaited(_reconcile()),
     );
+    // Sunucu push'u (FCM) çalışıyorsa ön plan servisi gereksizdir; çalışmıyorsa
+    // yedek olarak devreye girer (bkz. `ServerPushState`).
+    ref.listen(remotePushControllerProvider, (_, _) => unawaited(_reconcile()));
     ref.listen(allAccountsProvider, (previous, next) {
       unawaited(_reconcile());
       unawaited(PushService.send(PushProtocol.message(PushProtocol.accounts)));
@@ -61,8 +64,6 @@ class PushController extends Notifier<void> {
         }
       }
     });
-    ref.listen(activeTabProvider, (_, _) => unawaited(_sendUiState()));
-    ref.listen(currentMailboxProvider, (_, _) => unawaited(_sendUiState()));
 
     // İlk hesap hazır olduğunda (ya da izin soran sürüme geçen mevcut
     // kullanıcıda ilk açılışta) bildirim izni bir kez istenir.
@@ -92,7 +93,6 @@ class PushController extends Notifier<void> {
   }
 
   void _onLifecycle(AppLifecycleState state) {
-    unawaited(_sendUiState());
     if (state != AppLifecycleState.resumed) return;
 
     // Servis yalnızca uygulama öndeyken başlatılabilir (Android 12+); sistem
@@ -139,11 +139,24 @@ class PushController extends Notifier<void> {
       if (accounts == null) return; // henüz yüklenmedi; akış gelince döner
 
       final settings = ref.read(settingsProvider);
+      // FCM (sunucu push'u) çalışırken ön plan servisi, kalıcı bildirim ve pil
+      // maliyetiyle gereksizdir. Servis yalnızca FCM bu cihazda kullanılamıyorsa
+      // (Play hizmetleri yok, backend yapılandırılmamış) ya da kayıt
+      // başarısızsa yedek olarak çalışır.
+      final serverPush = ref.read(remotePushControllerProvider);
+      final needsFallback =
+          serverPush == ServerPushState.unavailable ||
+          serverPush == ServerPushState.failing;
       final wanted =
           settings.notificationsEnabled &&
           settings.syncFrequency == SyncFrequency.push &&
           accounts.isNotEmpty &&
+          needsFallback &&
           await ref.read(notificationServiceProvider).areEnabled();
+
+      // Açılışta (cihaz yeniden başlayınca) servisi başlatan sistemdir, uygulama
+      // değil; servis gereksizse kendini kapatabilsin diye karar kalıcı yazılır.
+      await PushService.rememberNeeded(wanted);
 
       final running = await PushService.isRunning;
       if (wanted && !running) {
@@ -159,25 +172,9 @@ class PushController extends Notifier<void> {
 
   // -------------------------------------------------------------- mesajlar
 
-  /// Kullanıcı şu an bir Gelen Kutusu'nun listesine bakıyorsa onun kimliğini
-  /// servise bildirir; servis o kutuya düşen iletiler için bildirim çıkarmaz.
-  Future<void> _sendUiState() async {
-    final mailbox = ref.read(currentMailboxProvider);
-    final int? inboxId =
-        ref.read(activeTabProvider) == 0 &&
-            mailbox?.specialUse == SpecialUse.inbox
-        ? mailbox!.id
-        : null;
-    await PushService.send(
-      PushProtocol.message(PushProtocol.ui, {PushProtocol.inboxIdKey: inboxId}),
-    );
-  }
-
   void _onServiceData(Object data) {
     if (data is! Map) return;
     switch (data[PushProtocol.typeKey]) {
-      case PushProtocol.hello:
-        unawaited(_sendUiState());
       case PushProtocol.dbChanged:
         // Drift akışları başka isolate'in yazdığını kendiliğinden görmez.
         final db = ref.read(databaseProvider);

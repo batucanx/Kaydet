@@ -13,8 +13,9 @@ import workmanager_apple
   /// hâlâ `nil` olabilir. Token burada saklanır, kanal kurulunca iletilir.
   private var pendingApnsToken: String?
 
-  /// Dokunulan uzak bildirimin `accountId`/`uid` bilgisi; Dart çekene kadar
-  /// (bkz. `takePendingMailOpen`) saklanır.
+  /// Dokunulan uzak bildirimin hedefi (`accountId`/`uid`/`folder`/`uidValidity`/
+  /// `messageId`/`eventId`); Dart çekene kadar (bkz. `takePendingMailOpen`)
+  /// saklanır.
   private var pendingMailOpen: [String: Any]?
 
   /// Arka plan push'uyla (bkz. `didReceiveRemoteNotification`) tetiklenen
@@ -297,8 +298,19 @@ import workmanager_apple
     if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
       let uid = (request.content.userInfo["uid"] as? NSNumber)?.intValue
     {
-      let accountId = (request.content.userInfo["accountId"] as? NSNumber)?.intValue
-      pendingMailOpen = ["accountId": accountId ?? NSNull(), "uid": uid]
+      // Hedef, ileti klasörde yeniden numaralansa ya da taşınsa da bulunabilsin
+      // diye yükteki tüm tanımlayıcıları taşır (bkz. backend notifier.ts
+      // `targetData`). `eventId` sistemin bildirime verdiği benzersiz kimliktir:
+      // aynı dokunuşun iki kez işlenmesini Dart tarafı bununla engeller.
+      let info = request.content.userInfo
+      pendingMailOpen = [
+        "accountId": (info["accountId"] as? NSNumber)?.intValue ?? NSNull(),
+        "uid": uid,
+        "folder": (info["folder"] as? String) ?? NSNull(),
+        "uidValidity": (info["uidValidity"] as? NSNumber)?.intValue ?? NSNull(),
+        "messageId": (info["messageId"] as? String) ?? NSNull(),
+        "eventId": request.identifier,
+      ]
       notificationChannel?.invokeMethod("onMailTap", arguments: nil)
     }
     // Eklenti yerel olmayan bildirimde tamamlayıcıyı çağırmaz; burada çağrılır.

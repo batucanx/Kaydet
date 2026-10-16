@@ -6,6 +6,7 @@ import '../core/result.dart';
 import '../data/repositories/translation_repository.dart';
 import '../data/services/push_backend_client.dart' show PushBackendConfig;
 import '../data/services/translation_client.dart';
+import 'install_credentials_provider.dart';
 import 'providers.dart';
 import 'push_backend_config.dart';
 
@@ -18,9 +19,10 @@ final translationApiProvider = Provider<TranslationApi?>((ref) {
     return null;
   }
   final client = HttpTranslationClient(
-    const PushBackendConfig(
+    PushBackendConfig(
       baseUrl: PushBackendSecrets.baseUrl,
       apiKey: PushBackendSecrets.apiKey,
+      credentials: ref.watch(installCredentialsProvider),
     ),
   );
   ref.onDispose(client.close);

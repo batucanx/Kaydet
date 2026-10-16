@@ -85,6 +85,17 @@ kotlin {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
 
+    // Android anlık bildirimi (FCM). Flutter eklentisi DEĞİL, doğrudan SDK:
+    // bkz. FcmChannel.kt. `google-services.json` yoksa Firebase başlatılmaz
+    // ve uygulama ön plan servisiyle çalışır.
+    implementation(platform("com.google.firebase:firebase-bom:33.16.0"))
+    implementation("com.google.firebase:firebase-messaging")
+    // FcmSyncWorker (hızlandırılmış arka plan işi). `workmanager` eklentisi de
+    // bunu getirir; sürümü burada sabitlemek eklentiden bağımsız kılar.
+    implementation("androidx.work:work-runtime:2.10.2")
+    // FcmSyncWorker'ın CallbackToFutureAdapter'ı; work-runtime bunu dışarı açmaz.
+    implementation("androidx.concurrent:concurrent-futures:1.2.0")
+
     // Paylaşım gelen kutusu (bkz. ShareInbox.kt, ShareFileName.kt) JVM'de
     // sınanır. `org.json`, Android'de framework'ten gelir; birim testlerinde
     // ise gerçek uygulaması gerekir (framework'ün "stub"ı hep boş döner).
@@ -96,4 +107,11 @@ dependencies {
 
 flutter {
     source = "../.."
+}
+
+// Firebase yapılandırması (Firebase Console → Proje ayarları → Android uygulaması
+// `tr.com.pazarlik.kaydet` → google-services.json, `android/app/` altına). Dosya
+// yoksa eklenti uygulanmaz ve derleme yine geçer; FCM kapalı kalır.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }

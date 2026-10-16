@@ -12,42 +12,41 @@ abstract class SecureStore {
   Future<void> deletePassword(int accountId);
 }
 
+/// Uygulamanın tüm gizli verileri (şifreler, kurulum sırrı) için ortak depo
+/// ayarı; açıklamalar `FlutterSecureStore` ile aynı kuralı izler.
+const kaydetSecureStorage = FlutterSecureStorage(
+  // Android Keystore destekli AES-GCM şifreleme.
+  //
+  // `resetOnError` KAPALI olmalı: açıkken geçici bir Keystore/
+  // şifre çözme hatası (yeniden başlatma sonrası anahtar hazır
+  // değil, eklenti güncellemesiyle algoritma değişimi) TÜM
+  // hesapların şifrelerini kalıcı siler ve kullanıcı güncelleme
+  // ya da yeniden başlatmadan sonra çıkış yapmış gibi kalır.
+  // Kapalıyken okuma hata FIRLATIR; veri korunur ve bir sonraki
+  // denemede yeniden okunur (bkz. `MailConnection._credentialFor`).
+  // Algoritma değişirse veri silinmez, yedekli olarak taşınır.
+  aOptions: AndroidOptions(
+    resetOnError: false,
+    migrateOnAlgorithmChange: true,
+    migrateWithBackup: true,
+  ),
+  // iOS: Cihaz kilitliyken gelen APNs push ve arka plan senkronu
+  // (bkz. pushBackgroundSync / runBackgroundSync) şifreleri okuyabilsin.
+  iOptions: IOSOptions(accessibility: KeychainAccessibility.first_unlock),
+);
+
 class FlutterSecureStore implements SecureStore {
   FlutterSecureStore([FlutterSecureStorage? storage])
-      : _storage = storage ??
-            const FlutterSecureStorage(
-              // Android Keystore destekli AES-GCM şifreleme.
-              //
-              // `resetOnError` KAPALI olmalı: açıkken geçici bir Keystore/
-              // şifre çözme hatası (yeniden başlatma sonrası anahtar hazır
-              // değil, eklenti güncellemesiyle algoritma değişimi) TÜM
-              // hesapların şifrelerini kalıcı siler ve kullanıcı güncelleme
-              // ya da yeniden başlatmadan sonra çıkış yapmış gibi kalır.
-              // Kapalıyken okuma hata FIRLATIR; veri korunur ve bir sonraki
-              // denemede yeniden okunur (bkz. `MailConnection._credentialFor`).
-              // Algoritma değişirse veri silinmez, yedekli olarak taşınır.
-              aOptions: AndroidOptions(
-                resetOnError: false,
-                migrateOnAlgorithmChange: true,
-                migrateWithBackup: true,
-              ),
-              // iOS: Cihaz kilitliyken gelen APNs push ve arka plan senkronu
-              // (bkz. pushBackgroundSync / runBackgroundSync) şifreleri okuyabilsin.
-              iOptions: IOSOptions(
-                accessibility: KeychainAccessibility.first_unlock,
-              ),
-            );
+    : _storage = storage ?? kaydetSecureStorage;
 
   final FlutterSecureStorage _storage;
 
-  String _passwordKey(int accountId) =>
-      'kaydet_account_${accountId}_password';
+  String _passwordKey(int accountId) => 'kaydet_account_${accountId}_password';
 
   /// Google girişi kaldırılmadan önce yazılmış OAuth token anahtarı. Yalnızca
   /// eski kurulumlarda kalan yenileme token'ının hesapla birlikte silinmesi
   /// için okunur.
-  String _legacyOauthKey(int accountId) =>
-      'kaydet_account_${accountId}_oauth';
+  String _legacyOauthKey(int accountId) => 'kaydet_account_${accountId}_oauth';
 
   @override
   Future<String?> readPassword(int accountId) =>

@@ -59,6 +59,18 @@ abstract final class PushService {
 
   static Future<bool> get isRunning => FlutterForegroundTask.isRunningService;
 
+  static const String _neededKey = 'serviceNeeded';
+
+  /// Servisin gerekli olup olmadığını servis isolate'inin de okuyabileceği
+  /// şekilde saklar (`autoRunOnBoot` ile sistem başlattığında uygulama
+  /// açık değildir).
+  static Future<void> rememberNeeded(bool needed) =>
+      FlutterForegroundTask.saveData(key: _neededKey, value: needed);
+
+  /// Kayıt yoksa (eski sürümden yükseltme) gerekli sayılır.
+  static Future<bool> readNeeded() async =>
+      await FlutterForegroundTask.getData<bool>(key: _neededKey) ?? true;
+
   /// Servisi başlatır. Android 12+ yalnızca uygulama öndeyken başlatmaya izin
   /// verir; arka plandan çağrılırsa `false` döner.
   static Future<bool> start() async {

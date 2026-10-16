@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/app.dart';
 import 'app/background_sync.dart';
+import 'app/notification_intent.dart';
 import 'app/notification_navigator.dart';
 import 'app/providers.dart';
 import 'app/push_controller.dart';
@@ -15,6 +16,7 @@ import 'app/share_navigator.dart';
 import 'app/sync_controller.dart';
 import 'data/services/app_settings.dart';
 import 'data/services/notification_service.dart';
+import 'data/services/push_token_source.dart';
 import 'data/services/quick_templates_store.dart';
 import 'ui/features/mail_detail/webview_pool.dart';
 
@@ -42,12 +44,23 @@ Future<void> main() async {
   final settingsStore = await AppSettingsStore.create();
   final quickTemplatesStore = await QuickTemplatesStore.create();
 
+  // Android FCM köprüsü: native `onPush`/`onToken` çağrıları kaçmasın diye
+  // erken kurulur (bkz. `AndroidPushChannel`). Android dışında etkisizdir.
+  AndroidPushChannel.instance.install();
+
   // Bildirim kanalı işleyicisi (APNs token'ı) motor hazır olur olmaz kurulu
   // olmalı; bu yüzden `runApp`ten önce beklenir.
   try {
-    await NotificationService().initialize(
+    final notifications = NotificationService();
+    await notifications.initialize(
       onBackgroundResponse: notificationBackgroundHandler,
     );
+    // Uygulamayı bir bildirime dokunarak açan kullanıcının hedefi BURADA,
+    // `runApp`ten, sağlayıcılardan, veritabanından ve eşitlemeden ÖNCE
+    // yakalanır; bunlardan hiçbiri bilgiyi kaybettiremez (bkz.
+    // `NotificationIntake`). Gezinme, hedef çözülünce `NotificationNavigator`
+    // tarafından yapılır.
+    await NotificationIntake.start(notifications);
   } on Object catch (error) {
     debugPrint('Bildirimler kurulamadı: $error');
   }
@@ -101,8 +114,8 @@ class _BootstrapState extends ConsumerState<_Bootstrap> {
   @override
   void initState() {
     super.initState();
-    // Uygulama bir bildirime dokunularak açıldıysa ilk kareden sonra aynı
-    // iletiye gider — o anda henüz `Navigator` hazır olmayabilir.
+    // Uygulama bir bildirime dokunularak açıldıysa hedef `main()` içinde
+    // yakalanmıştır; ilk kareden sonra (Navigator hazır) o iletiye gidilir.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(notificationNavigatorProvider).handleColdStart();
       // Uygulama sistem "Paylaş" menüsünden açıldıysa dosyalar ekli Yeni İleti

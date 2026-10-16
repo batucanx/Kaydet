@@ -1,5 +1,6 @@
 import { buildMailPayload, type ApnsClient } from './apns.js';
-import type { AccountRow, ApnsEnvironment } from './db.js';
+import type { FcmClient } from './fcm.js';
+import type { AccountRow, ApnsEnvironment, DeviceRow } from './db.js';
 import type { Repository } from './repository.js';
 
 export interface NewMessage {
@@ -8,6 +9,12 @@ export interface NewMessage {
   subject: string;
   /** İletinin tarihi (ISO 8601); zarfta yoksa belirtilmez. */
   date?: string;
+  /**
+   * RFC 5322 `Message-ID` başlığı (zarftan); yoksa belirtilmez. UID klasöre
+   * özgüdür ve UIDVALIDITY değişince anlamını yitirir; bu kimlik, ileti başka
+   * klasöre taşınsa da istemcinin onu bulabilmesini sağlar.
+   */
+  messageId?: string;
 }
 
 /** Push yükündeki en çok ileti sayısı; APNs yük sınırı 4 KB. */
@@ -31,7 +38,35 @@ function payloadItems(messages: NewMessage[]) {
   }));
 }
 
+/** Push yükündeki en uzun `messageId`; 4 KB'lık APNs sınırını korur. */
+const MAX_MESSAGE_ID = 200;
+
+/**
+ * Bildirime dokunulunca istemcinin ilgili iletiyi KESİN bulabilmesi için
+ * gereken hedef bilgisi (bkz. lib/app/notification_intent.dart).
+ *
+ * `folder` her zaman `INBOX`'tır: izleyici yalnızca Gelen Kutusu'nu dinler.
+ */
+function targetData(
+  account: AccountRow,
+  latest: NewMessage,
+  uidValidity: number | undefined,
+) {
+  return {
+    type: 'new_mail',
+    accountId: account.client_account_id,
+    folder: 'INBOX',
+    uid: latest.uid,
+    ...(uidValidity !== undefined ? { uidValidity } : {}),
+    ...(latest.messageId && latest.messageId.length <= MAX_MESSAGE_ID
+      ? { messageId: latest.messageId }
+      : {}),
+  };
+}
+
 export interface NotifierOptions {
+  /** Android cihazlar için; yoksa Android kayıtlarına push gönderilmez. */
+  fcm?: Pick<FcmClient, 'send'>;
   /** Token geçersiz çıkınca cihazla birlikte silinen hesapların id'leri. */
   onDevicesRemoved?: (accountIds: number[]) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -61,11 +96,19 @@ export class Notifier {
    * varsa (ör. bağlantı koptuğu sürede gelenler) özet bildirim atılır.
    * Rozet, hesabın `unread` değeri güncellendikten SONRA çağrılmalıdır.
    */
-  async notify(account: AccountRow, messages: NewMessage[]): Promise<void> {
+  async notify(
+    account: AccountRow,
+    messages: NewMessage[],
+    uidValidity?: number,
+  ): Promise<void> {
     const latest = messages[messages.length - 1];
     if (!latest) return;
     const device = this.repo.getDevice(account.device_id);
     if (!device) return;
+    if (device.platform === 'android') {
+      await this.notifyAndroid(account, device, messages, uidValidity);
+      return;
+    }
 
     const badge = this.repo.deviceUnreadTotal(device.id);
     const latestLine = `${latest.fromName}: ${latest.subject}`;
@@ -77,8 +120,7 @@ export class Notifier {
             badge,
             threadId: `account-${account.client_account_id}`,
             data: {
-              accountId: account.client_account_id,
-              uid: latest.uid,
+              ...targetData(account, latest, uidValidity),
               items: payloadItems(messages),
             },
           })
@@ -88,15 +130,14 @@ export class Notifier {
             badge,
             threadId: `account-${account.client_account_id}`,
             data: {
-              accountId: account.client_account_id,
-              uid: latest.uid,
+              ...targetData(account, latest, uidValidity),
               items: payloadItems(messages),
             },
           });
 
     for (let attempt = 0; ; attempt++) {
       let currentEnv = device.environment;
-      let result = await this.apns.send(device.apns_token, currentEnv, payload);
+      let result = await this.apns.send(device.push_token, currentEnv, payload);
       if (result.status === 'sent') {
         this.opts.log?.(`hesap ${account.id}: push gönderildi (${currentEnv})`);
         return;
@@ -110,7 +151,7 @@ export class Notifier {
           this.opts.log?.(
             `hesap ${account.id}: ${currentEnv} ortamında ${result.reason} alındı, alternatif ${altEnv} deneniyor...`,
           );
-          const altResult = await this.apns.send(device.apns_token, altEnv, payload);
+          const altResult = await this.apns.send(device.push_token, altEnv, payload);
           if (altResult.status === 'sent') {
             this.opts.log?.(
               `hesap ${account.id}: Alternatif ortamda (${altEnv}) push BAŞARIYLA gönderildi! Cihaz ortamı güncelleniyor.`,
@@ -123,13 +164,67 @@ export class Notifier {
         this.opts.log?.(
           `hesap ${account.id}: APNs token'ı geçersiz sayıldı (${result.reason}), cihaz siliniyor`,
         );
-        const ids = this.repo.deleteDevice(device.apns_token);
+        const ids = this.repo.deleteDevice(device.push_token);
         if (ids.length > 0) this.opts.onDevicesRemoved?.(ids);
         return;
       }
       const delay = RETRY_DELAYS_MS[attempt];
       if (!result.retryable || delay === undefined) {
         this.opts.log?.(`hesap ${account.id}: push gönderilemedi (${result.reason})`);
+        return;
+      }
+      await this.sleep(delay);
+    }
+  }
+
+  /**
+   * Android: yalnızca-veri FCM mesajı. Bildirim metni (gönderen, konu)
+   * GÖNDERİLMEZ; uygulama uyanınca iletiyi kendisi IMAP'ten çeker ve yerel
+   * bildirimi üretir. Böylece ileti içeriği Google'dan geçmez ve eylem
+   * düğmeleri/gruplama yerel bildirimle aynı kalır. `count` yalnızca
+   * uygulamanın kaç ileti beklediğini bilmesi içindir.
+   */
+  private async notifyAndroid(
+    account: AccountRow,
+    device: DeviceRow,
+    messages: NewMessage[],
+    uidValidity?: number,
+  ): Promise<void> {
+    const fcm = this.opts.fcm;
+    if (!fcm) {
+      this.opts.log?.(`hesap ${account.id}: FCM yapılandırılmamış, push atlandı`);
+      return;
+    }
+    const latest = messages[messages.length - 1]!;
+    const data: Record<string, string> = {
+      type: 'new_mail',
+      accountId: String(account.client_account_id),
+      folder: 'INBOX',
+      uid: String(latest.uid),
+      count: String(messages.length),
+      ...(uidValidity !== undefined ? { uidValidity: String(uidValidity) } : {}),
+    };
+    // Aynı hesaba art arda gelen push'lar tek mesaja indirgenir; uygulama
+    // zaten tüm yeni iletileri tek turda çeker.
+    const options = { collapseKey: `account-${account.client_account_id}` };
+
+    for (let attempt = 0; ; attempt++) {
+      const result = await fcm.send(device.push_token, data, options);
+      if (result.status === 'sent') {
+        this.opts.log?.(`hesap ${account.id}: FCM push gönderildi`);
+        return;
+      }
+      if (result.status === 'invalid_token') {
+        this.opts.log?.(
+          `hesap ${account.id}: FCM token'ı geçersiz sayıldı (${result.reason}), cihaz siliniyor`,
+        );
+        const ids = this.repo.deleteDevice(device.push_token);
+        if (ids.length > 0) this.opts.onDevicesRemoved?.(ids);
+        return;
+      }
+      const delay = RETRY_DELAYS_MS[attempt];
+      if (!result.retryable || delay === undefined) {
+        this.opts.log?.(`hesap ${account.id}: FCM push gönderilemedi (${result.reason})`);
         return;
       }
       await this.sleep(delay);

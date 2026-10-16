@@ -18,17 +18,31 @@ import io.flutter.embedding.engine.FlutterEngine
  */
 class MainActivity : FlutterActivity() {
     private var shareChannel: ShareChannel? = null
+    private var fcmChannel: FcmChannel? = null
 
     // `super.onCreate` içinde, `onCreate`in kalanından ÖNCE çağrılır; bu yüzden
     // kanal aşağıdaki `handleIntent`ten önce hazırdır.
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         shareChannel = ShareChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        fcmChannel = FcmChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) shareChannel?.handleIntent(intent)
+    }
+
+    // FCM push'u ana isolate yalnızca kullanıcı uygulamaya bakarken işler; aksi
+    // hâlde arka plan işçisi devreye girer (bkz. FcmChannel, KaydetMessagingService).
+    override fun onStart() {
+        super.onStart()
+        FcmChannel.appInForeground = true
+    }
+
+    override fun onStop() {
+        FcmChannel.appInForeground = false
+        super.onStop()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -39,6 +53,8 @@ class MainActivity : FlutterActivity() {
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         shareChannel?.dispose()
         shareChannel = null
+        fcmChannel?.dispose()
+        fcmChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

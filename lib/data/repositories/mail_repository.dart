@@ -6,6 +6,7 @@ import 'package:drift/drift.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../../core/mail_log.dart';
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/repositories/draft_repository.dart';
@@ -165,6 +166,7 @@ class MailRepository {
     final rows = await _db.messagesByIds(messageIds);
     if (rows.isEmpty) return;
 
+    MailLog.useCase('${seen ? 'mark read' : 'mark unread'} ids=$messageIds');
     await _db.transaction(() async {
       await _db.updateMessages(
         messageIds,
@@ -295,6 +297,10 @@ class MailRepository {
 
       // Kuyruğa ekleme ve yerel silme tek transaction'da: aradaki kesintide
       // taşıma işlemi hiç kuyruğa girmeden mesaj yerelden kaybolmaz.
+      MailLog.useCase(
+        '${action.name} ids=${remote.map((r) => r.id).toList()} '
+        '-> ${targetBox?.path ?? fallbackTarget?.name}',
+      );
       final operationIds = await _db.transaction(() async {
         final ids = await _enqueueByMailbox(
           remote,
@@ -849,6 +855,7 @@ class MailRepository {
     // kullanıcıya sonsuza dek "gönderiliyor" gösterilen ama asla
     // gönderilmeyen bir ileti kalırdı.
     final sentBox = await _db.mailboxBySpecialUse(accountId, SpecialUse.sent);
+    MailLog.useCase('send queued id=$id sent=${sentBox?.path}');
     await _db.transaction(() async {
       await _db.updateMessage(
         id,
@@ -1071,6 +1078,12 @@ class MailRepository {
       return;
     }
 
+    // Sunucuda başarıyla taşınan iletilerin HEDEF klasörleri: yerel satır
+    // iyimser olarak kaynak klasörden silindi, ama hedefte (Çöp Kutusu,
+    // Arşiv…) ancak hedef klasör eşitlenince görünür. Tur sonunda hedefler
+    // sunucudan yeniden okunur; böylece ekran sunucudaki gerçek durumu gösterir.
+    final movedInto = <int>{};
+
     for (final op in operations) {
       // Bu işlemi yürütmeye başlamadan hemen önce kirasını tazele: parti
       // içindeki önceki işlemler zaman aldıysa (ör. yavaş bir gönderim),
@@ -1081,12 +1094,59 @@ class MailRepository {
       // yeniden sahiplenildiği (önceki işlemcinin muhtemelen çöktüğü)
       // anlamına gelir — bkz. `_sendQueued`'daki `claimOutboxSend` çağrısı.
       final wasReclaimed = op.status == PendingOpStatus.running;
+      MailLog.repository('run op ${op.id} ${op.type.name}');
       final result = await _execute(accountId, op, wasReclaimed);
       await result.fold(
-        (_) => _db.completeOperation(op.id),
-        (failure) => _handleFailure(op, failure),
+        (_) async {
+          MailLog.remote('op ${op.id} ${op.type.name} SUCCESS');
+          await _db.completeOperation(op.id);
+          MailLog.drift('op ${op.id} completed');
+          if (op.type == PendingOpType.move) {
+            final target = await _targetMailboxOf(accountId, _payloadOf(op));
+            if (target != null) movedInto.add(target.id);
+          }
+        },
+        (failure) {
+          MailLog.remote('op ${op.id} ${op.type.name} FAILED ${failure.runtimeType}');
+          return _handleFailure(op, failure);
+        },
       );
     }
+
+    for (final mailboxId in movedInto) {
+      final mailbox = await _db.mailboxById(mailboxId);
+      if (mailbox == null) continue;
+      MailLog.sync('refresh move target ${mailbox.path}');
+      final outcome = await _sync.syncMailbox(
+        accountId: accountId,
+        mailbox: mailbox,
+      );
+      outcome.fold(
+        (o) => MailLog.reconcile(
+          '${mailbox.path} new=${o.newMessageIds.length} '
+          'deleted=${o.deletedCount} changed=${o.changedCount}',
+        ),
+        (failure) => MailLog.reconcile(
+          '${mailbox.path} refresh FAILED ${failure.runtimeType}',
+        ),
+      );
+    }
+  }
+
+  /// Taşıma işleminin hedef klasörü (yerel satır); çözülemezse `null`.
+  Future<MailboxRow?> _targetMailboxOf(
+    int accountId,
+    Map<String, dynamic> payload,
+  ) async {
+    final explicit = payload['targetPath'] as String?;
+    if (explicit != null && explicit.isNotEmpty) {
+      return _db.mailboxByPath(accountId, explicit);
+    }
+    final useIndex = payload['targetSpecialUse'] as int?;
+    if (useIndex == null) return null;
+    final use =
+        SpecialUse.values[useIndex.clamp(0, SpecialUse.values.length - 1)];
+    return _db.mailboxBySpecialUse(accountId, use);
   }
 
   /// [kickQueue]'nun başlattığı tur bitene kadar bekler.
@@ -1276,10 +1336,14 @@ class MailRepository {
     // Klasörün ŞİMDİKİ yolu: klasör bu arada yeniden adlandırıldıysa payload'daki
     // yol artık yok olurdu.
     var mailboxPath = payload['mailboxPath'] as String?;
+    String? sourceEncoded;
     final mailboxId = payload['mailboxId'];
     if (mailboxId is int) {
       final current = await _db.mailboxById(mailboxId);
-      if (current != null) mailboxPath = current.path;
+      if (current != null) {
+        mailboxPath = current.path;
+        sourceEncoded = current.encodedPath;
+      }
     }
     final sourcePath = mailboxPath;
 
@@ -1289,7 +1353,10 @@ class MailRepository {
       if (sourcePath == null) {
         return const Err(MailboxNotFoundFailure());
       }
-      final selected = await _connection.imap.selectMailbox(sourcePath);
+      final selected = await _connection.imap.selectMailbox(
+        sourcePath,
+        encodedPath: sourceEncoded,
+      );
       if (selected is Err<MailboxState>) return Err(selected.failure);
 
       // İşlem kuyruğa alındığındaki UIDVALIDITY ile şimdiki farklıysa UID'ler
@@ -1357,10 +1424,16 @@ class MailRepository {
         return withMailbox(() async {
           final targetPath = await _resolveTargetPath(accountId, payload);
           if (targetPath == null) return const Err(MailboxNotFoundFailure());
+          final targetRow = await _db.mailboxByPath(accountId, targetPath);
+          MailLog.remote(
+            'MOVE $sourcePath -> $targetPath uids=$uids',
+          );
           return _connection.imap.moveMessages(
             uids: uids,
             targetPath: targetPath,
             sourcePath: sourcePath,
+            sourceEncodedPath: sourceEncoded,
+            targetEncodedPath: targetRow?.encodedPath,
           );
         });
 
@@ -1394,9 +1467,25 @@ class MailRepository {
     // Arşiv klasörü yoksa oluşturulur — aksi hâlde arşivleme sessizce
     // başarısız olur ve kullanıcı iletisini kaybettiğini sanır.
     if (use != SpecialUse.archive) return null;
+    return (await _createSpecialMailbox(accountId, use))?.path;
+  }
 
+  /// Sunucuda bulunmayan özel klasörü (Arşiv, Gönderilenler) oluşturur ve
+  /// yerel kayda işler; sunucu oluşturmayı reddederse `null` döner.
+  ///
+  /// Önce sunucu, sonra Drift: klasör yalnızca sunucu onayladıktan sonra
+  /// yerelde var olur.
+  Future<MailboxRow?> _createSpecialMailbox(
+    int accountId,
+    SpecialUse use,
+  ) async {
+    final (leaf, display) = switch (use) {
+      SpecialUse.sent => ('Sent', 'Gönderilenler'),
+      _ => ('Archive', 'Arşiv'),
+    };
     final inbox = await _db.mailboxBySpecialUse(accountId, SpecialUse.inbox);
-    final path = inbox == null ? 'Archive' : inbox.childPath('Archive');
+    final path = inbox == null ? leaf : inbox.childPath(leaf);
+    MailLog.remote('CREATE missing special folder $path');
     final created = await _connection.imap.createMailbox(path);
     if (created is Err<void>) return null;
 
@@ -1404,13 +1493,13 @@ class MailRepository {
       MailboxesCompanion.insert(
         accountId: accountId,
         path: path,
-        name: 'Arşiv',
-        specialUse: const Value(SpecialUse.archive),
+        name: display,
+        specialUse: Value(use),
         delimiter: Value(inbox?.delimiter ?? '.'),
-        sortOrder: Value(FolderMapping.sortOrderFor(SpecialUse.archive)),
+        sortOrder: Value(FolderMapping.sortOrderFor(use)),
       ),
     );
-    return path;
+    return _db.mailboxByPath(accountId, path);
   }
 
   /// Yerel bir iletiyi sunucudaki bir klasöre yazar.
@@ -1429,10 +1518,25 @@ class MailRepository {
 
     final explicitPath = payload['targetPath'] as String?;
     final isSentCopy = payload['isSentCopy'] == true;
-    final targetBox = await _db.mailboxBySpecialUse(
-      accountId,
-      isSentCopy ? SpecialUse.sent : SpecialUse.drafts,
-    );
+    var targetBox = explicitPath != null
+        ? await _db.mailboxByPath(accountId, explicitPath)
+        : await _db.mailboxBySpecialUse(
+            accountId,
+            isSentCopy ? SpecialUse.sent : SpecialUse.drafts,
+          );
+    if (targetBox == null && explicitPath == null && isSentCopy) {
+      final created = await _connection.exclusive<MailboxRow?>(
+        accountId,
+        () async =>
+            Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
+      );
+      targetBox = created.valueOrNull;
+      // Sunucu Gönderilenler'i oluşturamadı: işlem "başarılı" sayılıp
+      // düşürülmez, yeniden denenir.
+      if (targetBox == null) {
+        return const Err(MailboxNotFoundFailure());
+      }
+    }
     final targetPath = explicitPath ?? targetBox?.path;
     if (targetPath == null) return okVoid;
 
@@ -1457,6 +1561,7 @@ class MailRepository {
       () => _connection.imap.appendMessage(
         mimeSource: source,
         targetPath: targetPath,
+        encodedPath: targetBox?.encodedPath,
         flags: isSentCopy ? [r'\Seen'] : [r'\Draft', r'\Seen'],
       ),
     );
@@ -1570,6 +1675,7 @@ class MailRepository {
     }
 
     // Gönderim başarılı — bu noktadan sonra ASLA tekrar gönderilmez.
+    MailLog.remote('SMTP SUCCESS id=$messageId');
     final sentMessage = (sent as Ok<SentMessage>).value;
     await _db.updateMessage(
       messageId,
@@ -1601,14 +1707,27 @@ class MailRepository {
     int messageId,
     String mimeSource,
   ) async {
-    final sentBox = await _db.mailboxBySpecialUse(accountId, SpecialUse.sent);
-    if (sentBox == null) return;
+    var sentBox = await _db.mailboxBySpecialUse(accountId, SpecialUse.sent);
+    // Sunucuda Gönderilenler yoksa gönderilen ileti hiçbir yerde saklanmazdı
+    // (başka istemcilerde görünmez). Klasör oluşturulur; olmazsa APPEND
+    // yeniden denenmek üzere kuyruğa alınır.
+    sentBox ??= await _connection.exclusive<MailboxRow?>(
+      accountId,
+      () async => Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
+    ).then((r) => r.valueOrNull);
+    if (sentBox == null) {
+      await _queueSentCopyRetry(accountId, messageId, null);
+      return;
+    }
+    final targetBox = sentBox;
 
+    MailLog.remote('APPEND sent copy -> ${targetBox.path}');
     final appended = await _connection.exclusive<int?>(
       accountId,
       () => _connection.imap.appendMessage(
         mimeSource: mimeSource,
-        targetPath: sentBox.path,
+        targetPath: targetBox.path,
+        encodedPath: targetBox.encodedPath,
         flags: [r'\Seen'],
       ),
     );
@@ -1616,32 +1735,42 @@ class MailRepository {
     if (appended is Err<int?>) {
       // Gönderim BAŞARILI olduğu için ileti kaybolmaz ve tekrar gönderilmez;
       // yalnızca Gönderilenler'e yazma işlemi kuyruğa alınıp tekrar denenir.
-      await _db.enqueue(
-        PendingOperationsCompanion.insert(
-          accountId: accountId,
-          type: PendingOpType.appendDraft,
-          payloadJson: Value(
-            jsonEncode({
-              'messageId': messageId,
-              'targetPath': sentBox.path,
-              'isSentCopy': true,
-            }),
-          ),
-          nextAttemptAt: Value(
-            DateTime.now().toUtc().add(const Duration(minutes: 2)),
-          ),
-        ),
-      );
+      await _queueSentCopyRetry(accountId, messageId, targetBox.path);
       return;
     }
 
+    final newUid = (appended as Ok<int?>).value;
+    MailLog.remote('APPEND SUCCESS ${targetBox.path} uid=$newUid');
     await _linkAppendedMessage(
       messageId: messageId,
-      mailboxPath: sentBox.path,
+      mailboxPath: targetBox.path,
       accountId: accountId,
-      newUid: (appended as Ok<int?>).value,
+      newUid: newUid,
     );
   }
+
+  /// Gönderilen iletinin sunucudaki Gönderilenler kopyasını sonra yeniden
+  /// yazmak üzere kuyruğa alır.
+  Future<void> _queueSentCopyRetry(
+    int accountId,
+    int messageId,
+    String? targetPath,
+  ) => _db.enqueue(
+    PendingOperationsCompanion.insert(
+      accountId: accountId,
+      type: PendingOpType.appendDraft,
+      payloadJson: Value(
+        jsonEncode({
+          'messageId': messageId,
+          'targetPath': ?targetPath,
+          'isSentCopy': true,
+        }),
+      ),
+      nextAttemptAt: Value(
+        DateTime.now().toUtc().add(const Duration(minutes: 2)),
+      ),
+    ),
+  );
 
   Future<Result<OutgoingMessage>> _buildOutgoing(
     MessageRow row, {

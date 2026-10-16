@@ -2,16 +2,44 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'install_credentials.dart';
+
 /// Push sunucusunun adresi ve paylaşılan API anahtarı.
 ///
 /// Gerçek değerler `lib/app/push_backend_config.dart`de tutulur (git'e
 /// eklenmez, bkz. o dosyanın yanındaki `.example` şablonu) — bu sınıf yalnızca
 /// taşıyıcı, kaynağı bilmez.
 class PushBackendConfig {
-  const PushBackendConfig({required this.baseUrl, required this.apiKey});
+  const PushBackendConfig({
+    required this.baseUrl,
+    required this.apiKey,
+    this.credentials,
+  });
 
   final String baseUrl;
   final String apiKey;
+
+  /// Bu kuruluma özel kimlik (bkz. `install_credentials.dart`). Sunucu
+  /// `/health` dışındaki her istekte bunu ister; testlerde `null` olabilir.
+  final InstallCredentialsSource? credentials;
+}
+
+/// `Authorization` ve kurulum başlıklarını ekler. Paylaşılan API anahtarı
+/// uygulamadan çıkarılabilir; kurulum sırrı ise her kuruluma özeldir ve sunucu
+/// kotaları/limitleri buna bağlar.
+Future<void> applyBackendAuth(
+  HttpClientRequest request,
+  PushBackendConfig config,
+) async {
+  request.headers.set(
+    HttpHeaders.authorizationHeader,
+    'Bearer ${config.apiKey}',
+  );
+  final install = await config.credentials?.load();
+  if (install != null) {
+    request.headers.set('x-install-id', install.id);
+    request.headers.set('x-install-secret', install.secret);
+  }
 }
 
 /// Sunucuya kaydedilecek bir hesap. `clientAccountId`, uygulamadaki hesap
@@ -19,7 +47,7 @@ class PushBackendConfig {
 /// geri döner.
 class RemotePushAccount {
   const RemotePushAccount({
-    required this.apnsToken,
+    required this.pushToken,
     required this.environment,
     required this.clientAccountId,
     required this.host,
@@ -29,9 +57,11 @@ class RemotePushAccount {
     required this.password,
   });
 
-  final String apnsToken;
+  /// iOS'ta APNs, Android'de FCM kayıt token'ı.
+  final String pushToken;
 
   /// `development` ya da `production` (APNs ortamı; token ortama bağlıdır).
+  /// Android'de her zaman `production`.
   final String environment;
   final int clientAccountId;
   final String host;
@@ -66,16 +96,16 @@ class PushBackendException implements Exception {
 abstract interface class RemotePushApi {
   String get baseUrl;
 
-  Future<List<int>> listRegisteredAccountIds(String apnsToken);
+  Future<List<int>> listRegisteredAccountIds(String pushToken);
 
   Future<void> upsertAccount(RemotePushAccount account);
 
   Future<void> deleteAccount({
-    required String apnsToken,
+    required String pushToken,
     required int clientAccountId,
   });
 
-  Future<void> deleteDevice(String apnsToken);
+  Future<void> deleteDevice(String pushToken);
 }
 
 /// `dart:io` üzerinden JSON konuşan istemci.
@@ -85,12 +115,17 @@ abstract interface class RemotePushApi {
 class HttpPushBackendClient implements RemotePushApi {
   HttpPushBackendClient(
     this._config, {
+    this.platform = 'ios',
     HttpClient? httpClient,
     Duration timeout = const Duration(seconds: 10),
   }) : _http = httpClient ?? HttpClient(),
        _timeout = timeout;
 
   final PushBackendConfig _config;
+
+  /// `ios` (APNs) ya da `android` (FCM); token'ın hangi servise ait olduğunu
+  /// sunucuya bildirir.
+  final String platform;
   final HttpClient _http;
   final Duration _timeout;
 
@@ -98,8 +133,12 @@ class HttpPushBackendClient implements RemotePushApi {
   String get baseUrl => _config.baseUrl;
 
   @override
-  Future<List<int>> listRegisteredAccountIds(String apnsToken) async {
-    final res = await _send('GET', '/v1/accounts?apnsToken=$apnsToken');
+  Future<List<int>> listRegisteredAccountIds(String pushToken) async {
+    final res = await _send(
+      'GET',
+      '/v1/accounts?pushToken=${Uri.encodeQueryComponent(pushToken)}'
+      '&platform=$platform',
+    );
     final decoded = jsonDecode(res) as Map<String, dynamic>;
     final list = decoded['clientAccountIds'] as List<dynamic>? ?? const [];
     return list.map((e) => (e as num).toInt()).toList();
@@ -108,7 +147,8 @@ class HttpPushBackendClient implements RemotePushApi {
   @override
   Future<void> upsertAccount(RemotePushAccount account) =>
       _send('PUT', '/v1/accounts', {
-        'apnsToken': account.apnsToken,
+        'pushToken': account.pushToken,
+        'platform': platform,
         'environment': account.environment,
         'clientAccountId': account.clientAccountId,
         'imap': {
@@ -122,16 +162,19 @@ class HttpPushBackendClient implements RemotePushApi {
 
   @override
   Future<void> deleteAccount({
-    required String apnsToken,
+    required String pushToken,
     required int clientAccountId,
   }) => _send('DELETE', '/v1/accounts', {
-    'apnsToken': apnsToken,
+    'pushToken': pushToken,
+    'platform': platform,
     'clientAccountId': clientAccountId,
   });
 
   @override
-  Future<void> deleteDevice(String apnsToken) =>
-      _send('DELETE', '/v1/devices', {'apnsToken': apnsToken});
+  Future<void> deleteDevice(String pushToken) => _send('DELETE', '/v1/devices', {
+    'pushToken': pushToken,
+    'platform': platform,
+  });
 
   void close() => _http.close(force: true);
 
@@ -146,13 +189,11 @@ class HttpPushBackendClient implements RemotePushApi {
     }
     final questionIdx = path.indexOf('?');
     final rawPath = questionIdx >= 0 ? path.substring(0, questionIdx) : path;
-    final queryString =
-        questionIdx >= 0 ? path.substring(questionIdx + 1) : null;
+    final queryString = questionIdx >= 0
+        ? path.substring(questionIdx + 1)
+        : null;
     final mergedPath = '${base.path.replaceAll(RegExp(r'/+$'), '')}$rawPath';
-    return base.replace(
-      path: mergedPath,
-      query: queryString,
-    );
+    return base.replace(path: mergedPath, query: queryString);
   }
 
   Future<String> _send(
@@ -161,10 +202,7 @@ class HttpPushBackendClient implements RemotePushApi {
     Map<String, Object?>? body,
   ]) async {
     final request = await _http.openUrl(method, _uri(path)).timeout(_timeout);
-    request.headers.set(
-      HttpHeaders.authorizationHeader,
-      'Bearer ${_config.apiKey}',
-    );
+    await applyBackendAuth(request, _config);
     if (body != null) {
       request.headers.contentType = ContentType.json;
       request.add(utf8.encode(jsonEncode(body)));

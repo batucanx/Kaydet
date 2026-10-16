@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -7,8 +9,8 @@ import '../../core/theme/tokens.dart';
 /// anlatan metinler. Giriş ekranındaki kısa not ve Gizlilik sayfasındaki
 /// ayrıntılı bilgi AYNI kaynaktan beslenir; biri değişince diğeri sapmaz.
 ///
-/// [pushServerActive]: iOS'ta sunucu tabanlı anlık bildirim yapılandırılmış mı
-/// (bkz. `remotePushSyncProvider`). Şifre sunucuya YALNIZCA bu durumda gider.
+/// [pushServerActive]: sunucu tabanlı anlık bildirim bu cihazda kullanılıyor mu
+/// (bkz. `serverPushInUseProvider`). Şifre sunucuya YALNIZCA bu durumda gider.
 abstract final class DataUsageText {
   static String loginNote({required bool pushServerActive}) => pushServerActive
       ? 'Şifreniz bu cihazda güvenli depoda saklanır. Anlık bildirim için '
@@ -30,20 +32,40 @@ abstract final class DataUsageText {
           'SMTP üzerinden alıp gönderir.',
     ),
     if (pushServerActive)
-      (
-        title: 'Anlık bildirim sunucusu (iOS)',
-        body:
-            'iPhone\'a yeni ileti bildirimi gönderilebilmesi için hesabınızın '
-            'şifresi, kullanıcı adı ve IMAP sunucu bilgileri Kaydet bildirim '
-            'sunucusuna iletilir. Şifre sunucuda şifrelenmiş olarak saklanır '
-            've sunucu, gelen kutunuzu izleyerek yalnızca yeni iletinin '
-            'göndereni ile konusunu okur; ileti gövdesi ve ekler indirilmez. '
-            'Bu iki bilgi, bildirimi iletmek için Apple\'ın bildirim '
-            'servisinden (APNs) geçer.\n\n'
-            'Bildirimleri kapattığınızda ya da hesabı çıkardığınızda hesabınız '
-            'sunucudan silinir. Bu uygulamayı kullanmaya devam ederek bu '
-            'işlemeyi kabul etmiş olursunuz.',
-      ),
+      Platform.isAndroid
+          ? (
+              title: 'Anlık bildirim sunucusu',
+              body:
+                  'Telefonunuza yeni ileti bildirimi anında gönderilebilmesi '
+                  'için hesabınızın şifresi, kullanıcı adı ve IMAP sunucu '
+                  'bilgileri Kaydet bildirim sunucusuna iletilir. Şifre '
+                  'sunucuda şifrelenmiş olarak saklanır ve sunucu, gelen '
+                  'kutunuzu izleyerek yalnızca yeni iletinin göndereni ile '
+                  'konusunu okur; ileti gövdesi ve ekler indirilmez.\n\n'
+                  'Google\'ın bildirim servisinden (FCM) yalnızca "yeni ileti '
+                  'var" sinyali geçer; gönderen ve konu Google\'a '
+                  'iletilmez, telefonunuz iletiyi doğrudan mail sunucunuzdan '
+                  'çeker.\n\n'
+                  'Kontrol sıklığını "Anlık" dışında bir değere aldığınızda, '
+                  'bildirimleri kapattığınızda ya da hesabı çıkardığınızda '
+                  'hesabınız sunucudan silinir. Bu uygulamayı kullanmaya '
+                  'devam ederek bu işlemeyi kabul etmiş olursunuz.',
+            )
+          : (
+              title: 'Anlık bildirim sunucusu (iOS)',
+              body:
+                  'iPhone\'a yeni ileti bildirimi gönderilebilmesi için '
+                  'hesabınızın şifresi, kullanıcı adı ve IMAP sunucu '
+                  'bilgileri Kaydet bildirim sunucusuna iletilir. Şifre '
+                  'sunucuda şifrelenmiş olarak saklanır ve sunucu, gelen '
+                  'kutunuzu izleyerek yalnızca yeni iletinin göndereni ile '
+                  'konusunu okur; ileti gövdesi ve ekler indirilmez. Bu iki '
+                  'bilgi, bildirimi iletmek için Apple\'ın bildirim '
+                  'servisinden (APNs) geçer.\n\n'
+                  'Bildirimleri kapattığınızda ya da hesabı çıkardığınızda '
+                  'hesabınız sunucudan silinir. Bu uygulamayı kullanmaya '
+                  'devam ederek bu işlemeyi kabul etmiş olursunuz.',
+            ),
     (
       title: 'Çeviri',
       body:

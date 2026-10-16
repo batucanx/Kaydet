@@ -12,6 +12,7 @@ import '../ui/core/theme/app_theme.dart';
 import '../ui/core/theme/tokens.dart';
 import '../ui/features/auth/login_screen.dart';
 import '../ui/features/shell/app_shell.dart';
+import '../ui/features/shell/notification_opening_overlay.dart';
 import '../ui/features/splash/launch_splash.dart';
 import 'navigation.dart';
 import 'providers.dart';
@@ -72,7 +73,14 @@ class KaydetApp extends ConsumerWidget {
                   ? Brightness.light
                   : Brightness.dark,
             ),
-            child: child ?? const SizedBox.shrink(),
+            // Bildirimden ileti açılırken Gelen Kutusu'nun üstündeki katman
+            // (bkz. `NotificationOpeningOverlay`); normalde görünmez.
+            child: Stack(
+              children: [
+                Positioned.fill(child: child ?? const SizedBox.shrink()),
+                const NotificationOpeningOverlay(),
+              ],
+            ),
           ),
         );
         if (defaultTargetPlatform != TargetPlatform.iOS) return clamped;

@@ -410,9 +410,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
                                   ),
                                   const SizedBox(height: Space.lg),
                                   DataUsageNote(
-                                    pushServerActive:
-                                        ref.watch(remotePushSyncProvider) !=
-                                        null,
+                                    pushServerActive: ref.watch(
+                                      serverPushInUseProvider,
+                                    ),
                                   ),
                                   const SizedBox(height: Space.lg),
                                   SizedBox(

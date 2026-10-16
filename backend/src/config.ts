@@ -9,11 +9,38 @@ const schema = z.object({
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'ENCRYPTION_KEY 64 haneli hex olmalı'),
   DATABASE_PATH: z.string().default('./data/kaydet.sqlite'),
+  // Kurulum doğrulaması (bkz. installs.ts). Ters vekil (Railway vb.) arkasında
+  // TRUST_PROXY=true olmalı, yoksa tüm istekler vekilin IP'sinden görünür ve IP
+  // başına limit herkesi ortak sayar. Vekil yoksa false yapın (başlık taklit edilebilir).
+  TRUST_PROXY: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  INSTALLS_PER_IP_HOUR: z.coerce.number().int().positive().default(30),
+  MAX_ACCOUNTS_PER_INSTALL: z.coerce.number().int().positive().default(25),
+
+  // Düzenli SQLite yedeği (VACUUM INTO). BACKUP_DIR boşsa veritabanının
+  // yanındaki `backups/` kullanılır. BACKUP_ENABLED=false kapatır.
+  BACKUP_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  BACKUP_DIR: z.string().optional(),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().positive().default(24),
+  BACKUP_KEEP: z.coerce.number().int().positive().default(7),
   APNS_KEY_PATH: z.string().optional(),
   APNS_KEY_PEM: z.string().optional(),
   APNS_KEY_ID: z.string().min(1),
   APNS_TEAM_ID: z.string().min(1),
   APNS_BUNDLE_ID: z.string().default('tr.com.pazarlik.kaydet'),
+
+  // Android push (Firebase Cloud Messaging HTTP v1). Firebase Console →
+  // Proje ayarları → Hizmet hesapları → "Yeni özel anahtar oluştur" ile inen
+  // JSON, ham ya da base64 olarak FCM_SERVICE_ACCOUNT'a (veya dosya yolu
+  // FCM_SERVICE_ACCOUNT_PATH'e) verilir. İkisi de boşsa Android kayıtları
+  // 503 `android_push_unavailable` alır; iOS etkilenmez.
+  FCM_SERVICE_ACCOUNT: z.string().optional(),
+  FCM_SERVICE_ACCOUNT_PATH: z.string().optional(),
 
   // Mail çevirisi (Azure AI Translator, F0 ücretsiz katman: 2.000.000
   // karakter/ay). Kapalıysa ya da anahtar yoksa çeviri uç noktaları

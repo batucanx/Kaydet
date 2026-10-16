@@ -784,4 +784,99 @@ void main() {
       expect(await db.messageById(row.id), isNotNull);
     });
   });
+
+  group('eksik ileti regresyonları', () {
+    MessagesCompanion threaded({
+      required int uid,
+      required String thread,
+      required DateTime date,
+      int? mailbox,
+      String? messageId,
+    }) =>
+        MessagesCompanion.insert(
+          accountId: accountId,
+          mailboxId: mailbox ?? inboxId,
+          dateUtc: date,
+          uid: Value(uid),
+          threadId: Value(thread),
+          messageIdHeader: Value(messageId),
+          subject: const Value('Konu'),
+        );
+
+    test('aynı Message-ID ile gelen ayrı UID-li iletiler tek satıra çökmez',
+        () async {
+      await db.upsertServerMessages([
+        threaded(
+          uid: 1,
+          thread: 'a',
+          date: DateTime.utc(2026, 7, 1),
+          messageId: 'dup@x',
+        ),
+      ]);
+      await db.upsertServerMessages([
+        threaded(
+          uid: 2,
+          thread: 'a',
+          date: DateTime.utc(2026, 7, 2),
+          messageId: 'dup@x',
+        ),
+      ]);
+      expect(await db.countMessages(inboxId), 2);
+    });
+
+    test('konuşma tamamlama: limit çapaları sayar, eski üyeler ve gönderilen '
+        'yanıtlar kotayı yemez', () async {
+      final sentId = await db.upsertMailbox(
+        MailboxesCompanion.insert(
+          accountId: accountId,
+          path: 'Sent',
+          name: 'Gönderilenler',
+          specialUse: const Value(SpecialUse.sent),
+        ),
+      );
+      // Konuşma "t": en yeni üye pencerede, iki eski üye pencerenin dışında.
+      await db.upsertServerMessages([
+        threaded(uid: 1, thread: 't', date: DateTime.utc(2026, 1, 1)),
+        threaded(uid: 2, thread: 't', date: DateTime.utc(2026, 1, 2)),
+        threaded(uid: 3, thread: 'x', date: DateTime.utc(2026, 2, 1)),
+        threaded(uid: 4, thread: 'y', date: DateTime.utc(2026, 3, 1)),
+        threaded(uid: 5, thread: 't', date: DateTime.utc(2026, 4, 1)),
+        threaded(
+          uid: 10,
+          thread: 't',
+          date: DateTime.utc(2026, 4, 2),
+          mailbox: sentId,
+        ),
+        threaded(
+          uid: 11,
+          thread: 'zzz',
+          date: DateTime.utc(2026, 4, 3),
+          mailbox: sentId,
+        ),
+      ]);
+
+      // Çapa penceresi = en yeni 1 gelen ileti (uid 5, konuşma "t").
+      final rows = await db
+          .watchMessages(
+            accountId: accountId,
+            mailboxId: inboxId,
+            sentMailboxId: sentId,
+            limit: 1,
+            completeThreads: true,
+          )
+          .first;
+      expect(rows.map((r) => r.uid).toSet(), {1, 2, 5, 10});
+    });
+
+    test('completeThreads kapalıyken limit düz satır sayısıdır', () async {
+      await db.upsertServerMessages([
+        threaded(uid: 1, thread: 't', date: DateTime.utc(2026, 1, 1)),
+        threaded(uid: 2, thread: 't', date: DateTime.utc(2026, 1, 2)),
+      ]);
+      final rows = await db
+          .watchMessages(accountId: accountId, mailboxId: inboxId, limit: 1)
+          .first;
+      expect(rows, hasLength(1));
+    });
+  });
 }

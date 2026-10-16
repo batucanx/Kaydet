@@ -60,7 +60,7 @@ class PrivacySettingsScreen extends ConsumerWidget {
           ),
           const SectionHeader('VERİLERİNİZ'),
           DataUsageDetails(
-            pushServerActive: ref.watch(remotePushSyncProvider) != null,
+            pushServerActive: ref.watch(serverPushInUseProvider),
           ),
         ],
       ),

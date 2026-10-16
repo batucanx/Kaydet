@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "57237429514",
+    "project_id": "kaydet-mobil",
+    "storage_bucket": "kaydet-mobil.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:57237429514:android:8779a9bae2ccd489932ef3",
+        "android_client_info": {
+          "package_name": "tr.com.pazarlik.kaydet"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCVi10HLtnWorLhOIyzmwomc3Gs_k7P3ZE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -3,12 +3,17 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type ApnsEnvironment = 'development' | 'production';
+export type DevicePlatform = 'ios' | 'android';
 
 export interface DeviceRow {
   id: number;
-  apns_token: string;
+  /** iOS'ta APNs, Android'de FCM kayıt token'ı. */
+  push_token: string;
+  platform: DevicePlatform;
+  /** Yalnızca iOS için anlamlı; Android satırlarında `production` yazılır. */
   environment: ApnsEnvironment;
   created_at: number;
+  install_id: string | null;
 }
 
 export interface AccountRow {
@@ -39,8 +44,14 @@ export function openDatabase(path: string): Database.Database {
   try {
     db = new Database(path);
   } catch (err) {
-    console.error('Database dosyası açılamadı, :memory: deneniyor:', err);
-    db = new Database(':memory:');
+    // Sessizce :memory:'ye düşmek, sunucunun sağlıklı görünüp hiçbir şeyi
+    // kalıcı tutmamasına (ve abonelikleri her yeniden başlatmada kaybetmesine)
+    // yol açar. Açılamıyorsa süreç hemen, anlaşılır bir hatayla kapanmalı.
+    throw new Error(
+      `Veritabanı açılamadı (${path}). DATABASE_PATH'in yazılabilir, kalıcı bir ` +
+        `diski (Volume) göstermesi gerekir.`,
+      { cause: err },
+    );
   }
   console.log('Pragma ayarlanıyor...');
   try {
@@ -56,9 +67,17 @@ export function openDatabase(path: string): Database.Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS devices (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      apns_token TEXT NOT NULL UNIQUE,
+      push_token TEXT NOT NULL UNIQUE,
+      platform TEXT NOT NULL DEFAULT 'ios' CHECK (platform IN ('ios','android')),
       environment TEXT NOT NULL CHECK (environment IN ('development','production')),
       created_at INTEGER NOT NULL
+    );
+    -- Doğrulanmış uygulama kurulumları (bkz. installs.ts). Sır düz saklanmaz.
+    CREATE TABLE IF NOT EXISTS installs (
+      install_id TEXT PRIMARY KEY,
+      secret_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS accounts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,5 +132,22 @@ export function openDatabase(path: string): Database.Database {
       UNIQUE (user_id, message_id, source_language, target_language)
     );
   `);
+  // Eski veritabanlarında `apns_token` adı ve `platform` sütunu yoktur. Tüm
+  // eski satırlar iOS'tur. SQLite sütun adını yerinde değiştirir; UNIQUE
+  // kısıtı ve dizinler adıyla birlikte taşınır.
+  const legacyColumns = db.prepare('PRAGMA table_info(devices)').all() as { name: string }[];
+  if (legacyColumns.some((c) => c.name === 'apns_token')) {
+    db.exec('ALTER TABLE devices RENAME COLUMN apns_token TO push_token');
+  }
+  if (!legacyColumns.some((c) => c.name === 'platform')) {
+    db.exec("ALTER TABLE devices ADD COLUMN platform TEXT NOT NULL DEFAULT 'ios'");
+  }
+  // Eski veritabanlarında devices.install_id yoktur; CREATE IF NOT EXISTS
+  // mevcut tabloyu değiştirmez. Boş (NULL) kalan satırlar ilk kayıtta sahiplenilir.
+  const deviceColumns = db.prepare('PRAGMA table_info(devices)').all() as { name: string }[];
+  if (!deviceColumns.some((c) => c.name === 'install_id')) {
+    db.exec('ALTER TABLE devices ADD COLUMN install_id TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_devices_install ON devices(install_id)');
   return db;
 }

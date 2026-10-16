@@ -19,9 +19,11 @@ import '../data/services/quick_templates_store.dart';
 import '../data/services/settings_sync_state_store.dart';
 import '../data/repositories/draft_repository_impl.dart';
 import '../data/repositories/folder_repository.dart';
+import '../data/repositories/dedicated_target_fetcher.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
+import '../data/repositories/notification_target_resolver.dart';
 import '../data/repositories/sync_engine.dart';
 import '../data/services/draft_remote_data_source.dart';
 import '../domain/repositories/draft_repository.dart';
@@ -96,6 +98,24 @@ final syncEngineProvider = Provider<SyncEngine>(
     database: ref.watch(databaseProvider),
     connection: ref.watch(mailConnectionProvider),
   ),
+);
+
+/// Bildirimin işaret ettiği iletiyi tam eşitlemeyi beklemeden çözer (bkz.
+/// `NotificationTargetResolver`): önce yerel veri, sonra AYRI kısa ömürlü bir
+/// bağlantıyla yalnızca o ileti, o olmazsa ana bağlantı.
+final notificationTargetResolverProvider = Provider<NotificationTargetResolver>(
+  (ref) {
+    final database = ref.watch(databaseProvider);
+    final dedicated = DedicatedTargetFetcher(
+      database: database,
+      secureStore: ref.watch(secureStoreProvider),
+    );
+    final engine = ref.watch(syncEngineProvider);
+    return NotificationTargetResolver(
+      database: database,
+      fetchers: [dedicated.call, engine.fetchMessageByUid],
+    );
+  },
 );
 
 final newMailNotifierProvider = Provider<NewMailNotifier>(
@@ -726,11 +746,7 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
     return const Stream<List<MessageRow>>.empty();
   }
 
-  // Çöp Kutusu'nda iletiler orijinal gönderi tarihine göre değil,
-  // sildikten sonra çöp kutusuna taşınma sırasına göre (en son silinen
-  // en üstte) gösterilir; bunun için `id DESC` proxy olarak kullanılır.
   final specialUse = ref.watch(currentSpecialUseProvider);
-  final isTrash = specialUse == SpecialUse.trash;
   final isInbox = specialUse == SpecialUse.inbox;
 
   final groupMessages = ref.watch(
@@ -759,7 +775,7 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
           mailboxId: folder.mailboxId!,
           sentMailboxId: sentMailboxId,
           limit: ref.watch(pageLimitProvider),
-          orderById: isTrash,
+          completeThreads: groupMessages,
           // Taslaklar yalnızca Taslaklar klasöründe görünür: sunucuda Gelen
           // Kutusu'na `\Draft` bayrağıyla düşen iletiler ve Taslaklar klasörü
           // bilinmediğinde Gelen Kutusu'na yazılan yerel taslaklar gizlenir.
@@ -782,15 +798,12 @@ class ExpandedThreadsNotifier extends Notifier<Set<String>> {
       state = {...state, threadKey};
     }
   }
-
-  void collapseAll() => state = const <String>{};
-  void expandAll(Iterable<String> keys) => state = keys.toSet();
 }
 
 final expandedThreadsProvider =
     NotifierProvider<ExpandedThreadsNotifier, Set<String>>(
-  ExpandedThreadsNotifier.new,
-);
+      ExpandedThreadsNotifier.new,
+    );
 
 /// Aynı ileti (aynı `Message-ID` başlığı) birden çok hesabın kutusuna
 /// düşmüşse (ör. iki adresine birden gönderilmiş ya da bir takma ad
@@ -1091,8 +1104,9 @@ List<Object> _groupMessageRows(List<MessageRow> rows) {
     final relationId = row.threadId.trim();
     final cleanSubj = row.subjectNormalized.trim();
     final isReply = hasReplyPrefix(row.subject);
-    final subjKey =
-        cleanSubj.isNotEmpty ? 'subj:${row.accountId}:$cleanSubj' : null;
+    final subjKey = cleanSubj.isNotEmpty
+        ? 'subj:${row.accountId}:$cleanSubj'
+        : null;
 
     String key;
     if (relationId.isNotEmpty) {
@@ -1100,7 +1114,9 @@ List<Object> _groupMessageRows(List<MessageRow> rows) {
       if (subjKey != null && !threadBySubject.containsKey(subjKey)) {
         threadBySubject[subjKey] = key;
       }
-    } else if (subjKey != null && isReply && threadBySubject.containsKey(subjKey)) {
+    } else if (subjKey != null &&
+        isReply &&
+        threadBySubject.containsKey(subjKey)) {
       key = threadBySubject[subjKey]!;
     } else {
       key = 'single:${row.id}';
@@ -1185,7 +1201,6 @@ class PinnedSectionExpandedNotifier extends Notifier<bool> {
   bool build() => false;
 
   void toggle() => state = !state;
-  void setExpanded(bool value) => state = value;
 }
 
 final pinnedSectionExpandedProvider =

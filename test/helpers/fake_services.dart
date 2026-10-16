@@ -75,6 +75,9 @@ class FakeImapService implements ImapService {
     ),
   ];
 
+  /// `moveMessages`'a giden kodlanmış (modified UTF-7) kaynak/hedef yollar.
+  final List<({String? source, String? target})> moveEncodedPaths = [];
+
   int uidValidity = 1000;
   final List<String> commandLog = [];
 
@@ -307,8 +310,11 @@ class FakeImapService implements ImapService {
     required List<int> uids,
     required String targetPath,
     String? sourcePath,
+    String? sourceEncodedPath,
+    String? targetEncodedPath,
   }) async {
     if (sourcePath != null) selectedPath = sourcePath;
+    moveEncodedPaths.add((source: sourceEncodedPath, target: targetEncodedPath));
     commandLog.add('move:$selectedPath->$targetPath:$uids');
     final failure = failMove;
     if (failure != null) return Err(failure);

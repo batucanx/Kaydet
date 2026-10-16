@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../../core/result.dart';
-import 'push_backend_client.dart' show PushBackendConfig;
+import 'push_backend_client.dart' show PushBackendConfig, applyBackendAuth;
 
 /// Kaydet sunucusuna gönderilen çeviri isteği. Azure kimlik bilgisi bu
 /// katmanda HİÇ yoktur: yalnızca sunucunun paylaşılan API anahtarı
@@ -129,10 +129,7 @@ class HttpTranslationClient implements TranslationApi {
     try {
       final limit = timeout ?? _timeout;
       final http = await _http.postUrl(uri).timeout(limit);
-      http.headers.set(
-        HttpHeaders.authorizationHeader,
-        'Bearer ${_config.apiKey}',
-      );
+      await applyBackendAuth(http, _config);
       http.headers.contentType = ContentType.json;
       http.add(utf8.encode(jsonEncode(body)));
       final response = await http.close().timeout(limit);

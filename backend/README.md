@@ -1,10 +1,16 @@
 ﻿# Kaydet push backend
 
-iOS'ta arka planda soket açık tutmanın bir yolu yok, bu yüzden "anlık" mail bildirimi bir
-sunucu gerektirir: bu servis her hesabın IMAP INBOX'ını IDLE ile dinler, yeni (okunmamış)
-ileti gördüğünde Apple'a (APNs) doğrudan push gönderir. Android bunu gerektirmez — Android
-tarafı `lib/app/push_service.dart` üzerinden cihazda kalıcı bir ön plan servisiyle aynı işi
-sunucusuz yapar.
+iOS'ta arka planda soket açık tutmanın bir yolu yok, Android'de ise üreticilerin pil
+yönetimi kalıcı bağlantıyı öldürüyor; bu yüzden "anlık" mail bildirimi bir sunucu gerektirir:
+bu servis her hesabın IMAP INBOX'ını IDLE ile dinler, yeni (okunmamış) ileti gördüğünde
+iOS cihazlara Apple'a (APNs), Android cihazlara Google'a (FCM) doğrudan push gönderir.
+
+- **iOS:** görünür bildirim APNs ile gelir (gönderen + konu yükte).
+- **Android:** yalnızca-veri, yüksek öncelikli FCM mesajı gelir ve YALNIZCA "yeni ileti var"
+  bilgisini taşır (gönderen/konu Google'dan geçmez). Uygulama uyanıp iletiyi IMAP'ten kendisi
+  çeker ve yerel bildirimi üretir (eylem düğmeleri, gruplama). FCM bu cihazda kullanılamıyorsa
+  (Play hizmetleri yok, sunucuda FCM kapalı) uygulama `lib/app/push_service.dart` ön plan
+  servisine düşer.
 
 ## Kurulum
 
@@ -25,6 +31,84 @@ sunucusuz yapar.
 Başlangıçta anahtar bir JWT imzalayarak doğrulanır; "APNs anahtarı yüklenemedi/imzalanamadı"
 hatasıyla çıkarsa `.p8` dosyası/Key ID/Team ID yanlış demektir — bu, gerçek bir push denemesini
 beklemeden hemen görülür.
+
+## Android push (Firebase Cloud Messaging) kurulumu
+
+Yalnızca Android bildirimi için gerekir; iOS bundan bağımsız çalışır.
+
+1. [Firebase Console](https://console.firebase.google.com) → proje oluştur (Analytics gerekmez).
+2. Projeye bir **Android uygulaması** ekle, paket adı: `tr.com.pazarlik.kaydet`.
+   İndirilen `google-services.json` dosyasını `android/app/` altına koy (dosya yoksa
+   derleme yine geçer, ama FCM kapalı kalır ve uygulama ön plan servisine düşer).
+3. Proje ayarları → **Hizmet hesapları** → "Yeni özel anahtar oluştur" ile JSON'u indir.
+   İçeriğini ham ya da base64 olarak `FCM_SERVICE_ACCOUNT` ortam değişkenine ver
+   (Railway'de Variables; dosya yolu için `FCM_SERVICE_ACCOUNT_PATH`). Bu JSON gizlidir,
+   repoya eklenmez. Anahtar sızarsa Firebase'den iptal edip yenisini üret.
+4. Başlangıçta anahtar doğrulanır (`FCM anahtarı doğrulandı (proje: ...)`). Yanlışsa sunucu
+   açılmaz; ayarlanmamışsa uyarı verir ve Android kayıtları `503 android_push_unavailable`
+   alır (iOS etkilenmez).
+5. Doğrulama: fiziksel Android cihazda uygulamayı kur, hesabı ekle, uygulamayı son
+   kullanılanlardan **kaydırma** (ayarlardan "Zorla durdur" YAPMA — Android zorla durdurulan
+   uygulamaya hiçbir push iletmez), başka bir adresten mail gönder; bildirim birkaç saniyede
+   düşmeli.
+
+**Bilinen sınırlar (Android'in kendi kuralları):** zorla durdurulan uygulama push almaz;
+uygulamayı günlerce açmayıp bildirimlerle hiç etkileşmeyen kullanıcılarda Android "bekleme
+kovası" yüzünden yüksek öncelikli mesajlar geciktirilebilir; Xiaomi/Huawei gibi
+üreticiler "otomatik başlat" izni verilmemiş uygulamaların FCM'ini engeller. Hiçbiri bu
+kodla aşılamaz; yedek olarak periyodik WorkManager görevi (15 dk) çalışır.
+
+## Kalıcı depolama (yayın öncesi zorunlu)
+
+Abonelikler ve şifreli IMAP parolaları `DATABASE_PATH` içindeki SQLite dosyasında durur.
+Konteynerin kendi dosya sistemi her deploy/yeniden başlatmada sıfırlanır; **bir Volume bağlamazsan
+tüm abonelikler silinir** ve kullanıcılar uygulamayı açana kadar push alamaz.
+
+1. Hosting'de (ör. Railway) servise bir **Volume** ekle, bağlama yolu: `/app/data`.
+2. `DATABASE_PATH=/app/data/kaydet.sqlite` olarak ayarla (varsayılan `./data/kaydet.sqlite`,
+   Docker'da `/app/data/kaydet.sqlite`'e denk gelir; yine de açıkça yaz).
+3. Dosya açılamazsa sunucu **hata verip kapanır** (bellekte sahte bir veritabanına düşmez);
+   açılışta "Veritabanı açılamadı" görürsen yol/izin/Volume ayarını kontrol et.
+4. Doğrulama: bir hesap kaydet, servisi yeniden deploy et, hesabın hâlâ listelendiğini
+   (`GET /v1/accounts?pushToken=...&platform=ios`) gör.
+5. Volume'un anlık görüntüsünü (snapshot) aç ve `ENCRYPTION_KEY`'i veritabanından ayrı sakla;
+   anahtar kaybolursa yedekteki parolalar çözülemez.
+
+### Otomatik yedek
+
+Sunucu açılışta ve sonra her `BACKUP_INTERVAL_HOURS` (24) saatte bir `VACUUM INTO` ile tutarlı bir
+kopya alır (`kaydet-YYYYMMDD-HHMMSS.sqlite`, UTC), en yeni `BACKUP_KEEP` (7) tanesini tutar.
+Varsayılan klasör veritabanının yanındaki `backups/`'tır (`BACKUP_DIR` ile değişir,
+`BACKUP_ENABLED=false` kapatır). Yedek alınamazsa sunucu çalışmaya devam eder, logda
+`YEDEK ALINAMADI` görünür; bu satırı uyarıya bağla.
+
+Önemli sınır: yedek **aynı Volume'da** olduğundan bozulmaya ve yanlış silmeye karşı korur, Volume'un
+kendisini kaybetmeye karşı korumaz. Bunun için Volume snapshot'ı ya da yedek klasörünü düzenli
+olarak dışarı (S3 vb.) kopyalamak gerekir. Yedeğin içindeki parolalar `ENCRYPTION_KEY` ile
+şifreli kalır.
+
+**Geri yükleme:** servisi durdur, seçtiğin yedeği `DATABASE_PATH`'e kopyala (varsa yanındaki
+`-wal` ve `-shm` dosyalarını sil), servisi başlat. Bunu yayından önce bir kez gerçekten dene.
+
+## Kurulum doğrulaması (paylaşılan API anahtarına ek katman)
+
+`API_KEY` uygulamanın içine derlenir ve çıkarılabilir. Bu yüzden `/health` dışındaki her istek
+ayrıca kuruluma özel `X-Install-Id` + `X-Install-Secret` başlıklarını taşır (uygulama ilk
+açılışta rastgele üretir, Keychain/Keystore'da saklar).
+
+- Sunucu ilk görüşte `sha256(secret)` saklar (düz sır yok), sonra sabit zamanlı karşılaştırır.
+- Çeviri kotası artık istemcinin gönderdiği `userId`'ye değil, doğrulanmış kurulum kimliğine
+  bağlıdır; `userId` değiştirerek kota aşılamaz.
+- Yeni kurulum kaydı IP başına saatte `INSTALLS_PER_IP_HOUR` (30) ile, kurulum başına hesap
+  sayısı `MAX_ACCOUNTS_PER_INSTALL` (25) ile sınırlıdır (IDLE bağlantı kaynağını korur).
+- Ters vekil (Railway) arkasında `TRUST_PROXY=true` kalmalı; yoksa IP limiti herkesi tek IP sayar.
+- Hatalar: `401 install_required` (başlık yok/biçimsiz), `401 install_invalid` (yanlış sır),
+  `429 install_rate_limited`, `429 install_account_limit`.
+
+**Sınır:** Bu, kötü niyetli bir betiği tamamen durdurmaz; yeni kimlik üretmek ucuzdur, yalnızca
+IP başına yavaşlatılır. Gerçek cihaz kanıtı için iOS'ta App Attest, Android'de Play Integrity
+gerekir (ayrı iş). **Dağıtım sırası:** eski uygulama sürümleri başlıkları göndermediği için bu
+sunucu sürümüyle `401` alır; sunucuyu, yeni istemci kullanıcılara ulaştıktan sonra yayına alın.
 
 ## Uygulamaya bağlama
 

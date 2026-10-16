@@ -926,6 +926,7 @@ class _UnifiedFolderPanelContent extends ConsumerWidget {
                     badge: use == SpecialUse.drafts
                         ? null
                         : ref.watch(unifiedUnreadCountProvider(use)).value,
+                    parenthesizedBadge: use == SpecialUse.trash,
                     onTap: () => onChooseFolder(SelectedFolder.unified(use)),
                   ),
             ],
@@ -997,6 +998,7 @@ class _AccountFolderPanelContentState
       badge: box.specialUse == SpecialUse.drafts
           ? null
           : ref.watch(unreadCountProvider(box.id)).value,
+      parenthesizedBadge: box.specialUse == SpecialUse.trash,
       onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
     );
 
@@ -1131,6 +1133,7 @@ class _FolderTile extends StatelessWidget {
     required this.isSelected,
     required this.onTap,
     this.badge,
+    this.parenthesizedBadge = false,
     this.indent = 0,
     this.expanded,
     this.onToggle,
@@ -1144,6 +1147,9 @@ class _FolderTile extends StatelessWidget {
   final bool isSelected;
   final VoidCallback onTap;
   final int? badge;
+
+  /// true ise sayı "(2)" biçiminde yazılır (Çöp Kutusu).
+  final bool parenthesizedBadge;
 
   /// Yatay girinti (px) — tree derinliğine göre `buildFolderTree`'den gelir.
   /// 0 = kök klasör; her ek seviye `Space.lg` (16 dp) ek girinti.
@@ -1218,25 +1224,21 @@ class _FolderTile extends StatelessWidget {
                     ),
                   ),
                 ),
+              // Okunmamış sayısı: referanstaki gibi satırın sağında düz sayı;
+              // Çöp Kutusu'nda "(2)" biçiminde parantezli.
               if (badge != null && badge! > 0)
-                AnimatedContainer(
-                  duration: duration,
-                  curve: Motion.standard,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: Space.sm,
-                    vertical: 1,
-                  ),
-                  decoration: BoxDecoration(
-                    color: isSelected ? t.accentFill : t.surface,
-                    borderRadius: BorderRadius.circular(Radii.full),
-                  ),
+                Padding(
+                  padding: const EdgeInsets.only(left: Space.sm),
                   child: AnimatedDefaultTextStyle(
                     duration: duration,
                     curve: Motion.standard,
-                    style: Theme.of(context).textTheme.labelSmall!.copyWith(
-                      color: isSelected ? t.onAccentFill : t.textSecondary,
+                    style: Theme.of(context).textTheme.bodyMedium!.copyWith(
+                      color: isSelected ? t.accent : t.textSecondary,
+                      fontWeight: FontWeight.w600,
                     ),
-                    child: Text('${badge!}'),
+                    child: Text(
+                      parenthesizedBadge ? '(${badge!})' : '${badge!}',
+                    ),
                   ),
                 ),
             ],

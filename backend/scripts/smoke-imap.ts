@@ -25,7 +25,9 @@ const password = need('SMOKE_IMAP_PASS');
 const db = openDatabase(':memory:');
 const repo = new Repository(db, new SecretBox('0'.repeat(64)));
 const account = repo.upsertAccount({
-  apnsToken: 'ab'.repeat(32),
+  installId: 'a'.repeat(32),
+  pushToken: 'ab'.repeat(32),
+  platform: 'ios',
   environment: 'development',
   clientAccountId: 1,
   host,

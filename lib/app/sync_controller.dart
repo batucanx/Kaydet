@@ -503,7 +503,10 @@ class SyncController extends Notifier<SyncState> {
 
       state = state.copyWith(
         lastSyncAt: DateTime.now(),
-        hasMore: inbox.first.hasMoreOnServer,
+        hasMore:
+            (await ref.read(databaseProvider).mailboxById(inbox.first.id))
+                ?.hasMoreOnServer ??
+            inbox.first.hasMoreOnServer,
         clearError: true,
       );
       _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
@@ -522,6 +525,9 @@ class SyncController extends Notifier<SyncState> {
       _fireAndForget(
         ref.read(mailRepositoryProvider).trimMailbox(inbox.first.id),
       );
+
+      _startBackfill(accountId, inbox.first.id);
+      if (sentBox != null) _startBackfill(accountId, sentBox.id);
 
       _fireAndForget(
         _maybeNotify(inbox.first, (outcome as Ok<SyncOutcome>).value),
@@ -593,14 +599,20 @@ class SyncController extends Notifier<SyncState> {
           folderErrors: Map.of(_folderErrors),
         );
         _reportFailure(accountId, outcome.failure);
+        // Bu klasörün eşitlenememesi (ör. yalnızca bu klasörü seçerken oluşan
+        // bir sunucu hatası) kullanıcının bekleyen eylemlerini (gönderim,
+        // silme, taşıma) engellememeli: kuyruk kendi bağlantısını kurar.
+        await ref.read(mailRepositoryProvider).processQueue(accountId);
         return;
       }
       _folderErrors.remove(mailbox.id);
       _noteReachable(accountId);
+      final freshBox = await ref.read(databaseProvider).mailboxById(mailbox.id);
       state = state.copyWith(
         lastSyncAt: DateTime.now(),
         clearError: true,
         folderErrors: Map.of(_folderErrors),
+        hasMore: freshBox?.hasMoreOnServer ?? state.hasMore,
       );
       _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
       await ref.read(mailRepositoryProvider).processQueue(accountId);
@@ -672,6 +684,7 @@ class SyncController extends Notifier<SyncState> {
         _noteReachable(id);
         await repository.processQueue(id);
         _fireAndForget(repository.trimMailbox(box.id));
+        _startBackfill(id, box.id);
         if (id == activeId) {
           _startBodyPrefetch(engine, id, box);
           _fireAndForget(_maybeNotify(box, (outcome as Ok<SyncOutcome>).value));
@@ -738,9 +751,51 @@ class SyncController extends Notifier<SyncState> {
         }
       }
       ref.read(pageLimitProvider.notifier).grow();
-      state = state.copyWith(hasMore: loaded > 0);
+      var anyMore = false;
+      for (final box in remote) {
+        final fresh = await db.mailboxById(box.id);
+        if (fresh?.hasMoreOnServer == true) anyMore = true;
+      }
+      state = state.copyWith(hasMore: anyMore || loaded > 0);
     } finally {
       state = state.copyWith(isLoadingMore: false);
+    }
+  }
+
+  /// Arka planda geri doldurması sürmekte olan klasörler.
+  final Set<int> _backfilling = {};
+
+  /// İlk indirmeden (en yeni 50) sonra klasörü yerel saklama sınırına
+  /// ([RetentionPolicy.defaultLimit]) kadar SESSİZCE doldurur.
+  ///
+  /// Bu olmadan kullanıcı listenin sonuna kaydırmadıkça yalnızca en yeni 50
+  /// ileti yereldedir: konuşmaların eski üyeleri ve Gönderilenler'deki
+  /// yanıtlar eksik kalır, web ile sayılar tutmaz. Sayfalar arasında bağlantı
+  /// kilidi bırakılır; kullanıcı eylemleri araya girebilir.
+  void _startBackfill(int accountId, int mailboxId) {
+    if (_disposed || !_backfilling.add(mailboxId)) return;
+    _fireAndForget(
+      _backfill(accountId, mailboxId).whenComplete(
+        () => _backfilling.remove(mailboxId),
+      ),
+    );
+  }
+
+  Future<void> _backfill(int accountId, int mailboxId) async {
+    final db = ref.read(databaseProvider);
+    final engine = ref.read(syncEngineProvider);
+    // Üst sınır: bozuk bir sunucu yanıtı sonsuz döngü yaratmasın.
+    for (var page = 0; page < 40; page++) {
+      if (_disposed || !_isCurrent(accountId)) return;
+      final box = await db.mailboxById(mailboxId);
+      if (box == null || !box.hasMoreOnServer || !box.isSelectable) return;
+      if (await db.countMessages(mailboxId) >= box.retentionLimit) return;
+      final result = await engine.loadOlder(
+        accountId: accountId,
+        mailbox: box,
+        count: SyncEngine.backfillPageSize,
+      );
+      if (result is! Ok<int> || result.value == 0) return;
     }
   }
 
@@ -799,11 +854,20 @@ class SyncController extends Notifier<SyncState> {
           return;
         }
         _reportFailure(accountId, result.failure);
+        // Liste sonundaki yükleme göstergesi `isLoadingMore` her kapandığında
+        // yeniden `loadMore` tetikler; kalıcı hata (çevrimdışı, sunucu hatası)
+        // durumunda bu, sıkı bir tekrar döngüsü olurdu. Bir sonraki başarılı
+        // eşitleme `hasMore`u yeniden açar.
+        state = state.copyWith(hasMore: false);
         return;
       }
       if (!_isCurrent(accountId)) return;
       ref.read(pageLimitProvider.notifier).grow();
-      state = state.copyWith(hasMore: (result as Ok<int>).value > 0);
+      // `loadOlder` yalnızca YENİ eklenen satırları sayar; sayfa tamamen
+      // bilinen iletilerden oluşsa bile klasörde daha eskisi olabilir. Kaynak
+      // doğruluk, `loadOlder`ın yazdığı `hasMoreOnServer` bayrağıdır.
+      final fresh = await ref.read(databaseProvider).mailboxById(mailbox.id);
+      state = state.copyWith(hasMore: fresh?.hasMoreOnServer ?? false);
     } finally {
       state = state.copyWith(isLoadingMore: false);
     }

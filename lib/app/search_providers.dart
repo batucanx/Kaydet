@@ -58,10 +58,13 @@ final searchCategoryProvider =
       SearchCategoryNotifier.new,
     );
 
-/// Arama kapsamı: hangi hesapta aranıyor. `null` = Tüm Hesaplar (varsayılan).
+/// Arama kapsamı: hangi hesapta aranıyor. Varsayılan = o an etkin hesap;
+/// `null` = Tüm Hesaplar (kullanıcı sağ üstteki hesap menüsünden seçer).
 class SearchScopeNotifier extends Notifier<int?> {
   @override
-  int? build() => null;
+  int? build() => ref.read(isAllAccountsProvider)
+      ? null
+      : ref.read(accountIdProvider);
 
   void select(int? accountId) => state = accountId;
 }

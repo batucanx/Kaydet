@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
-import 'dart:math' show min;
+import 'dart:math' show max, min;
 
 import 'package:drift/drift.dart';
 
@@ -66,6 +66,16 @@ class SyncEngine {
 
   /// "Daha fazla yükle" sayfası.
   static const int pageSize = 50;
+
+  /// Arka plan geri doldurmasında (bkz. `SyncController._startBackfill`)
+  /// sayfa başına indirilen ileti sayısı.
+  static const int backfillPageSize = 100;
+
+  /// Artımlı eşitlemede tek FETCH'te istenen en çok UID aralığı.
+  static const int incrementalChunk = 400;
+
+  /// UID aralığı çok seyrekse (büyük boşluklar) en çok bu kadar istek atılır.
+  static const int maxIncrementalChunks = 50;
 
   /// Bayrak karşılaştırması için pencere (CONDSTORE yoksa).
   static const int flagWindow = 500;
@@ -320,18 +330,38 @@ class SyncEngine {
       );
     }
 
-    final fromUid = localHighest != null ? localHighest + 1 : (mailbox.uidNext ?? 1);
+    // `localHighest + 1` tek başına güvenilir DEĞİL: bildirimden açılan tek bir
+    // ileti (bkz. `fetchMessageByUid`) ya da APPEND edilen bir kopya, son
+    // uzlaşmadan SONRAKİ bir UID'yi yerele yazar ve `localHighest`'i öne atar —
+    // aradaki iletiler bir daha hiç çekilmezdi. Son uzlaşmada kaydedilen
+    // `uidNext` bunun üst sınırıdır; küçük olan alınır (silinen son iletiler
+    // yüzünden `localHighest + 1 < uidNext` ise davranış değişmez).
+    final fromUid = localHighest != null
+        ? min(localHighest + 1, mailbox.uidNext ?? localHighest + 1)
+        : (mailbox.uidNext ?? 1);
     if (state.uidNext > fromUid) {
       print('[SYNC_ENGINE] Incremental UID fetch for "${mailbox.path}": $fromUid..${state.uidNext - 1}');
-      final fetched = await _fetchRangeAndStore(
-        accountId,
-        mailbox,
-        fromUid: fromUid,
-        toUid: state.uidNext - 1,
-        skipUids: await _lockedUids(accountId, mailbox.id),
-      );
-      if (fetched is Err<List<int>>) return Err(fetched.failure);
-      newIds = (fetched as Ok<List<int>>).value;
+      // Uzun süre çevrimdışı kalan / çok mail alan kullanıcıda tek bir dev
+      // FETCH zaman aşımına düşer ve her turda aynı yerde tıkanırdı. Aralık
+      // parçalara bölünür; her parça yazıldıkça `localHighest` ilerler, hata
+      // olursa sonraki tur kaldığı yerden devam eder.
+      final skip = await _lockedUids(accountId, mailbox.id);
+      final lastUid = state.uidNext - 1;
+      final span = lastUid - fromUid + 1;
+      final chunk = max(incrementalChunk, (span / maxIncrementalChunks).ceil());
+      final collected = <int>[];
+      for (var start = fromUid; start <= lastUid; start += chunk) {
+        final fetched = await _fetchRangeAndStore(
+          accountId,
+          mailbox,
+          fromUid: start,
+          toUid: min(start + chunk - 1, lastUid),
+          skipUids: skip,
+        );
+        if (fetched is Err<List<int>>) return Err(fetched.failure);
+        collected.addAll((fetched as Ok<List<int>>).value);
+      }
+      newIds = collected;
       print('[SYNC_ENGINE] Fetched ${newIds.length} new envelopes for "${mailbox.path}"');
     } else if (state.uidNext <= 0 && state.messageCount > mailbox.totalCount) {
       // Sunucu UIDNEXT bildirmiyor (state.uidNext == 0): yeni iletileri sıra numarası artışıyla çek.
@@ -439,12 +469,59 @@ class SyncEngine {
       uids: [for (final row in movable) row.uid!],
       targetPath: junk.path,
       sourcePath: mailbox.path,
+      sourceEncodedPath: mailbox.encodedPath,
+      targetEncodedPath: junk.encodedPath,
     );
     if (moved is Err<void>) return const {};
     final ids = [for (final row in movable) row.id];
     await _db.deleteMessages(ids);
     return ids.toSet();
   }
+
+  /// Tek bir iletiyi UID'sine göre getirip yerele yazar (bildirim hedefi).
+  ///
+  /// Klasörün tamamını eşitlemez: tek `SELECT` + tek `UID FETCH` (+ gövde).
+  /// Dönüş, yerel satırın kimliğidir; ileti sunucuda artık yoksa ya da klasörün
+  /// UIDVALIDITY'si [expectedUidValidity]/yerel kayıttan farklıysa (UID artık
+  /// başka bir iletiyi gösterir) `Ok(null)`.
+  ///
+  /// Klasörün eşitleme durumuna (`uidNext`, `highestModSeq`, …) DOKUNMAZ; tam
+  /// eşitleme bunu kendi hesabıyla ve eksik iletileri tamamlayarak sürdürür
+  /// (bkz. `_syncMailbox`'taki `fromUid`).
+  Future<Result<int?>> fetchMessageByUid({
+    required int accountId,
+    required MailboxRow mailbox,
+    required int uid,
+    int? expectedUidValidity,
+    bool withBody = true,
+  }) => _connection.exclusive<int?>(accountId, () async {
+    final current = await _db.mailboxById(mailbox.id) ?? mailbox;
+    final selected = await _connection.imap.selectMailbox(
+      current.path,
+      encodedPath: current.encodedPath,
+    );
+    if (selected is Err<MailboxState>) return Err(selected.failure);
+    final state = (selected as Ok<MailboxState>).value;
+
+    final known = expectedUidValidity ?? current.uidValidity;
+    if (known != null && state.uidValidity != 0 && known != state.uidValidity) {
+      return const Ok(null);
+    }
+
+    final fetched = await _fetchAndStore(accountId, current, [uid]);
+    if (fetched is Err<List<int>>) return Err(fetched.failure);
+    final row = await _db.messageByUid(current.id, uid);
+    if (row == null) return const Ok(null);
+
+    if (withBody && row.bodyFetchedAt == null) {
+      // Gövde bu bağlantı hâlâ ilgili klasör seçiliyken hemen alınır: ileti
+      // ekranı içeriğiyle açılır, ana bağlantının işlem sırasını beklemez.
+      // Başarısızlık iletiyi açmayı engellemez; ekran gövdeyi kendisi ister.
+      final body = await _connection.imap.fetchBody(uid);
+      if (body is Ok<FetchedBody>) await storeBody(row, body.value);
+    }
+    return Ok(row.id);
+  });
 
   /// Daha eski iletileri sayfa sayfa indirir.
   Future<Result<int>> loadOlder({

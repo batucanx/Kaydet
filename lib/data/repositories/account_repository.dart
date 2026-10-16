@@ -424,9 +424,6 @@ class AccountRepository {
     atRoot: atRoot,
   );
 
-  Future<void> setFolderFavorite(int mailboxId, bool value) =>
-      _folders.setFavorite(mailboxId, value);
-
   Future<void> reorderFolders(List<int> orderedIds) =>
       _folders.reorderFolders(orderedIds);
 

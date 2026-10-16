@@ -23,11 +23,13 @@ export function describeMessage(m: FetchMessageObject): NewMessage | null {
   const fromName = (from?.name || from?.address || 'Yeni ileti').trim();
   const subject = (m.envelope?.subject ?? '').trim() || '(Konu yok)';
   const date = m.envelope?.date;
+  const messageId = m.envelope?.messageId?.trim();
   return {
     uid: m.uid,
     fromName: clip(fromName),
     subject: clip(subject),
     ...(date ? { date: new Date(date).toISOString() } : {}),
+    ...(messageId ? { messageId } : {}),
   };
 }
 
@@ -234,7 +236,7 @@ export class AccountWatcher {
     // hemen ardından sunucudan alınıp düzeltilir.
     repo.setUnread(this.account.id, stored.unread + unseen.length);
     const updated = repo.getAccount(this.account.id)!;
-    await notifier.notify(updated, unseen);
+    await notifier.notify(updated, unseen, uidValidity);
     await this.refreshUnread(client);
   }
 }

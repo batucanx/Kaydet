@@ -4,6 +4,7 @@ import { SecretBox } from '../src/crypto.js';
 import { openDatabase } from '../src/db.js';
 import { AzureTranslatorProvider, TranslateProviderError } from '../src/azure-translator.js';
 import type { DetectedLanguage, TranslateProvider } from '../src/azure-translator.js';
+import { InstallRegistry } from '../src/installs.js';
 import { Repository } from '../src/repository.js';
 import {
   TranslationService,
@@ -457,13 +458,14 @@ describe('dil algılama (servis)', () => {
     const s = setup();
     const app = buildApp({
       repo: new Repository(s.db, new SecretBox('c'.repeat(64))),
+      installs: new InstallRegistry(s.db),
       apiKey: 'k'.repeat(40),
       translation: s.service,
     });
     const res = await app.inject({
       method: 'POST',
       url: '/v1/translate/detect',
-      headers: { authorization: `Bearer ${'k'.repeat(40)}` },
+      headers: { authorization: `Bearer ${'k'.repeat(40)}`, 'x-install-id': 'a'.repeat(32), 'x-install-secret': 'b'.repeat(64) },
       payload: { userId: 'user-000001', sample: 'Hello there' },
     });
     expect(res.statusCode).toBe(200);
@@ -503,7 +505,8 @@ describe('Azure hata senaryoları (servis)', () => {
 
 describe('POST /v1/translate', () => {
   const API_KEY = 'k'.repeat(40);
-  const auth = { authorization: `Bearer ${API_KEY}` };
+  const INSTALL = { 'x-install-id': 'a'.repeat(32), 'x-install-secret': 'b'.repeat(64) };
+  const auth = { authorization: `Bearer ${API_KEY}`, ...INSTALL };
   let s: ReturnType<typeof setup>;
   let app: ReturnType<typeof buildApp>;
 
@@ -511,6 +514,7 @@ describe('POST /v1/translate', () => {
     s = setup({ monthlyLimit: 40, warningLimit: 30 });
     app = buildApp({
       repo: new Repository(s.db, new SecretBox('c'.repeat(64))),
+      installs: new InstallRegistry(s.db),
       apiKey: API_KEY,
       translation: s.service,
     });
@@ -553,7 +557,7 @@ describe('POST /v1/translate', () => {
   });
 
   it('servis yoksa 503 TRANSLATION_UNAVAILABLE', async () => {
-    const bare = buildApp({ repo: new Repository(s.db, new SecretBox('c'.repeat(64))), apiKey: API_KEY });
+    const bare = buildApp({ repo: new Repository(s.db, new SecretBox('c'.repeat(64))), installs: new InstallRegistry(s.db), apiKey: API_KEY });
     const res = await bare.inject({ method: 'POST', url: '/v1/translate', headers: auth, payload: body() });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ error: 'TRANSLATION_UNAVAILABLE' });

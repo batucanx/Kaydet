@@ -98,6 +98,18 @@
                 android:value="Persistent IMAP IDLE connection that delivers new-mail notifications instantly" />
         </service>
 
+        <!-- Android anlık bildirimi: FCM yalnızca-veri mesajı (bkz.
+             KaydetMessagingService, backend/src/fcm.ts). Firebase,
+             `google-services.json` yoksa hiç başlamaz; bu durumda uygulama
+             ön plan servisine düşer. -->
+        <service
+            android:name=".KaydetMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- Samsung Exynos / Mali GPU cihazlarda Gralloc4 format 59 (0x3b) ve Impeller Vulkan uyumsuzluğunu önlemek için -->
         <meta-data
             android:name="io.flutter.embedding.android.EnableImpeller"

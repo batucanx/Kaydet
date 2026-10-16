@@ -11,13 +11,13 @@ class _FakeApi implements RemotePushApi {
   String baseUrl = 'https://test.example.com';
 
   final List<RemotePushAccount> upserted = [];
-  final List<({String apnsToken, int clientAccountId})> deletedAccounts = [];
+  final List<({String pushToken, int clientAccountId})> deletedAccounts = [];
   final List<String> deletedDevices = [];
   final Set<int> registeredAccountIds = {};
   Object? failWith;
 
   @override
-  Future<List<int>> listRegisteredAccountIds(String apnsToken) async {
+  Future<List<int>> listRegisteredAccountIds(String pushToken) async {
     if (failWith != null) throw failWith!;
     return registeredAccountIds.toList();
   }
@@ -31,18 +31,18 @@ class _FakeApi implements RemotePushApi {
 
   @override
   Future<void> deleteAccount({
-    required String apnsToken,
+    required String pushToken,
     required int clientAccountId,
   }) async {
     if (failWith != null) throw failWith!;
-    deletedAccounts.add((apnsToken: apnsToken, clientAccountId: clientAccountId));
+    deletedAccounts.add((pushToken: pushToken, clientAccountId: clientAccountId));
     registeredAccountIds.remove(clientAccountId);
   }
 
   @override
-  Future<void> deleteDevice(String apnsToken) async {
+  Future<void> deleteDevice(String pushToken) async {
     if (failWith != null) throw failWith!;
-    deletedDevices.add(apnsToken);
+    deletedDevices.add(pushToken);
     registeredAccountIds.clear();
   }
 }
@@ -203,7 +203,7 @@ void main() {
 
     expect(ok, isTrue);
     expect(api.deletedDevices, [token]);
-    expect(api.upserted.last.apnsToken, newToken);
+    expect(api.upserted.last.pushToken, newToken);
     expect(store.read().token, newToken);
   });
 

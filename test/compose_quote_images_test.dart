@@ -20,7 +20,6 @@ import 'package:kaydet/data/services/quick_templates_store.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/data/services/smtp_service.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
-import 'package:kaydet/domain/use_cases/email_html_codec.dart';
 import 'package:kaydet/ui/features/compose/compose_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -219,9 +218,6 @@ void main() {
     of: find.byType(QuillEditor),
     matching: find.byType(Image),
   );
-
-  QuillController controllerOf(WidgetTester tester) =>
-      tester.widget<QuillEditor>(find.byType(QuillEditor)).controller;
 
   List<String> embeddedImages(QuillController c) => c.document
       .toDelta()

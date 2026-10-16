@@ -18,10 +18,13 @@ import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
 import '../data/services/smtp_service.dart';
+import '../data/services/install_credentials.dart';
+import 'remote_push_controller.dart';
 import 'remote_push_flag.dart';
 
 /// Arka plan senkronizasyonu.
 ///
+/// Android'de WorkManager'ın en sık 15 dakikalık periyot sınırı vardır; bu
 /// sınır işletim sistemi tarafından dayatılır ve aşılamaz. Bu görev bu yüzden
 /// ANLIK bildirimin değil, yedeğinin işidir: "Anlık" modda ön plan servisi
 /// (bkz. `PushService`) IMAP IDLE ile iletileri geldikleri anda yakalar;
@@ -117,12 +120,97 @@ void pushBackgroundSync() {
   unawaited(run());
 }
 
-/// Arka planda tek bir eşitleme turu — cihazdaki TÜM hesapları sırayla
-/// eşitler (bkz. `MailConnection` dosya başı açıklaması: tek bağlantı
-/// hesap değiştirerek sırayla kullanılır, eşzamanlı değil).
+/// Android FCM mesajının giriş noktası (bkz. `FcmSyncWorker.kt`, ki o yeni bir
+/// `FlutterEngine`i doğrudan bu fonksiyonla başlatır). iOS'taki
+/// [pushBackgroundSync]in karşılığıdır.
 ///
-/// Dönüş `false` olursa WorkManager görevi yeniden dener.
-Future<bool> runBackgroundSync() async {
+/// Native taraf yükü `takePayload` ile verir: ya yeni ileti haberi (yalnızca
+/// o hesap eşitlenir, hızlı) ya da FCM token'ının yenilendiği (sunucu kaydı
+/// güncellenir; bkz. [reconcileRemotePushInBackground]). Sonuç
+/// `syncComplete` ile bildirilir; `false` olursa WorkManager üstel geri
+/// çekilmeyle yeniden dener.
+@pragma('vm:entry-point')
+void fcmBackgroundSync() {
+  WidgetsFlutterBinding.ensureInitialized();
+  DartPluginRegistrant.ensureInitialized();
+  const channel = MethodChannel('tr.com.pazarlik.kaydet/fcm_background');
+
+  Future<void> run() async {
+    var success = false;
+    try {
+      final payload = await channel.invokeMapMethod<String, Object?>(
+        'takePayload',
+      );
+      if (payload?['reason'] == 'token') {
+        success = await reconcileRemotePushInBackground(
+          token: payload?['token'] as String?,
+        );
+      } else {
+        success = await runBackgroundSync(
+          onlyAccountId: payload?['accountId'] as int?,
+          retryOnError: true,
+        );
+      }
+    } on Object catch (_) {
+      success = false;
+    }
+    try {
+      await channel.invokeMethod<void>('syncComplete', {'success': success});
+    } on Object catch (_) {
+      // Native taraf zaten zaman aşımıyla başarısız sayar.
+    }
+  }
+
+  unawaited(run());
+}
+
+/// Arka planda sunucu kaydını günceller (Android: FCM token'ı uygulama
+/// kapalıyken yenilendi). Aksi hâlde sunucu eski token'a gönderip
+/// `UNREGISTERED` alır, cihazı siler ve kullanıcı uygulamayı açana kadar push
+/// alamazdı. Dönüş `false` ise yeniden denenir.
+Future<bool> reconcileRemotePushInBackground({required String? token}) async {
+  if (token == null || token.isEmpty) return true;
+  final database = AppDatabase();
+  try {
+    final settingsStore = await AppSettingsStore.create();
+    final built = buildRemotePushSync(
+      preferences: settingsStore.preferences,
+      readPassword: FlutterSecureStore().readPassword,
+      credentials: SecureInstallCredentials(kaydetSecureStorage),
+    );
+    if (built == null) return true;
+    try {
+      return await built.sync.sync(
+        token: token,
+        enabled: wantsServerPush(settingsStore.read()),
+        accounts: await database.allAccounts(),
+      );
+    } finally {
+      built.dispose();
+    }
+  } on Object catch (_) {
+    return false;
+  } finally {
+    await database.close();
+  }
+}
+
+/// Arka planda tek bir eşitleme turu — cihazdaki hesapları sırayla eşitler
+/// (bkz. `MailConnection` dosya başı açıklaması: tek bağlantı hesap
+/// değiştirerek sırayla kullanılır, eşzamanlı değil).
+///
+/// [onlyAccountId] doluysa yalnızca o hesap eşitlenir (push'un haber verdiği
+/// hesap; diğer hesapların bağlantı kurma maliyeti ödenmez). Hesap artık
+/// cihazda yoksa iş yapılacak bir şey kalmamıştır.
+///
+/// Dönüş `false` olursa WorkManager görevi yeniden dener. [retryOnError]
+/// doluyken beklenmeyen hatalar da `false` döner (push tabanlı çağrılarda
+/// ileti kaybolmasın diye); periyodik görevde hata yutulur, çünkü bir sonraki
+/// tur zaten gelir.
+Future<bool> runBackgroundSync({
+  int? onlyAccountId,
+  bool retryOnError = false,
+}) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final database = AppDatabase();
@@ -131,11 +219,14 @@ Future<bool> runBackgroundSync() async {
   final notifier = NewMailNotifier(
     database: database,
     notifications: NotificationService(),
-  remotePushShowsAlerts: remotePushShowsAlerts,
+    remotePushShowsAlerts: remotePushShowsAlerts,
   );
 
   try {
-    final accounts = await database.allAccounts();
+    final accounts = [
+      for (final account in await database.allAccounts())
+        if (onlyAccountId == null || account.id == onlyAccountId) account,
+    ];
     if (accounts.isEmpty) return true;
 
     final settingsStore = await AppSettingsStore.create();
@@ -207,8 +298,9 @@ Future<bool> runBackgroundSync() async {
     return !shouldRetry;
   } catch (_) {
     // Arka planda çökmek görevin sürekli yeniden denenmesine yol açar;
-    // hata yutulur ve bir sonraki tur beklenir.
-    return true;
+    // hata yutulur ve bir sonraki tur beklenir. Push tabanlı çağrıda ise
+    // bir sonraki tur beklenemez (yeni push gelmeyebilir): yeniden denenir.
+    return !retryOnError;
   } finally {
     await imap.dispose();
     await database.close();

@@ -26,6 +26,60 @@ class NotificationTap {
   final NotificationTapKind kind;
 }
 
+/// Dokunulan uzak (APNs) bildirimin işaret ettiği ileti.
+///
+/// `uid` klasöre özgüdür ve UIDVALIDITY değişince anlamını yitirir; bu yüzden
+/// yük, mümkün olduğunda klasörü, `uidValidity`'yi ve RFC 5322 `Message-ID`'yi
+/// de taşır (bkz. backend/src/notifier.ts `targetData`).
+class RemoteMailTarget {
+  const RemoteMailTarget({
+    required this.uid,
+    this.accountId,
+    this.folder,
+    this.uidValidity,
+    this.messageId,
+    this.eventId,
+  });
+
+  final int uid;
+  final int? accountId;
+
+  /// Klasör yolu; push yalnızca Gelen Kutusu için gönderilir (`INBOX`).
+  final String? folder;
+  final int? uidValidity;
+
+  /// Normalleştirilmemiş `Message-ID` başlığı (varsa).
+  final String? messageId;
+
+  /// Sistemin bildirime verdiği benzersiz kimlik; aynı bildirimin iki kez
+  /// işlenmesini önler.
+  final String? eventId;
+
+  /// Native kanalın `takePendingMailOpen` yanıtından; `uid` yoksa `null`.
+  static RemoteMailTarget? fromChannel(Map<String, Object?>? reply) {
+    final uid = reply?['uid'];
+    if (reply == null || uid is! int) return null;
+    int? intOf(String key) {
+      final value = reply[key];
+      return value is int ? value : null;
+    }
+
+    String? textOf(String key) {
+      final value = reply[key];
+      return value is String && value.isNotEmpty ? value : null;
+    }
+
+    return RemoteMailTarget(
+      uid: uid,
+      accountId: intOf('accountId'),
+      folder: textOf('folder'),
+      uidValidity: intOf('uidValidity'),
+      messageId: textOf('messageId'),
+      eventId: textOf('eventId'),
+    );
+  }
+}
+
 /// Yeni ileti bildirimleri.
 ///
 /// Görünüm Outlook'u izler: başlıkta gönderen, kapalı hâlde konu, açılınca
@@ -73,25 +127,29 @@ class NotificationService {
       StreamController<int?>.broadcast();
   static Stream<int?> get remotePushes => _remotePushController.stream;
 
+  /// Platform köprüsünün (Android: `AndroidPushChannel`) ön plandaki uzak
+  /// push'u aynı akışa iletmesi için.
+  static void deliverRemotePush(int? accountId) =>
+      _remotePushController.add(accountId);
+
   /// iOS'ta uzak (APNs) bildirime dokunulduğunda uyarır; hedef
   /// [takePendingMailOpen] ile çekilir.
   static final StreamController<void> _mailTapController =
       StreamController<void>.broadcast();
   static Stream<void> get mailTaps => _mailTapController.stream;
 
-  /// Dokunulan uzak bildirimin hesabı ve IMAP uid'si (yoksa `null`). Tek
-  /// seferliktir: okunca native tarafta silinir.
-  Future<({int? accountId, int uid})?> takePendingMailOpen() async {
+  /// Dokunulan uzak bildirimin hedefi (bkz. [RemoteMailTarget]). Tek
+  /// seferliktir: okunca native tarafta silinir. Hedef yoksa `null`.
+  Future<RemoteMailTarget?> takePendingMailOpen() async {
     if (!Platform.isIOS) return null;
     try {
       final reply = await _iosChannel.invokeMapMethod<String, Object?>(
         'takePendingMailOpen',
       );
-      final uid = reply?['uid'];
-      if (uid is! int) return null;
-      final accountId = reply?['accountId'];
-      return (accountId: accountId is int ? accountId : null, uid: uid);
+      return RemoteMailTarget.fromChannel(reply);
     } on PlatformException catch (_) {
+      return null;
+    } on MissingPluginException catch (_) {
       return null;
     }
   }
