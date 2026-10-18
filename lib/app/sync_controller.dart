@@ -793,6 +793,9 @@ class SyncController extends Notifier<SyncState> {
     }
   }
 
+  /// Geri doldurma, ilk tur bittikten bu kadar sonra başlar (bkz. [_backfill]).
+  static const Duration _backfillStartDelay = Duration(seconds: 4);
+
   /// Arka planda geri doldurması sürmekte olan klasörler.
   final Set<int> _backfilling = {};
 
@@ -813,6 +816,10 @@ class SyncController extends Notifier<SyncState> {
   }
 
   Future<void> _backfill(int accountId, int mailboxId) async {
+    // Soğuk açılışta kullanıcı ilk iletilerine bakar/açar; tek bağlantı tek
+    // işlem yapabildiği için geri doldurma sayfaları (100 başlık) o ilk
+    // saniyelerde kullanıcının dokunuşunun önüne girmesin.
+    await Future<void>.delayed(_backfillStartDelay);
     final db = ref.read(databaseProvider);
     final engine = ref.read(syncEngineProvider);
     // Üst sınır: bozuk bir sunucu yanıtı sonsuz döngü yaratmasın.

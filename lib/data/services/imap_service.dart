@@ -511,11 +511,16 @@ class EnoughMailImapService implements ImapService {
   /// otomatik olarak okundu işaretlerdi ve gelen kutusu ilk açılışta
   /// kendiliğinden okunmuş görünürdü.
   ///
-  /// Tam başlık bloğu çekilir çünkü ENVELOPE `References` başlığını
-  /// içermez ve konuşma gruplaması bu başlığa bağlıdır.
+  /// Tam başlık bloğu DEĞİL, yalnızca gereken alanlar çekilir: ENVELOPE
+  /// `References` başlığını içermez ve konuşma gruplaması bu başlığa bağlıdır
+  /// (`_toEnvelope` yalnızca bunları ve ENVELOPE'un eksik kalırsa yedek olarak
+  /// kullandığı alanları okur). Tam blok (Received zinciri, DKIM/ARC imzaları)
+  /// ileti başına birkaç KB'tır; 50-100 iletilik bir ilk indirmede yüzlerce KB
+  /// gereksiz veri ve yavaş bağlantıda saniyeler demektir.
   static const String _envelopeCriteria =
       '(UID FLAGS INTERNALDATE RFC822.SIZE ENVELOPE BODYSTRUCTURE '
-      'BODY.PEEK[HEADER])';
+      'BODY.PEEK[HEADER.FIELDS (REFERENCES IN-REPLY-TO MESSAGE-ID SUBJECT '
+      'DATE FROM TO CC)])';
 
   @override
   Future<Result<List<FetchedEnvelope>>> fetchEnvelopes(List<int> uids) =>
