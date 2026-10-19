@@ -82,14 +82,14 @@ void main() {
     test('geçerli belge yoksa NoSettings; daha yeni biçim varsa NewerSettings', () {
       expect(pickLatestSettings(const []), isA<NoSettings>());
       expect(pickLatestSettings(['{"format":"baska"}', '[]']), isA<NoSettings>());
-      final future = jsonEncode({...doc(9).toJson(), 'v': 4});
+      final future = jsonEncode({...doc(9).toJson(), 'v': 5});
       expect(
         pickLatestSettings([serializeSettingsDocument(doc(2)), future]),
         isA<NewerSettings>(),
       );
     });
 
-    test('v1 belge (şablonsuz) okunur; yazılan belge v3 ve şablonları taşır', () {
+    test('v1 belge (şablonsuz) okunur; yazılan belge v4 ve şablonları taşır', () {
       final v1 = jsonEncode({
         'format': 'kaydet-settings',
         'v': 1,
@@ -113,7 +113,7 @@ void main() {
           },
         ),
       );
-      expect(withTemplate.toJson()['v'], 3);
+      expect(withTemplate.toJson()['v'], 4);
       expect((old).document.data.blockedSenders, isEmpty);
       final back = pickLatestSettings([serializeSettingsDocument(withTemplate)]);
       expect(
@@ -153,6 +153,38 @@ void main() {
       );
     });
 
+    test('v3 belge (kişisiz) okunur; kişiler v4 olarak gidip gelir', () {
+      final v3 = jsonEncode({
+        'format': 'kaydet-settings',
+        'v': 3,
+        'rev': 1,
+        'updatedAt': 'x',
+        'writer': 'web',
+        'labels': <String, Object?>{},
+        'signatures': <String, Object?>{},
+        'templates': <String, Object?>{},
+        'blockedSenders': <String, Object?>{},
+      });
+      final old = pickLatestSettings([v3]);
+      expect((old as FoundSettings).document.data.contacts, isEmpty);
+
+      const withContacts = SettingsDocument(
+        rev: 2,
+        updatedAt: '2026-10-02T10:00:00.000Z',
+        writer: 'mobile',
+        data: SettingsData(
+          contacts: {
+            'a@x.com': {'email': 'a@x.com', 'name': 'Ayşe'},
+          },
+        ),
+      );
+      final back = pickLatestSettings([serializeSettingsDocument(withContacts)]);
+      expect(
+        (back as FoundSettings).document.data.contacts['a@x.com'],
+        {'email': 'a@x.com', 'name': 'Ayşe'},
+      );
+    });
+
     test('bozuk ya da aşırı büyük belge reddedilir', () {
       expect(
         pickLatestSettings(['{"format":"kaydet-settings","v":1,"rev":-1}']),
@@ -188,6 +220,51 @@ void main() {
       for (final line in mime.split('\r\n')) {
         expect(line.length, lessThanOrEqualTo(78));
       }
+    });
+  });
+
+  group('mergeSettings — kişiler', () {
+    SettingsData book(List<(String, String)> names) => SettingsData(
+      contacts: {
+        for (final (email, name) in names) email: {'email': email, 'name': name},
+      },
+    );
+
+    test('bir tarafta eklenen kişi diğerine geçer; iki taraftaki eklemeler korunur', () {
+      final base = book([('a@x.com', 'A')]);
+      final r = mergeSettings(
+        base: base,
+        local: book([('a@x.com', 'A'), ('b@x.com', 'B')]),
+        remote: book([('a@x.com', 'A'), ('c@x.com', 'C')]),
+      );
+      expect(r.merged.contacts.keys.toList(), ['a@x.com', 'b@x.com', 'c@x.com']);
+      expect(r.pushNeeded, isTrue);
+      expect(r.localChanged, isTrue);
+    });
+
+    test('burada silinen kişi orada da silinir; orada verilen ad bizim silmemize üstün gelir', () {
+      final base = book([('a@x.com', 'A'), ('b@x.com', 'B')]);
+      final r = mergeSettings(
+        base: base,
+        local: book([('b@x.com', 'B')]),
+        remote: book([('a@x.com', 'A'), ('b@x.com', 'B')]),
+      );
+      expect(r.merged.contacts.keys.toList(), ['b@x.com']);
+      final renamedThere = mergeSettings(
+        base: base,
+        local: book([('b@x.com', 'B')]),
+        remote: book([('a@x.com', 'Ayşe'), ('b@x.com', 'B')]),
+      );
+      expect(renamedThere.merged.contacts['a@x.com'], {'email': 'a@x.com', 'name': 'Ayşe'});
+    });
+
+    test('yeni cihaz (ata yok) sunucunun defterini alır ve kendi fazlalıklarını korur', () {
+      final r = mergeSettings(
+        base: null,
+        local: book([('x@x.com', 'X')]),
+        remote: book([('a@x.com', 'A')]),
+      );
+      expect(r.merged.contacts.keys.toList(), ['a@x.com', 'x@x.com']);
     });
   });
 }

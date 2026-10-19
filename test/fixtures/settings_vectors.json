@@ -1620,5 +1620,291 @@
       "pushNeeded": true,
       "localChanged": false
     }
+  },
+  {
+    "name": "contacts: added on both sides, both kept",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        },
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        },
+        "c@x.com": {
+          "email": "c@x.com",
+          "name": "C"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "A"
+          },
+          "b@x.com": {
+            "email": "b@x.com",
+            "name": "B"
+          },
+          "c@x.com": {
+            "email": "c@x.com",
+            "name": "C"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "contacts: removed here, removed there",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        },
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        },
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {
+          "b@x.com": {
+            "email": "b@x.com",
+            "name": "B"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "contacts: a name given there wins over our deletion",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        },
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "Ayse"
+        },
+        "b@x.com": {
+          "email": "b@x.com",
+          "name": "B"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "Ayse"
+          },
+          "b@x.com": {
+            "email": "b@x.com",
+            "name": "B"
+          }
+        }
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "contacts: first contact, the server's names win and our extra contacts are kept",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "Yerel"
+        },
+        "x@x.com": {
+          "email": "x@x.com",
+          "name": "X"
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "Sunucu"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "Sunucu"
+          },
+          "x@x.com": {
+            "email": "x@x.com",
+            "name": "X"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "contacts: first contact, nothing on the server: push the book",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {
+        "a@x.com": {
+          "email": "a@x.com",
+          "name": "A"
+        }
+      }
+    },
+    "remote": null,
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {
+          "a@x.com": {
+            "email": "a@x.com",
+            "name": "A"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
   }
 ]

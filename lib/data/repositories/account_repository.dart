@@ -9,6 +9,7 @@ import '../../domain/models/mail_models.dart';
 import '../../domain/use_cases/label_keywords.dart';
 import '../database/app_database.dart';
 import '../services/imap_service.dart';
+import '../services/contacts_archive.dart';
 import '../services/secure_store.dart';
 import '../services/smtp_service.dart';
 import 'folder_repository.dart';
@@ -56,7 +57,9 @@ class AccountRepository {
     required SmtpService smtpService,
     required MailConnection connection,
     SettingsSyncService? settingsSync,
+    ContactsArchive? contactsArchive,
   }) : _db = database,
+       _contactsArchive = contactsArchive,
        _secureStore = secureStore,
        _imap = imapService,
        _smtp = smtpService,
@@ -73,6 +76,9 @@ class AccountRepository {
 
   /// Etiket/imza değişikliklerini web ile eşitler (bkz. `SettingsSyncService`).
   final SettingsSyncService? _settingsSync;
+
+  /// Çıkışta silinen kişi defterini hesabın e-postasına göre saklar, yeniden girişte geri verir.
+  final ContactsArchive? _contactsArchive;
 
   /// Çıkışta IMAP oturumunun kapanması için beklenen en uzun süre.
   static const Duration _disconnectTimeout = Duration(seconds: 5);
@@ -194,6 +200,7 @@ class AccountRepository {
       accountId = existing.id;
     } else {
       accountId = await _db.insertAccount(companion);
+      await _restoreArchivedContacts(accountId, email);
       // Ayar eşitlemesi varsayılanları kendisi oluşturur (yalnızca sunucuda ayar belgesi yoksa): burada
       // oluşturulsaydı hesabı silip yeniden ekleyen kullanıcıda silinmiş varsayılanlar geri dönerdi.
       if (_settingsSync?.seedsDefaults != true) {
@@ -537,9 +544,16 @@ class AccountRepository {
     required int accountId,
     required String email,
     required String name,
-  }) => _db.upsertContact(accountId: accountId, email: email, name: name);
+  }) async {
+    await _db.upsertContact(accountId: accountId, email: email, name: name);
+    _settingsSync?.schedule(accountId); // web de görsün (ayar belgesi)
+  }
 
-  Future<void> deleteContact(int contactId) => _db.deleteContact(contactId);
+  Future<void> deleteContact(int contactId) async {
+    final row = await _db.contactById(contactId);
+    await _db.deleteContact(contactId);
+    if (row != null) _settingsSync?.schedule(row.accountId);
+  }
 
   Future<void> updateDisplayName(int accountId, String displayName) =>
       _db.updateAccountFields(
@@ -560,6 +574,9 @@ class AccountRepository {
   /// aksi hâlde etkin hesabın canlı oturumu, alakasız bir hesap listeden
   /// kaldırılırken boşuna kapanır.
   Future<void> signOut(int accountId) async {
+    // Kişiler ve şablonlar çıkışta SİLİNMEZ: şablonlar zaten hesap e-postasına göre ayrı anahtarda
+    // durur; kişi defteri veritabanı satırlarıyla birlikte gideceğinden önce e-postaya göre arşivlenir.
+    await _archiveContacts(accountId);
     final isActiveAccount = (await _db.activeAccount())?.id == accountId;
 
     if (isActiveAccount) {
@@ -589,6 +606,49 @@ class AccountRepository {
         );
       }
     });
+  }
+
+  Future<void> _archiveContacts(int accountId) async {
+    final archive = _contactsArchive;
+    if (archive == null) return;
+    try {
+      final account = await _db.accountById(accountId);
+      if (account == null) return;
+      final rows = await _db.contactsOf(accountId);
+      // Boş defter eski arşivi ezmez.
+      if (rows.isEmpty) return;
+      await archive.save(account.email, [
+        for (final c in rows)
+          ArchivedContact(
+            email: c.email,
+            name: c.name,
+            timesUsed: c.timesUsed,
+            lastUsedAt: c.lastUsedAt,
+          ),
+      ]);
+    } on Object catch (_) {
+      // Arşivleme başarısızsa çıkış yine de sürer.
+    }
+  }
+
+  Future<void> _restoreArchivedContacts(int accountId, String email) async {
+    final archive = _contactsArchive;
+    if (archive == null) return;
+    try {
+      final saved = await archive.read(email);
+      if (saved.isEmpty) return;
+      await _db.restoreContacts(accountId, [
+        for (final c in saved)
+          (
+            email: c.email,
+            name: c.name,
+            timesUsed: c.timesUsed,
+            lastUsedAt: c.lastUsedAt,
+          ),
+      ]);
+    } on Object catch (_) {
+      // Geri yükleme başarısızsa hesap yine eklenir; kişiler eşitlemeyle gelir.
+    }
   }
 
   /// Kimlik doğrulama hatası sonrası (şifre sunucuda değişti ya da cihazın

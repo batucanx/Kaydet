@@ -15,6 +15,7 @@ import '../data/repositories/blocked_sender_repository.dart';
 import '../data/repositories/sender_filter_sync.dart';
 import '../data/services/managesieve_service.dart';
 import '../data/repositories/settings_sync_service.dart';
+import '../data/services/contacts_archive.dart';
 import '../data/services/quick_templates_store.dart';
 import '../data/services/settings_sync_state_store.dart';
 import '../data/repositories/draft_repository_impl.dart';
@@ -204,9 +205,10 @@ final settingsSyncServiceProvider = Provider<SettingsSyncService>((ref) {
     onTemplatesChanged: () =>
         ref.read(quickTemplatesProvider.notifier).refresh(),
   );
-  // Hazır şablonlar bu cihazda değişince (ekle/düzenle/sil) tüm hesapların ayar belgesi yenilenir.
+  // Etkin hesabın şablonları bu cihazda değişince (ekle/düzenle/sil) o hesabın ayar belgesi yenilenir.
   ref.listen(quickTemplatesProvider, (previous, next) {
-    if (previous != null) service.scheduleAll();
+    final id = ref.read(accountIdProvider);
+    if (previous != null && id != null) service.schedule(id);
   });
   ref.onDispose(service.dispose);
   return service;
@@ -220,6 +222,7 @@ final accountRepositoryProvider = Provider<AccountRepository>(
     smtpService: ref.watch(smtpServiceProvider),
     connection: ref.watch(mailConnectionProvider),
     settingsSync: ref.watch(settingsSyncServiceProvider),
+    contactsArchive: const PrefsContactsArchive(),
   ),
 );
 

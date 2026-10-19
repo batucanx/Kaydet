@@ -15,7 +15,7 @@ import '../services/settings_sync_state_store.dart';
 import 'mail_connection.dart';
 import 'sender_filter_sync.dart';
 
-/// Hesabın etiketlerini, imzalarını, hazır şablonlarını ve engellenen kullanıcılarını web istemcisiyle IMAP sunucusundaki tek
+/// Hesabın etiketlerini, imzalarını, hazır şablonlarını, engellenen kullanıcılarını ve kişilerini web istemcisiyle IMAP sunucusundaki tek
 /// bir JSON belgesi üzerinden eşit tutar.
 ///
 /// Biçim ve birleştirme kuralları `settings_document.dart` ve
@@ -54,7 +54,7 @@ class SettingsSyncService {
   /// Sunucudaki filtreyi (Sieve) engellenenler listesiyle aynı tutar. `null` iken filtre hiç yönetilmez.
   final SenderFilterSync? _senderFilter;
 
-  /// Hazır şablonların deposu (cihaza özgü, hesaba değil). `null` iken şablonlar eşitlemeye hiç
+  /// Hazır şablonların deposu (hesaba özgü: `forAccount` ile hesabın e-postasına bağlanır). `null` iken şablonlar eşitlemeye hiç
   /// katılmaz: olduğu gibi taşınır, yerelde bir şey değişmez.
   final QuickTemplatesStore? _templates;
 
@@ -87,6 +87,11 @@ class SettingsSyncService {
   /// Çok sık ardışık turlar (her eşitlemede) sunucuyu boşuna yormasın. Web'de yapılan
   /// etiket/imza değişikliği telefona en geç bu sürenin ardındaki ilk yoklamada iner.
   static const Duration _minGap = Duration(seconds: 10);
+
+  /// Kişi defterinin belgede tutabileceği bayt payı (belgenin tamamı [settingsMaxChars] üstünde reddedilir).
+  /// Belgede ya da son birleştirmede zaten adı geçen kişiler HER ZAMAN paylaşılır; defterin kalanı adlılar
+  /// ve en son kullanılanlar önce olmak üzere bu pay bitene kadar eklenir. Web aynı payı kullanır.
+  static const int _contactsBudgetBytes = 300000;
 
   final Map<int, Future<Result<void>>> _running = {};
   final Map<int, Timer> _scheduled = {};
@@ -225,7 +230,11 @@ class SettingsSyncService {
     // 2. Üç yönlü birleştirme.
     final state = await _state.read(accountId);
     final firstContact = _parseBase(state.baseJson) == null;
-    final templateStore = _templates;
+    // Şablonlar hesaba özgüdür: bu hesabın e-postasına bağlı depo kullanılır (başka hesabın şablonları karışmaz).
+    final account = await _db.accountById(accountId);
+    if (account == null) return okVoid;
+    final templateStore = _templates?.forAccount(account.email);
+    await templateStore?.claimLegacy();
     if (remoteFull != null &&
         firstContact &&
         templateStore != null &&
@@ -238,15 +247,28 @@ class SettingsSyncService {
       ]);
       onTemplatesChanged?.call();
     }
-    var local = await _readLocal(accountId, split.view.templates);
+    // Belgede ya da son birleştirmede adı geçen kişiler yerel görünümde HER ZAMAN yer alır (yokluğu silme sayılırdı).
+    final base = _parseBase(state.baseJson);
+    final sharedContacts = {...?base?.contacts.keys, ...split.view.contacts.keys};
+    var local = await _readLocal(
+      accountId,
+      split.view.templates,
+      sharedContacts,
+      templateStore,
+    );
     if (seedsDefaults &&
         remoteFull == null &&
         firstContact &&
         await _seedDefaults(accountId, local)) {
-      local = await _readLocal(accountId, split.view.templates);
+      local = await _readLocal(
+        accountId,
+        split.view.templates,
+        sharedContacts,
+        templateStore,
+      );
     }
     final result = mergeSettings(
-      base: _parseBase(state.baseJson),
+      base: base,
       local: local.data,
       remote: remoteFull == null ? null : split.view,
     );
@@ -254,7 +276,11 @@ class SettingsSyncService {
     // 3. Karşı taraftaki değişiklikler buraya iner.
     if (result.localChanged) {
       await _applyLocal(accountId, result.merged, local);
-      await _applyTemplates(result.merged.templates, local.templatesById);
+      await _applyTemplates(
+        templateStore,
+        result.merged.templates,
+        local.templatesById,
+      );
     }
 
     // 4. Buradaki değişiklikler (ve birleştirme farkı) sunucuya gider.
@@ -266,12 +292,14 @@ class SettingsSyncService {
         ...result.merged.blockedSenders,
         ...split.skipped.blockedSenders,
       },
+      contacts: {...result.merged.contacts, ...split.skipped.contacts},
     );
     final hasAny =
         full.labels.isNotEmpty ||
         full.signatures.isNotEmpty ||
         full.templates.isNotEmpty ||
-        full.blockedSenders.isNotEmpty;
+        full.blockedSenders.isNotEmpty ||
+        full.contacts.isNotEmpty;
     final push = remoteFull == null
         ? hasAny
         : !settingsDataEqual(full, remoteFull);
@@ -432,6 +460,8 @@ class SettingsSyncService {
   Future<_Local> _readLocal(
     int accountId,
     SettingsCollection remoteTemplates,
+    Set<String> sharedContacts,
+    QuickTemplatesStore? store,
   ) async {
     final labelRows = await _db.labelsOf(accountId);
     final labelsByKey = <String, LabelRow>{};
@@ -471,7 +501,6 @@ class SettingsSyncService {
     final blockedRecords = <String, SettingsRecord>{
       for (final row in blockedRows) row.email: {'email': row.email, 'name': row.name},
     };
-    final store = _templates;
     final templatesById = <String, QuickTemplate>{};
     final templateRecords = <String, SettingsRecord>{};
     if (store == null) {
@@ -487,13 +516,37 @@ class SettingsSyncService {
         };
       }
     }
+    // Kişiler: defterin paylaşılan kısmı (bkz. [_contactsBudgetBytes]).
+    final contactRows = await _db.contactsForSync(accountId);
+    final contactsByEmail = <String, ContactRow>{};
+    final contactRecords = <String, SettingsRecord>{};
+    var budget = _contactsBudgetBytes;
+    int cost(ContactRow c) => c.email.length * 2 + c.name.length + 40;
+    void take(ContactRow c) {
+      contactsByEmail[c.email] = c;
+      contactRecords[c.email] = {'email': c.email, 'name': c.name};
+    }
+
+    for (final c in contactRows) {
+      if (!sharedContacts.contains(c.email)) continue;
+      take(c);
+      budget -= cost(c);
+    }
+    for (final c in contactRows) {
+      if (contactsByEmail.containsKey(c.email)) continue;
+      if (budget < cost(c)) break;
+      budget -= cost(c);
+      take(c);
+    }
     return _Local(
       data: SettingsData(
         labels: labelRecords,
         signatures: sigRecords,
         templates: templateRecords,
         blockedSenders: blockedRecords,
+        contacts: contactRecords,
       ),
+      contactsByEmail: contactsByEmail,
       labelsByKey: labelsByKey,
       signaturesByKey: sigsByKey,
       templatesById: templatesById,
@@ -553,28 +606,44 @@ class SettingsSyncService {
           (name == null || name is String);
       (ok ? blocked : skippedBlocked)[entry.key] = r;
     }
+    final contacts = <String, SettingsRecord>{};
+    final skippedContacts = <String, SettingsRecord>{};
+    for (final entry in remote.contacts.entries) {
+      final r = entry.value;
+      final email = r['email'];
+      final name = r['name'];
+      final ok =
+          email is String &&
+          email == entry.key &&
+          email == email.toLowerCase() &&
+          EmailAddress.isValidEmail(email) &&
+          (name == null || name is String);
+      (ok ? contacts : skippedContacts)[entry.key] = r;
+    }
     return (
       view: SettingsData(
         labels: labels,
         signatures: sigs,
         templates: templates,
         blockedSenders: blocked,
+        contacts: contacts,
       ),
       skipped: SettingsData(
         labels: skippedLabels,
         signatures: skippedSigs,
         templates: skippedTemplates,
         blockedSenders: skippedBlocked,
+        contacts: skippedContacts,
       ),
     );
   }
 
   /// Birleşik şablon kümesini yerel depoya yazar: silinenler gider, değişenler güncellenir, yeniler başa eklenir.
   Future<void> _applyTemplates(
+    QuickTemplatesStore? store,
     SettingsCollection merged,
     Map<String, QuickTemplate> local,
   ) async {
-    final store = _templates;
     if (store == null) return;
     final before = store.read();
     final kept = <QuickTemplate>[];
@@ -742,6 +811,23 @@ class SettingsSyncService {
         await _db.updateBlockedSenderName(existing.id, name);
       }
     }
+
+    // ---- kişiler. Yalnızca paylaşılan kısım yargılanır: payın dışında kalan yerel kişi asla silinmez.
+    for (final entry in local.contactsByEmail.entries) {
+      if (!merged.contacts.containsKey(entry.key)) {
+        await _db.deleteContact(entry.value.id);
+      }
+    }
+    final incoming = <({String email, String name})>[];
+    for (final entry in merged.contacts.entries) {
+      final rawName = entry.value['name'];
+      final name = rawName is String ? rawName.trim() : '';
+      final existing = local.contactsByEmail[entry.key];
+      if (existing == null || (name.isNotEmpty && existing.name != name)) {
+        incoming.add((email: entry.key, name: name));
+      }
+    }
+    await _db.applySyncedContacts(accountId, incoming);
   });
 
   /// Karşı taraftan gelen görsel alanlar; yoksa ya da bu imzanın görseli bu cihazdaysa yerelin kendi değerleri korunur.
@@ -784,6 +870,7 @@ class _Local {
     required this.signaturesByKey,
     required this.templatesById,
     required this.blockedByEmail,
+    required this.contactsByEmail,
   });
 
   final SettingsData data;
@@ -791,4 +878,5 @@ class _Local {
   final Map<String, SignatureRow> signaturesByKey;
   final Map<String, QuickTemplate> templatesById;
   final Map<String, BlockedSenderRow> blockedByEmail;
+  final Map<String, ContactRow> contactsByEmail;
 }

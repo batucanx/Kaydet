@@ -141,6 +141,13 @@ class _Device {
     for (final b in await db.blockedSendersOf(accountId)) '${b.email}:${b.name}',
   ]..sort();
 
+  Future<void> addContact(String email, {String name = ''}) =>
+      db.upsertContact(accountId: accountId, email: email, name: name);
+
+  Future<List<String>> contacts() async => [
+    for (final c in await db.contactsForSync(accountId)) '${c.email}:${c.name}',
+  ]..sort();
+
   Future<List<String>> signatures() async => [
     for (final s in await db.signaturesOf(accountId))
       '${s.name}:${s.body}:${s.isDefault ? 'D' : '-'}',
@@ -232,7 +239,7 @@ void main() {
       await web.sync();
       expect(web.latestDocument()!.data.templates, isEmpty);
 
-      final store = QuickTemplatesStore(); // dokunulmamış: read() yerleşik 5'i döner
+      final store = QuickTemplatesStore().forAccount('info@pazarlik.com.tr'); // dokunulmamış: read() yerleşik 5'i döner
       expect(store.isPristine, isTrue);
       expect(store.read(), hasLength(5));
       final phone = await _Device.create(imap, templates: store);
@@ -244,14 +251,14 @@ void main() {
     });
 
     test('belgedeki şablonlar yerleşiklerin yerine geçer, kopya çıkmaz', () async {
-      final webStore = QuickTemplatesStore();
+      final webStore = QuickTemplatesStore().forAccount('info@pazarlik.com.tr');
       await webStore.replaceAll([
         const QuickTemplate(id: 'builtin-1', title: 'Düzenlenmiş', content: 'x', isBuiltIn: true),
       ]);
       final web = await _Device.create(imap, writer: 'web', templates: webStore);
       await web.sync();
 
-      final store = QuickTemplatesStore();
+      final store = QuickTemplatesStore().forAccount('info@pazarlik.com.tr');
       final phone = await _Device.create(imap, templates: store);
       await phone.sync();
 
@@ -259,7 +266,7 @@ void main() {
     });
 
     test('belge yoksa yerleşik şablonlar belgeye yazılır (ilk telefon)', () async {
-      final store = QuickTemplatesStore();
+      final store = QuickTemplatesStore().forAccount('info@pazarlik.com.tr');
       final phone = await _Device.create(imap, templates: store);
       await phone.sync();
 
@@ -268,12 +275,26 @@ void main() {
       });
     });
 
+    test('başka hesabın şablonları bu hesabın belgesine sızmaz', () async {
+      final base = QuickTemplatesStore();
+      await base.forAccount('baska@ornek.com').replaceAll([
+        const QuickTemplate(id: 'baska', title: 'Başka', content: 'z', isBuiltIn: false),
+      ]);
+      final phone = await _Device.create(imap, templates: base);
+      await phone.sync();
+
+      final doc = phone.latestDocument()!.data.templates.keys.toSet();
+      expect(doc, isNot(contains('baska')));
+      expect(doc, contains('builtin-1'));
+      expect(base.forAccount('baska@ornek.com').read().map((t) => t.id), ['baska']);
+    });
+
     test('kullanıcı şablonlarına dokunmuşsa belge onları ezmez (birleştirme sürer)', () async {
       final web = await _Device.create(imap, writer: 'web');
       await web.addLabel('Proje', 4, keyword: 'kaydet_proje');
       await web.sync();
 
-      final store = QuickTemplatesStore();
+      final store = QuickTemplatesStore().forAccount('info@pazarlik.com.tr');
       await store.replaceAll([
         const QuickTemplate(id: 'mine', title: 'Benim', content: 'y', isBuiltIn: false),
       ]);
@@ -391,7 +412,7 @@ void main() {
     ));
     imap.store['INBOX.Kaydet-Settings'] = {};
     final future = jsonEncode({
-      'format': 'kaydet-settings', 'v': 4, 'rev': 40, 'updatedAt': 'x',
+      'format': 'kaydet-settings', 'v': 5, 'rev': 40, 'updatedAt': 'x',
       'writer': 'gelecek', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
     });
     await imap.appendMessage(
@@ -626,5 +647,75 @@ void main() {
     await phone.sync();
     expect(await phone.blocked(), ['a@spam.example:', 'b@spam.example:']);
     expect(phone.latestDocument()!.data.blockedSenders['Tuhaf Anahtar'], {'email': 'adres degil'});
+  });
+
+  test('kişi defteri iki yönde taşınır; yeniden kurulumda (yeni veritabanı) belgeden geri gelir; silme de gider', () async {
+    final phone = await _Device.create(imap);
+    await phone.addContact('ayse@example.com', name: 'Ayşe');
+    await phone.addContact('can@example.com');
+    await phone.sync();
+    expect(phone.latestDocument()!.data.contacts, {
+      'ayse@example.com': {'email': 'ayse@example.com', 'name': 'Ayşe'},
+      'can@example.com': {'email': 'can@example.com', 'name': ''},
+    });
+
+    // Aynı posta kutusu, boş bir veritabanında (çıkış yapılıp yeniden girildi): defter belgeden gelir.
+    final again = await _Device.create(imap, writer: 'web');
+    await again.sync();
+    expect(await again.contacts(), ['ayse@example.com:Ayşe', 'can@example.com:']);
+
+    final can = (await again.db.contactsForSync(again.accountId)).firstWhere((c) => c.email == 'can@example.com');
+    await again.db.deleteContact(can.id);
+    await again.sync();
+    await phone.sync();
+    expect(await phone.contacts(), ['ayse@example.com:Ayşe']);
+    expect(phone.latestDocument()!.data.contacts.keys, ['ayse@example.com']);
+  });
+
+  test('bir istemcide verilen ad diğerine geçer; adsız görülen kişi bilinen adı silmez; kullanım sayacı belgeye girmez', () async {
+    final phone = await _Device.create(imap);
+    final web = await _Device.create(imap, writer: 'web');
+    await phone.addContact('ayse@example.com');
+    await phone.sync();
+    await web.sync();
+    await phone.addContact('ayse@example.com', name: 'Ayşe Hanım');
+    await phone.sync();
+    await web.sync();
+    expect(await web.contacts(), ['ayse@example.com:Ayşe Hanım']);
+
+    await web.addContact('ayse@example.com'); // adsız, bir kullanım daha
+    await web.sync();
+    expect(await web.contacts(), ['ayse@example.com:Ayşe Hanım']);
+    expect(web.latestDocument()!.data.contacts['ayse@example.com'], {'email': 'ayse@example.com', 'name': 'Ayşe Hanım'});
+  });
+
+  test('tanınmayan kişi kaydı yargılanmaz ve silinmez; web tarafının yazdığı v4 belge okunur', () async {
+    final phone = await _Device.create(imap);
+    await phone.addContact('a@example.com', name: 'A');
+    await phone.sync();
+    final latest = phone.latestDocument()!;
+    final box = imap.mailboxes.firstWhere((m) => isSettingsMailbox(m.path, m.delimiter));
+    final withOdd = jsonEncode({
+      'format': 'kaydet-settings',
+      'v': 4,
+      'rev': latest.rev + 1,
+      'updatedAt': latest.updatedAt,
+      'writer': 'web',
+      'labels': <String, Object?>{},
+      'signatures': <String, Object?>{},
+      'templates': <String, Object?>{},
+      'blockedSenders': <String, Object?>{},
+      'contacts': {
+        ...latest.data.contacts,
+        'Tuhaf Anahtar': {'email': 'adres degil'},
+        'b@example.com': {'email': 'b@example.com', 'name': 'B'},
+      },
+    });
+    final uid = (imap.store[box.path] ?? {}).keys.fold<int>(0, (a, b) => a > b ? a : b) + 1;
+    imap.store.putIfAbsent(box.path, () => {})[uid] = envelope(uid: uid);
+    imap.seedBody(box.path, uid, FetchedBody(plainText: withOdd));
+    await phone.sync();
+    expect(await phone.contacts(), ['a@example.com:A', 'b@example.com:B']);
+    expect(phone.latestDocument()!.data.contacts['Tuhaf Anahtar'], {'email': 'adres degil'});
   });
 }

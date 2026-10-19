@@ -820,6 +820,9 @@ class SyncController extends Notifier<SyncState> {
     // işlem yapabildiği için geri doldurma sayfaları (100 başlık) o ilk
     // saniyelerde kullanıcının dokunuşunun önüne girmesin.
     await Future<void>.delayed(_backfillStartDelay);
+    // Bekleme sırasında hesap değişmiş, denetleyici kapanmış ya da uygulama
+    // arka plana alınmış olabilir: kapanmış bir `ref`'e dokunmadan önce çık.
+    if (_disposed || _paused || !_isCurrent(accountId)) return;
     final db = ref.read(databaseProvider);
     final engine = ref.read(syncEngineProvider);
     // Üst sınır: bozuk bir sunucu yanıtı sonsuz döngü yaratmasın.

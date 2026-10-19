@@ -6,6 +6,7 @@ import 'package:kaydet/core/result.dart';
 import 'package:kaydet/data/database/app_database.dart';
 import 'package:kaydet/data/repositories/account_repository.dart';
 import 'package:kaydet/data/repositories/mail_connection.dart';
+import 'package:kaydet/data/services/contacts_archive.dart';
 import 'package:kaydet/data/services/secure_store.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
 
@@ -20,6 +21,7 @@ void main() {
   late InMemorySecureStore secureStore;
   late MailConnection connection;
   late AccountRepository repository;
+  late MemoryContactsArchive archive;
   late int accountId;
 
   setUp(() async {
@@ -38,6 +40,7 @@ void main() {
       imapService: imap,
       smtpService: smtp,
       connection: connection,
+      contactsArchive: archive = MemoryContactsArchive(),
     );
 
     accountId = await db.insertAccount(
@@ -151,6 +154,71 @@ void main() {
 
       expect(result, isA<Err<int>>());
       expect(await db.allAccounts(), hasLength(1));
+    });
+  });
+
+  group('çıkışta kişiler korunur', () {
+    SignInRequest request(String email) => SignInRequest(
+      email: email,
+      password: 'sifre',
+      imapHost: 'imap.ornek.com',
+      imapPort: 993,
+      imapSecurity: SocketSecurity.ssl,
+      smtpHost: 'smtp.ornek.com',
+      smtpPort: 465,
+      smtpSecurity: SocketSecurity.ssl,
+    );
+
+    test('çıkış yapıp aynı adresle girince kişiler sayaçlarıyla geri gelir', () async {
+      await db.upsertContact(
+        accountId: accountId,
+        email: 'ali@ornek.com',
+        name: 'Ali',
+      );
+      await db.upsertContact(
+        accountId: accountId,
+        email: 'ali@ornek.com',
+        name: 'Ali',
+      );
+
+      await repository.signOut(accountId);
+      expect(await db.allAccounts(), isEmpty);
+
+      final result = await repository.signIn(request('INFO@pazarlik.com.tr'));
+      expect(result.isOk, isTrue);
+      final newId = (await db.allAccounts()).single.id;
+      final rows = await db.contactsOf(newId);
+      expect(rows.map((c) => c.email), ['ali@ornek.com']);
+      expect(rows.single.name, 'Ali');
+      expect(rows.single.timesUsed, 2);
+    });
+
+    test('kişiler yalnızca kendi hesabına döner, başka hesaba sızmaz', () async {
+      await db.upsertContact(
+        accountId: accountId,
+        email: 'ali@ornek.com',
+        name: 'Ali',
+      );
+      await repository.signOut(accountId);
+
+      final result = await repository.signIn(request('baska@ornek.com'));
+      expect(result.isOk, isTrue);
+      final newId = (await db.allAccounts()).single.id;
+      expect(await db.contactsOf(newId), isEmpty);
+    });
+
+    test('kişisiz hesaptan çıkış eski arşivi silmez', () async {
+      await db.upsertContact(
+        accountId: accountId,
+        email: 'ali@ornek.com',
+        name: 'Ali',
+      );
+      await repository.signOut(accountId);
+      await repository.signIn(request('baska@ornek.com'));
+      final other = (await db.allAccounts()).single.id;
+      await repository.signOut(other);
+
+      expect(await archive.read('info@pazarlik.com.tr'), hasLength(1));
     });
   });
 

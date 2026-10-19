@@ -7,7 +7,6 @@ import 'dart:io';
 import 'package:drift/drift.dart' hide isNotNull;
 import 'package:enough_mail/enough_mail.dart' as em;
 import 'package:flutter/material.dart';
-import 'package:flutter_quill/flutter_quill.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/app/providers.dart';
@@ -216,73 +215,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
     });
   }
-
-  Finder editorImages() => find.descendant(
-    of: find.byType(QuillEditor),
-    matching: find.byType(Image),
-  );
-
-  List<String> embeddedImages(QuillController c) => c.document
-      .toDelta()
-      .toList()
-      .where((op) => op.data is Map && (op.data as Map)['image'] != null)
-      .map((op) => (op.data as Map)['image'] as String)
-      .toList();
-
-  void expectNoLeaks(QuillController c) {
-    final all = jsonEncode(c.document.toDelta().toJson());
-    for (final leak in ['cid:', 'file:', tempDir.path, 'blob:']) {
-      expect(all, isNot(contains(leak)));
-    }
-  }
-
   group('Yanıtla / İlet gövdesinde orijinal görseller', () {
-    appTest('Yanıtla: görseller gerçek görsel olarak görünür, kayıp cid yoktur', (
-      tester,
-    ) async {
-      final id = await seedOriginal();
-      await pumpCompose(tester, replyToId: id, mode: ComposeMode.reply);
-
-      // Alıntı katlanmış durumdadır; üç nokta hap düğmesine basılarak açılır
-      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
-      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-
-      final state =
-          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
-      final quill = state.quotedControllerForTest!;
-      expect(embeddedImages(quill), hasLength(2));
-      expect(embeddedImages(quill).every((s) => s.startsWith('data:image/png')), isTrue);
-      expectNoLeaks(quill);
-      expect(editorImages(), findsNWidgets(2));
-      expect(quill.document.toPlainText(), contains('hesap özetiniz'));
-      expect(find.textContaining('cid:'), findsNothing);
-      expect(find.textContaining('Görsel bulunamadı'), findsNothing);
-    });
-
-    appTest('İlet: görseller görünür, PDF ek kalır, inline parça ek olmaz', (
-      tester,
-    ) async {
-      final id = await seedOriginal(withAttachments: true);
-      await pumpCompose(tester, replyToId: id, mode: ComposeMode.forward);
-
-      // Alıntı katlanmış durumdadır; üç nokta hap düğmesine basılarak açılır
-      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
-      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
-
-      final state =
-          tester.state<ComposeScreenState>(find.byType(ComposeScreen));
-      final quill = state.quotedControllerForTest!;
-      expect(embeddedImages(quill), hasLength(2));
-      expectNoLeaks(quill);
-      expect(editorImages(), findsNWidgets(2));
-      expect(find.text('fatura.pdf'), findsOneWidget);
-      expect(find.text('logo.png'), findsNothing);
-    });
-
     // Fatura / bülten benzeri iletiler: düzen (tablo, stil, buton) Delta'ya
     // çevrilmeden, orijinal HTML olarak giden iletiye taşınır.
     const styledHtml =

@@ -1835,6 +1835,83 @@ class AppDatabase extends _$AppDatabase {
   Future<void> deleteContact(int id) =>
       (delete(contacts)..where((c) => c.id.equals(id))).go();
 
+  Future<ContactRow?> contactById(int id) =>
+      (select(contacts)..where((c) => c.id.equals(id))).getSingleOrNull();
+
+  /// Ayar belgesiyle eşitleme için hesabın tüm kişileri: adı olanlar önce, sonra en son kullanılanlar
+  /// (bkz. `SettingsSyncService`; web aynı sırayı kullanır).
+  Future<List<ContactRow>> contactsForSync(int accountId) async {
+    final rows =
+        await (select(contacts)
+              ..where((c) => c.accountId.equals(accountId))
+              ..orderBy([
+                (c) => OrderingTerm(
+                  expression: c.lastUsedAt,
+                  mode: OrderingMode.desc,
+                ),
+                (c) => OrderingTerm(expression: c.id),
+              ]))
+            .get();
+    // Dart'ın sıralaması kararlıdır: adlılar öne geçer, kendi aralarında son kullanıma göre kalır.
+    return [
+      ...rows.where((r) => r.name.isNotEmpty),
+      ...rows.where((r) => r.name.isEmpty),
+    ];
+  }
+
+  /// Hesabın tüm kişileri (çıkışta arşivlemek için).
+  Future<List<ContactRow>> contactsOf(int accountId) =>
+      (select(contacts)..where((c) => c.accountId.equals(accountId))).get();
+
+  /// Arşivden geri yükleme: olmayanı sayaçlarıyla ekler, var olana dokunmaz.
+  Future<void> restoreContacts(
+    int accountId,
+    List<({String email, String name, int timesUsed, DateTime lastUsedAt})>
+    rows,
+  ) => transaction(() async {
+    for (final c in rows) {
+      await into(contacts).insert(
+        ContactsCompanion.insert(
+          accountId: accountId,
+          email: c.email,
+          name: Value(c.name),
+          timesUsed: Value(c.timesUsed),
+          lastUsedAt: Value(c.lastUsedAt),
+        ),
+        mode: InsertMode.insertOrIgnore,
+      );
+    }
+  });
+
+  /// Ayar belgesinden gelen kişileri uygular: olmayanı ekler, var olanın adını günceller (boş ad bilinen
+  /// adı ezmez). "Kullanım" sayılmaz: sayaç ve son kullanım zamanı olduğu gibi kalır.
+  Future<void> applySyncedContacts(
+    int accountId,
+    List<({String email, String name})> incoming,
+  ) => transaction(() async {
+    for (final c in incoming) {
+      final existing =
+          await (select(contacts)..where(
+                (t) => t.accountId.equals(accountId) & t.email.equals(c.email),
+              ))
+              .getSingleOrNull();
+      if (existing == null) {
+        await into(contacts).insert(
+          ContactsCompanion.insert(
+            accountId: accountId,
+            email: c.email,
+            name: Value(c.name),
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
+      } else if (c.name.isNotEmpty && existing.name != c.name) {
+        await (update(contacts)..where((t) => t.id.equals(existing.id))).write(
+          ContactsCompanion(name: Value(c.name)),
+        );
+      }
+    }
+  });
+
   /// v9 → v10 göçü: bkz. `migration.onUpgrade` üzerindeki yorum.
   Future<void> _backfillHasAttachments() async {
     await customStatement('''

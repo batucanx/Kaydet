@@ -85,4 +85,55 @@ void main() {
       expect(store.read().every((t) => t.isBuiltIn), isTrue);
     });
   });
+
+  group('hesaba özgü şablonlar', () {
+    const mine = QuickTemplate(id: 'a-1', title: 'A', content: 'a');
+
+    test('her hesabın şablonları ayrıdır', () async {
+      final a = store.forAccount('a@ornek.com');
+      final b = store.forAccount('b@ornek.com');
+      await a.save(mine);
+
+      expect(a.read().map((t) => t.id), contains('a-1'));
+      expect(b.read().map((t) => t.id), isNot(contains('a-1')));
+      expect(b.isPristine, isTrue);
+    });
+
+    test('e-posta büyük/küçük harfe duyarsızdır; yeni örnek aynı veriyi görür', () async {
+      await store.forAccount('A@Ornek.com').save(mine);
+      final again = QuickTemplatesStore(prefs).forAccount('a@ornek.com');
+      expect(again.read().map((t) => t.id), contains('a-1'));
+    });
+
+    test('bir hesabı sıfırlamak ya da silmek diğerini etkilemez', () async {
+      final a = store.forAccount('a@ornek.com');
+      final b = store.forAccount('b@ornek.com');
+      await a.replaceAll(const [mine]);
+      await b.replaceAll(const []);
+      await a.resetToDefaults();
+
+      expect(a.read(), hasLength(5));
+      expect(b.read(), isEmpty);
+    });
+
+    test('bellek modunda da hesaplar ayrıdır', () async {
+      final mem = QuickTemplatesStore();
+      await mem.forAccount('a@ornek.com').save(mine);
+      expect(mem.forAccount('a@ornek.com').read().first.id, 'a-1');
+      expect(mem.forAccount('b@ornek.com').read(), hasLength(5));
+    });
+
+    test('eski cihaz geneli şablonlar ilk isteyen hesaba taşınır, ikinci hesaba geçmez', () async {
+      await store.save(mine); // eski tek anahtar
+      final a = store.forAccount('a@ornek.com');
+      final b = store.forAccount('b@ornek.com');
+
+      expect(await a.claimLegacy(), isTrue);
+      expect(await b.claimLegacy(), isFalse);
+
+      expect(a.read().map((t) => t.id), contains('a-1'));
+      expect(b.read().map((t) => t.id), isNot(contains('a-1')));
+      expect(prefs.getStringList('kaydet.quickTemplates'), isNull);
+    });
+  });
 }

@@ -1,5 +1,5 @@
 /// Her iki Kaydet istemcisinin (telefon ve web) hesap için tuttuğu ayarların
-/// (etiketler, imzalar, hazır şablonlar, engellenen kullanıcılar) üç yönlü birleştirilmesi.
+/// (etiketler, imzalar, hazır şablonlar, engellenen kullanıcılar, kişiler) üç yönlü birleştirilmesi.
 ///
 /// Web ile telefon birbirine bağlanmaz; ikisi de IMAP sunucusundaki TEK bir
 /// JSON belgesini okuyup yazar (bkz. `settings_document.dart`). Eşitleyen taraf
@@ -29,6 +29,7 @@ class SettingsData {
     this.signatures = const {},
     this.templates = const {},
     this.blockedSenders = const {},
+    this.contacts = const {},
   });
 
   final SettingsCollection labels;
@@ -41,6 +42,10 @@ class SettingsData {
   /// İstenmeyen klasöründe tutulur.
   final SettingsCollection blockedSenders;
 
+  /// Hesabın kişi defteri (Kişiler): `{email, name}`, küçük harfli adresiyle anahtarlı. Kullanım
+  /// sayaçları (`timesUsed`, `lastUsedAt`) cihaza özgüdür, belgeye yazılmaz.
+  final SettingsCollection contacts;
+
   static const SettingsData empty = SettingsData();
 
   Map<String, Object?> toJson() => {
@@ -48,6 +53,7 @@ class SettingsData {
     'signatures': signatures,
     'templates': templates,
     'blockedSenders': blockedSenders,
+    'contacts': contacts,
   };
 
   factory SettingsData.fromJson(Map<String, Object?> json) => SettingsData(
@@ -55,6 +61,7 @@ class SettingsData {
     signatures: _collection(json['signatures']),
     templates: _collection(json['templates']),
     blockedSenders: _collection(json['blockedSenders']),
+    contacts: _collection(json['contacts']),
   );
 
   static SettingsCollection _collection(Object? raw) {
@@ -108,7 +115,8 @@ bool settingsDataEqual(SettingsData a, SettingsData b) =>
     settingsDeepEqual(a.labels, b.labels) &&
     settingsDeepEqual(a.signatures, b.signatures) &&
     settingsDeepEqual(a.templates, b.templates) &&
-    settingsDeepEqual(a.blockedSenders, b.blockedSenders);
+    settingsDeepEqual(a.blockedSenders, b.blockedSenders) &&
+    settingsDeepEqual(a.contacts, b.contacts);
 
 /// [local]in [base]ten farklı alanları (base kaydı yoksa hepsini).
 Map<String, Object?> _changedFields(SettingsRecord? base, SettingsRecord local) {
@@ -252,18 +260,25 @@ SettingsMergeResult mergeSettings({
     local.blockedSenders,
     remoteData.blockedSenders,
   );
+  final contacts = _mergeCollection(
+    effectiveBase?.contacts,
+    local.contacts,
+    remoteData.contacts,
+  );
   final merged = SettingsData(
     labels: labels,
     signatures: signatures,
     templates: templates,
     blockedSenders: blockedSenders,
+    contacts: contacts,
   );
 
   final hasAny =
       labels.isNotEmpty ||
       signatures.isNotEmpty ||
       templates.isNotEmpty ||
-      blockedSenders.isNotEmpty;
+      blockedSenders.isNotEmpty ||
+      contacts.isNotEmpty;
   final pushNeeded = remote == null
       ? hasAny
       : !settingsDataEqual(merged, remote);
@@ -271,7 +286,8 @@ SettingsMergeResult mergeSettings({
       _differsFromLocal(labels, local.labels) ||
       _differsFromLocal(signatures, local.signatures) ||
       _differsFromLocal(templates, local.templates) ||
-      _differsFromLocal(blockedSenders, local.blockedSenders);
+      _differsFromLocal(blockedSenders, local.blockedSenders) ||
+      _differsFromLocal(contacts, local.contacts);
   return SettingsMergeResult(
     merged: merged,
     pushNeeded: pushNeeded,

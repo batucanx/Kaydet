@@ -88,6 +88,7 @@ void main() {
     String subject = 'Toplantı Notları',
     String plainText = 'Merhaba, yarın saat 10:00 toplantısı için hazır mısınız?',
     String? html,
+    bool plainOnly = false,
   }) async {
     await db.upsertServerMessages([
       MessagesCompanion.insert(
@@ -115,7 +116,7 @@ void main() {
       MessageBodiesCompanion.insert(
         messageId: Value(msg.id),
         plainText: Value(plainText),
-        html: Value(html ?? '<p>$plainText</p>'),
+        html: plainOnly ? const Value.absent() : Value(html ?? '<p>$plainText</p>'),
       ),
     );
     return msg.id;
@@ -208,7 +209,8 @@ void main() {
     appTest(
         'Açma ve Kapama (Expand/Collapse): Tıklandığında alıntı açılır ve geri kapatılabilir',
         (tester) async {
-      final msgId = await seedOriginalMessage();
+      // Düz metin özgün: HTML özgün WebView'de gösterilir ve widget testi WebView barındıramaz.
+      final msgId = await seedOriginalMessage(plainOnly: true);
       await pumpCompose(tester, replyToId: msgId, mode: ComposeMode.reply);
 
       final state =
@@ -236,7 +238,7 @@ void main() {
     });
 
     appTest('Alıntıyı Kaldır ve Geri Al (Remove & Undo)', (tester) async {
-      final msgId = await seedOriginalMessage();
+      final msgId = await seedOriginalMessage(plainOnly: true);
       await pumpCompose(tester, replyToId: msgId, mode: ComposeMode.reply);
 
       final state =

@@ -19,10 +19,10 @@ import 'settings_merge.dart';
 
 const String settingsMailboxName = 'Kaydet-Settings';
 const String settingsFormat = 'kaydet-settings';
-/// v2, `templates` (hazır şablonlar), v3 `blockedSenders` (engellenen kullanıcılar) ekledi. Eski
-/// belgeler (v1, v2) hâlâ okunur, eksik koleksiyonlar boş sayılır; her yazım v3'tür ve daha eski bir
+/// v2, `templates` (hazır şablonlar), v3 `blockedSenders` (engellenen kullanıcılar), v4 `contacts`
+/// (kişiler) ekledi. Eski belgeler (v1–v3) hâlâ okunur, eksik koleksiyonlar boş sayılır; her yazım v4'tür ve daha eski bir
 /// sürümü bilen uygulama bunu "daha yeni" sayıp eşitlemeye dokunmaz (bilmediği koleksiyonu düşürürdü).
-const int settingsVersion = 3;
+const int settingsVersion = 4;
 const String settingsSubject = 'Kaydet settings (do not delete)';
 const String settingsHeader = 'X-Kaydet-Settings';
 
@@ -52,6 +52,7 @@ class SettingsDocument {
     'signatures': data.signatures,
     'templates': data.templates,
     'blockedSenders': data.blockedSenders,
+    'contacts': data.contacts,
   };
 }
 
@@ -117,12 +118,13 @@ _Parsed _parse(String text) {
   if (writer is! String || writer.length > 60) {
     return const _Parsed(_ParseKind.invalid);
   }
-  // `templates` v1'de, `blockedSenders` v1/v2'de yoktur: eksikse boş sayılır.
+  // `templates` v1'de, `blockedSenders` v1/v2'de, `contacts` v1–v3'te yoktur: eksikse boş sayılır.
   if (!_validCollection(json['labels']) ||
       !_validCollection(json['signatures']) ||
       (json['templates'] != null && !_validCollection(json['templates'])) ||
       (json['blockedSenders'] != null &&
-          !_validCollection(json['blockedSenders']))) {
+          !_validCollection(json['blockedSenders'])) ||
+      (json['contacts'] != null && !_validCollection(json['contacts']))) {
     return const _Parsed(_ParseKind.invalid);
   }
   return _Parsed(
