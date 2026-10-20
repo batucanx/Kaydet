@@ -34,10 +34,7 @@ Future<void> showNewSignatureSheet(
 }
 
 class _NewSignatureSheet extends ConsumerStatefulWidget {
-  const _NewSignatureSheet({
-    required this.accountId,
-    this.existingSignature,
-  });
+  const _NewSignatureSheet({required this.accountId, this.existingSignature});
 
   final int accountId;
   final SignatureRow? existingSignature;
@@ -71,7 +68,9 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
     final existing = widget.existingSignature;
     _nameController = TextEditingController(text: existing?.name ?? '');
     _bodyController = TextEditingController(text: existing?.body ?? '');
-    _urlController = TextEditingController(text: existing?.remoteImageUrl ?? '');
+    _urlController = TextEditingController(
+      text: existing?.remoteImageUrl ?? '',
+    );
 
     if (existing != null) {
       // Eski sürümlerde galeriden eklenmiş ('local') görseller artık
@@ -103,7 +102,8 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
 
     if (!SignatureImageService.isValidImageUrlFormat(rawUrl)) {
       setState(() {
-        _urlValidationMessage = 'Geçerli bir HTTP veya HTTPS görsel URL\'si giriniz.';
+        _urlValidationMessage =
+            'Geçerli bir HTTP veya HTTPS görsel URL\'si giriniz.';
       });
       return;
     }
@@ -113,7 +113,9 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
       _urlValidationMessage = null;
     });
 
-    final validation = await SignatureImageService.validateRemoteImageUrl(rawUrl);
+    final validation = await SignatureImageService.validateRemoteImageUrl(
+      rawUrl,
+    );
 
     if (!mounted) return;
 
@@ -124,7 +126,9 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
         _remoteImageUrl = rawUrl;
         _urlValidationMessage = null;
       } else {
-        _urlValidationMessage = validation.error ?? 'Görsel indirilemedi veya formatı desteklenmiyor.';
+        _urlValidationMessage =
+            validation.error ??
+            'Görsel indirilemedi veya formatı desteklenmiyor.';
       }
     });
   }
@@ -217,10 +221,7 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: Text(
-              'Sil',
-              style: TextStyle(color: context.tokens.danger),
-            ),
+            child: Text('Sil', style: TextStyle(color: context.tokens.danger)),
           ),
         ],
       ),
@@ -285,8 +286,8 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                     child: Text(
                       _isEditing ? 'İmzayı Düzenle' : 'Yeni İmza',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                          ),
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   if (_isEditing)
@@ -347,7 +348,10 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                       enabledBorder: _nameError
                           ? OutlineInputBorder(
                               borderRadius: BorderRadius.circular(Radii.sm),
-                              borderSide: BorderSide(color: t.danger, width: 1.5),
+                              borderSide: BorderSide(
+                                color: t.danger,
+                                width: 1.5,
+                              ),
                             )
                           : null,
                       focusedBorder: _nameError
@@ -382,10 +386,10 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                   Text(
                     'İMZA GÖRSELİ',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: t.textSecondary,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.8,
-                        ),
+                      color: t.textSecondary,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.8,
+                    ),
                   ),
                   const SizedBox(height: Space.xs),
 
@@ -402,10 +406,10 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                   Text(
                     'ÖNİZLEME',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: t.textSecondary,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.8,
-                        ),
+                      color: t.textSecondary,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.8,
+                    ),
                   ),
                   const SizedBox(height: Space.xs),
                   _buildPreviewCard(context),
@@ -465,10 +469,8 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
-                errorWidget: (_, _, _) => Icon(
-                  LucideIcons.imageOff,
-                  color: t.textTertiary,
-                ),
+                errorWidget: (_, _, _) =>
+                    Icon(LucideIcons.imageOff, color: t.textTertiary),
               ),
             ),
             const SizedBox(width: Space.md),
@@ -627,11 +629,17 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
                   segments: const [
                     ButtonSegment(
                       value: 'top',
-                      label: Text('Görsel Üstte', style: TextStyle(fontSize: 11)),
+                      label: Text(
+                        'Görsel Üstte',
+                        style: TextStyle(fontSize: 11),
+                      ),
                     ),
                     ButtonSegment(
                       value: 'bottom',
-                      label: Text('Görsel Altta', style: TextStyle(fontSize: 11)),
+                      label: Text(
+                        'Görsel Altta',
+                        style: TextStyle(fontSize: 11),
+                      ),
                     ),
                   ],
                   selected: {_imagePosition},
@@ -725,9 +733,9 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
           if (text.isNotEmpty)
             Text(
               text,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    height: 1.4,
-                  ),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(height: 1.4),
             ),
           if (imageWidget != null && _imagePosition == 'bottom') ...[
             const SizedBox(height: Space.xs),

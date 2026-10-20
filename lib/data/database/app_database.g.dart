@@ -6351,6 +6351,675 @@ class BlockedSendersCompanion extends UpdateCompanion<BlockedSenderRow> {
   }
 }
 
+class $MailFiltersTable extends MailFilters
+    with TableInfo<$MailFiltersTable, MailFilterRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $MailFiltersTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<int> accountId = GeneratedColumn<int>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
+  static const VerificationMeta _enabledMeta = const VerificationMeta(
+    'enabled',
+  );
+  @override
+  late final GeneratedColumn<bool> enabled = GeneratedColumn<bool>(
+    'enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _positionMeta = const VerificationMeta(
+    'position',
+  );
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+    'position',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _matchModeMeta = const VerificationMeta(
+    'matchMode',
+  );
+  @override
+  late final GeneratedColumn<String> matchMode = GeneratedColumn<String>(
+    'match_mode',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('all'),
+  );
+  static const VerificationMeta _conditionsJsonMeta = const VerificationMeta(
+    'conditionsJson',
+  );
+  @override
+  late final GeneratedColumn<String> conditionsJson = GeneratedColumn<String>(
+    'conditions_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _actionsJsonMeta = const VerificationMeta(
+    'actionsJson',
+  );
+  @override
+  late final GeneratedColumn<String> actionsJson = GeneratedColumn<String>(
+    'actions_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _stopProcessingMeta = const VerificationMeta(
+    'stopProcessing',
+  );
+  @override
+  late final GeneratedColumn<bool> stopProcessing = GeneratedColumn<bool>(
+    'stop_processing',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("stop_processing" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+    defaultValue: currentDateAndTime,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    name,
+    enabled,
+    position,
+    matchMode,
+    conditionsJson,
+    actionsJson,
+    stopProcessing,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'mail_filters';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<MailFilterRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    }
+    if (data.containsKey('enabled')) {
+      context.handle(
+        _enabledMeta,
+        enabled.isAcceptableOrUnknown(data['enabled']!, _enabledMeta),
+      );
+    }
+    if (data.containsKey('position')) {
+      context.handle(
+        _positionMeta,
+        position.isAcceptableOrUnknown(data['position']!, _positionMeta),
+      );
+    }
+    if (data.containsKey('match_mode')) {
+      context.handle(
+        _matchModeMeta,
+        matchMode.isAcceptableOrUnknown(data['match_mode']!, _matchModeMeta),
+      );
+    }
+    if (data.containsKey('conditions_json')) {
+      context.handle(
+        _conditionsJsonMeta,
+        conditionsJson.isAcceptableOrUnknown(
+          data['conditions_json']!,
+          _conditionsJsonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('actions_json')) {
+      context.handle(
+        _actionsJsonMeta,
+        actionsJson.isAcceptableOrUnknown(
+          data['actions_json']!,
+          _actionsJsonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('stop_processing')) {
+      context.handle(
+        _stopProcessingMeta,
+        stopProcessing.isAcceptableOrUnknown(
+          data['stop_processing']!,
+          _stopProcessingMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {accountId, id};
+  @override
+  MailFilterRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return MailFilterRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}account_id'],
+      )!,
+      name: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}name'],
+      )!,
+      enabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enabled'],
+      )!,
+      position: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}position'],
+      )!,
+      matchMode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}match_mode'],
+      )!,
+      conditionsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}conditions_json'],
+      )!,
+      actionsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actions_json'],
+      )!,
+      stopProcessing: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}stop_processing'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $MailFiltersTable createAlias(String alias) {
+    return $MailFiltersTable(attachedDatabase, alias);
+  }
+}
+
+class MailFilterRow extends DataClass implements Insertable<MailFilterRow> {
+  /// Filtre kimliği: istemcinin ürettiği, hesap içinde benzersiz dizge (belgedeki koleksiyon anahtarı).
+  final String id;
+  final int accountId;
+  final String name;
+  final bool enabled;
+
+  /// Çalışma sırası (sıralama anahtarı; birleştirmeden sonra 0..n-1).
+  final int position;
+
+  /// `all` | `any`.
+  final String matchMode;
+
+  /// `FilterCondition.toJson` listesi.
+  final String conditionsJson;
+
+  /// `FilterAction.toJson` listesi (YEREL klasör/etiket kimlikleriyle).
+  final String actionsJson;
+  final bool stopProcessing;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  const MailFilterRow({
+    required this.id,
+    required this.accountId,
+    required this.name,
+    required this.enabled,
+    required this.position,
+    required this.matchMode,
+    required this.conditionsJson,
+    required this.actionsJson,
+    required this.stopProcessing,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<int>(accountId);
+    map['name'] = Variable<String>(name);
+    map['enabled'] = Variable<bool>(enabled);
+    map['position'] = Variable<int>(position);
+    map['match_mode'] = Variable<String>(matchMode);
+    map['conditions_json'] = Variable<String>(conditionsJson);
+    map['actions_json'] = Variable<String>(actionsJson);
+    map['stop_processing'] = Variable<bool>(stopProcessing);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  MailFiltersCompanion toCompanion(bool nullToAbsent) {
+    return MailFiltersCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      name: Value(name),
+      enabled: Value(enabled),
+      position: Value(position),
+      matchMode: Value(matchMode),
+      conditionsJson: Value(conditionsJson),
+      actionsJson: Value(actionsJson),
+      stopProcessing: Value(stopProcessing),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory MailFilterRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return MailFilterRow(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<int>(json['accountId']),
+      name: serializer.fromJson<String>(json['name']),
+      enabled: serializer.fromJson<bool>(json['enabled']),
+      position: serializer.fromJson<int>(json['position']),
+      matchMode: serializer.fromJson<String>(json['matchMode']),
+      conditionsJson: serializer.fromJson<String>(json['conditionsJson']),
+      actionsJson: serializer.fromJson<String>(json['actionsJson']),
+      stopProcessing: serializer.fromJson<bool>(json['stopProcessing']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<int>(accountId),
+      'name': serializer.toJson<String>(name),
+      'enabled': serializer.toJson<bool>(enabled),
+      'position': serializer.toJson<int>(position),
+      'matchMode': serializer.toJson<String>(matchMode),
+      'conditionsJson': serializer.toJson<String>(conditionsJson),
+      'actionsJson': serializer.toJson<String>(actionsJson),
+      'stopProcessing': serializer.toJson<bool>(stopProcessing),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  MailFilterRow copyWith({
+    String? id,
+    int? accountId,
+    String? name,
+    bool? enabled,
+    int? position,
+    String? matchMode,
+    String? conditionsJson,
+    String? actionsJson,
+    bool? stopProcessing,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => MailFilterRow(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    name: name ?? this.name,
+    enabled: enabled ?? this.enabled,
+    position: position ?? this.position,
+    matchMode: matchMode ?? this.matchMode,
+    conditionsJson: conditionsJson ?? this.conditionsJson,
+    actionsJson: actionsJson ?? this.actionsJson,
+    stopProcessing: stopProcessing ?? this.stopProcessing,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  MailFilterRow copyWithCompanion(MailFiltersCompanion data) {
+    return MailFilterRow(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      name: data.name.present ? data.name.value : this.name,
+      enabled: data.enabled.present ? data.enabled.value : this.enabled,
+      position: data.position.present ? data.position.value : this.position,
+      matchMode: data.matchMode.present ? data.matchMode.value : this.matchMode,
+      conditionsJson: data.conditionsJson.present
+          ? data.conditionsJson.value
+          : this.conditionsJson,
+      actionsJson: data.actionsJson.present
+          ? data.actionsJson.value
+          : this.actionsJson,
+      stopProcessing: data.stopProcessing.present
+          ? data.stopProcessing.value
+          : this.stopProcessing,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MailFilterRow(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('name: $name, ')
+          ..write('enabled: $enabled, ')
+          ..write('position: $position, ')
+          ..write('matchMode: $matchMode, ')
+          ..write('conditionsJson: $conditionsJson, ')
+          ..write('actionsJson: $actionsJson, ')
+          ..write('stopProcessing: $stopProcessing, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    name,
+    enabled,
+    position,
+    matchMode,
+    conditionsJson,
+    actionsJson,
+    stopProcessing,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is MailFilterRow &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.name == this.name &&
+          other.enabled == this.enabled &&
+          other.position == this.position &&
+          other.matchMode == this.matchMode &&
+          other.conditionsJson == this.conditionsJson &&
+          other.actionsJson == this.actionsJson &&
+          other.stopProcessing == this.stopProcessing &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class MailFiltersCompanion extends UpdateCompanion<MailFilterRow> {
+  final Value<String> id;
+  final Value<int> accountId;
+  final Value<String> name;
+  final Value<bool> enabled;
+  final Value<int> position;
+  final Value<String> matchMode;
+  final Value<String> conditionsJson;
+  final Value<String> actionsJson;
+  final Value<bool> stopProcessing;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const MailFiltersCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.position = const Value.absent(),
+    this.matchMode = const Value.absent(),
+    this.conditionsJson = const Value.absent(),
+    this.actionsJson = const Value.absent(),
+    this.stopProcessing = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  MailFiltersCompanion.insert({
+    required String id,
+    required int accountId,
+    this.name = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.position = const Value.absent(),
+    this.matchMode = const Value.absent(),
+    this.conditionsJson = const Value.absent(),
+    this.actionsJson = const Value.absent(),
+    this.stopProcessing = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId);
+  static Insertable<MailFilterRow> custom({
+    Expression<String>? id,
+    Expression<int>? accountId,
+    Expression<String>? name,
+    Expression<bool>? enabled,
+    Expression<int>? position,
+    Expression<String>? matchMode,
+    Expression<String>? conditionsJson,
+    Expression<String>? actionsJson,
+    Expression<bool>? stopProcessing,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (name != null) 'name': name,
+      if (enabled != null) 'enabled': enabled,
+      if (position != null) 'position': position,
+      if (matchMode != null) 'match_mode': matchMode,
+      if (conditionsJson != null) 'conditions_json': conditionsJson,
+      if (actionsJson != null) 'actions_json': actionsJson,
+      if (stopProcessing != null) 'stop_processing': stopProcessing,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  MailFiltersCompanion copyWith({
+    Value<String>? id,
+    Value<int>? accountId,
+    Value<String>? name,
+    Value<bool>? enabled,
+    Value<int>? position,
+    Value<String>? matchMode,
+    Value<String>? conditionsJson,
+    Value<String>? actionsJson,
+    Value<bool>? stopProcessing,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return MailFiltersCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      name: name ?? this.name,
+      enabled: enabled ?? this.enabled,
+      position: position ?? this.position,
+      matchMode: matchMode ?? this.matchMode,
+      conditionsJson: conditionsJson ?? this.conditionsJson,
+      actionsJson: actionsJson ?? this.actionsJson,
+      stopProcessing: stopProcessing ?? this.stopProcessing,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<int>(accountId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (enabled.present) {
+      map['enabled'] = Variable<bool>(enabled.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (matchMode.present) {
+      map['match_mode'] = Variable<String>(matchMode.value);
+    }
+    if (conditionsJson.present) {
+      map['conditions_json'] = Variable<String>(conditionsJson.value);
+    }
+    if (actionsJson.present) {
+      map['actions_json'] = Variable<String>(actionsJson.value);
+    }
+    if (stopProcessing.present) {
+      map['stop_processing'] = Variable<bool>(stopProcessing.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('MailFiltersCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('name: $name, ')
+          ..write('enabled: $enabled, ')
+          ..write('position: $position, ')
+          ..write('matchMode: $matchMode, ')
+          ..write('conditionsJson: $conditionsJson, ')
+          ..write('actionsJson: $actionsJson, ')
+          ..write('stopProcessing: $stopProcessing, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $PendingOperationsTable extends PendingOperations
     with TableInfo<$PendingOperationsTable, PendingOperationRow> {
   @override
@@ -7732,6 +8401,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $SignaturesTable signatures = $SignaturesTable(this);
   late final $ContactsTable contacts = $ContactsTable(this);
   late final $BlockedSendersTable blockedSenders = $BlockedSendersTable(this);
+  late final $MailFiltersTable mailFilters = $MailFiltersTable(this);
   late final $PendingOperationsTable pendingOperations =
       $PendingOperationsTable(this);
   late final $TranslatedEmailCacheTable translatedEmailCache =
@@ -7753,6 +8423,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     signatures,
     contacts,
     blockedSenders,
+    mailFilters,
     pendingOperations,
     translatedEmailCache,
     messageLanguages,
@@ -7821,6 +8492,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('blocked_senders', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('mail_filters', kind: UpdateKind.delete)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -7993,6 +8671,24 @@ final class $$AccountsTableReferences
     ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_blockedSendersRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$MailFiltersTable, List<MailFilterRow>>
+  _mailFiltersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.mailFilters,
+    aliasName: 'accounts__id__mail_filters__account_id',
+  );
+
+  $$MailFiltersTableProcessedTableManager get mailFiltersRefs {
+    final manager = $$MailFiltersTableTableManager(
+      $_db,
+      $_db.mailFilters,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<int>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_mailFiltersRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -8252,6 +8948,31 @@ class $$AccountsTableFilterComposer
           }) => $$BlockedSendersTableFilterComposer(
             $db: $db,
             $table: $db.blockedSenders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> mailFiltersRefs(
+    Expression<bool> Function($$MailFiltersTableFilterComposer f) f,
+  ) {
+    final $$MailFiltersTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.mailFilters,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MailFiltersTableFilterComposer(
+            $db: $db,
+            $table: $db.mailFilters,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -8596,6 +9317,31 @@ class $$AccountsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> mailFiltersRefs<T extends Object>(
+    Expression<T> Function($$MailFiltersTableAnnotationComposer a) f,
+  ) {
+    final $$MailFiltersTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.mailFilters,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$MailFiltersTableAnnotationComposer(
+            $db: $db,
+            $table: $db.mailFilters,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> pendingOperationsRefs<T extends Object>(
     Expression<T> Function($$PendingOperationsTableAnnotationComposer a) f,
   ) {
@@ -8643,6 +9389,7 @@ class $$AccountsTableTableManager
             bool signaturesRefs,
             bool contactsRefs,
             bool blockedSendersRefs,
+            bool mailFiltersRefs,
             bool pendingOperationsRefs,
           })
         > {
@@ -8745,6 +9492,7 @@ class $$AccountsTableTableManager
                 signaturesRefs = false,
                 contactsRefs = false,
                 blockedSendersRefs = false,
+                mailFiltersRefs = false,
                 pendingOperationsRefs = false,
               }) {
                 return PrefetchHooks(
@@ -8756,6 +9504,7 @@ class $$AccountsTableTableManager
                     if (signaturesRefs) db.signatures,
                     if (contactsRefs) db.contacts,
                     if (blockedSendersRefs) db.blockedSenders,
+                    if (mailFiltersRefs) db.mailFilters,
                     if (pendingOperationsRefs) db.pendingOperations,
                   ],
                   addJoins: null,
@@ -8887,6 +9636,27 @@ class $$AccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (mailFiltersRefs)
+                        await $_getPrefetchedData<
+                          AccountRow,
+                          $AccountsTable,
+                          MailFilterRow
+                        >(
+                          currentTable: table,
+                          referencedTable: $$AccountsTableReferences
+                              ._mailFiltersRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$AccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).mailFiltersRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (pendingOperationsRefs)
                         await $_getPrefetchedData<
                           AccountRow,
@@ -8935,6 +9705,7 @@ typedef $$AccountsTableProcessedTableManager =
         bool signaturesRefs,
         bool contactsRefs,
         bool blockedSendersRefs,
+        bool mailFiltersRefs,
         bool pendingOperationsRefs,
       })
     >;
@@ -13024,6 +13795,443 @@ typedef $$BlockedSendersTableProcessedTableManager =
       BlockedSenderRow,
       PrefetchHooks Function({bool accountId})
     >;
+typedef $$MailFiltersTableCreateCompanionBuilder =
+    MailFiltersCompanion Function({
+      required String id,
+      required int accountId,
+      Value<String> name,
+      Value<bool> enabled,
+      Value<int> position,
+      Value<String> matchMode,
+      Value<String> conditionsJson,
+      Value<String> actionsJson,
+      Value<bool> stopProcessing,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+typedef $$MailFiltersTableUpdateCompanionBuilder =
+    MailFiltersCompanion Function({
+      Value<String> id,
+      Value<int> accountId,
+      Value<String> name,
+      Value<bool> enabled,
+      Value<int> position,
+      Value<String> matchMode,
+      Value<String> conditionsJson,
+      Value<String> actionsJson,
+      Value<bool> stopProcessing,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$MailFiltersTableReferences
+    extends BaseReferences<_$AppDatabase, $MailFiltersTable, MailFilterRow> {
+  $$MailFiltersTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $AccountsTable _accountIdTable(_$AppDatabase db) =>
+      db.accounts.createAlias('mail_filters__account_id__accounts__id');
+
+  $$AccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<int>('account_id')!;
+
+    final manager = $$AccountsTableTableManager(
+      $_db,
+      $_db.accounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$MailFiltersTableFilterComposer
+    extends Composer<_$AppDatabase, $MailFiltersTable> {
+  $$MailFiltersTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get matchMode => $composableBuilder(
+    column: $table.matchMode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get conditionsJson => $composableBuilder(
+    column: $table.conditionsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actionsJson => $composableBuilder(
+    column: $table.actionsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get stopProcessing => $composableBuilder(
+    column: $table.stopProcessing,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$AccountsTableFilterComposer get accountId {
+    final $$AccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MailFiltersTableOrderingComposer
+    extends Composer<_$AppDatabase, $MailFiltersTable> {
+  $$MailFiltersTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get position => $composableBuilder(
+    column: $table.position,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get matchMode => $composableBuilder(
+    column: $table.matchMode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get conditionsJson => $composableBuilder(
+    column: $table.conditionsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get actionsJson => $composableBuilder(
+    column: $table.actionsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get stopProcessing => $composableBuilder(
+    column: $table.stopProcessing,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$AccountsTableOrderingComposer get accountId {
+    final $$AccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MailFiltersTableAnnotationComposer
+    extends Composer<_$AppDatabase, $MailFiltersTable> {
+  $$MailFiltersTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<bool> get enabled =>
+      $composableBuilder(column: $table.enabled, builder: (column) => column);
+
+  GeneratedColumn<int> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<String> get matchMode =>
+      $composableBuilder(column: $table.matchMode, builder: (column) => column);
+
+  GeneratedColumn<String> get conditionsJson => $composableBuilder(
+    column: $table.conditionsJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get actionsJson => $composableBuilder(
+    column: $table.actionsJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get stopProcessing => $composableBuilder(
+    column: $table.stopProcessing,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$AccountsTableAnnotationComposer get accountId {
+    final $$AccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.accounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.accounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$MailFiltersTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $MailFiltersTable,
+          MailFilterRow,
+          $$MailFiltersTableFilterComposer,
+          $$MailFiltersTableOrderingComposer,
+          $$MailFiltersTableAnnotationComposer,
+          $$MailFiltersTableCreateCompanionBuilder,
+          $$MailFiltersTableUpdateCompanionBuilder,
+          (MailFilterRow, $$MailFiltersTableReferences),
+          MailFilterRow,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$MailFiltersTableTableManager(_$AppDatabase db, $MailFiltersTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$MailFiltersTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$MailFiltersTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$MailFiltersTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> accountId = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<String> matchMode = const Value.absent(),
+                Value<String> conditionsJson = const Value.absent(),
+                Value<String> actionsJson = const Value.absent(),
+                Value<bool> stopProcessing = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => MailFiltersCompanion(
+                id: id,
+                accountId: accountId,
+                name: name,
+                enabled: enabled,
+                position: position,
+                matchMode: matchMode,
+                conditionsJson: conditionsJson,
+                actionsJson: actionsJson,
+                stopProcessing: stopProcessing,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int accountId,
+                Value<String> name = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int> position = const Value.absent(),
+                Value<String> matchMode = const Value.absent(),
+                Value<String> conditionsJson = const Value.absent(),
+                Value<String> actionsJson = const Value.absent(),
+                Value<bool> stopProcessing = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => MailFiltersCompanion.insert(
+                id: id,
+                accountId: accountId,
+                name: name,
+                enabled: enabled,
+                position: position,
+                matchMode: matchMode,
+                conditionsJson: conditionsJson,
+                actionsJson: actionsJson,
+                stopProcessing: stopProcessing,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable<$MailFiltersTable, MailFilterRow>(table),
+                  $$MailFiltersTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$MailFiltersTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$MailFiltersTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$MailFiltersTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $MailFiltersTable,
+      MailFilterRow,
+      $$MailFiltersTableFilterComposer,
+      $$MailFiltersTableOrderingComposer,
+      $$MailFiltersTableAnnotationComposer,
+      $$MailFiltersTableCreateCompanionBuilder,
+      $$MailFiltersTableUpdateCompanionBuilder,
+      (MailFilterRow, $$MailFiltersTableReferences),
+      MailFilterRow,
+      PrefetchHooks Function({bool accountId})
+    >;
 typedef $$PendingOperationsTableCreateCompanionBuilder =
     PendingOperationsCompanion Function({
       Value<int> id,
@@ -14147,6 +15355,8 @@ class $AppDatabaseManager {
       $$ContactsTableTableManager(_db, _db.contacts);
   $$BlockedSendersTableTableManager get blockedSenders =>
       $$BlockedSendersTableTableManager(_db, _db.blockedSenders);
+  $$MailFiltersTableTableManager get mailFilters =>
+      $$MailFiltersTableTableManager(_db, _db.mailFilters);
   $$PendingOperationsTableTableManager get pendingOperations =>
       $$PendingOperationsTableTableManager(_db, _db.pendingOperations);
   $$TranslatedEmailCacheTableTableManager get translatedEmailCache =>

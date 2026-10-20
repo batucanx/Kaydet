@@ -924,9 +924,10 @@ class _UnifiedFolderPanelContent extends ConsumerWidget {
                     label: FolderMapping.displayName(use, ''),
                     isSelected: selected?.unifiedUse == use,
                     badge: use == SpecialUse.drafts
-                        ? null
+                        ? ref.watch(unifiedDraftCountProvider).value
                         : ref.watch(unifiedUnreadCountProvider(use)).value,
-                    parenthesizedBadge: use == SpecialUse.trash,
+                    parenthesizedBadge:
+                        use == SpecialUse.trash || use == SpecialUse.drafts,
                     onTap: () => onChooseFolder(SelectedFolder.unified(use)),
                   ),
             ],
@@ -996,9 +997,11 @@ class _AccountFolderPanelContentState
       indent: indent,
       isSelected: selected?.mailboxId == box.id,
       badge: box.specialUse == SpecialUse.drafts
-          ? null
+          ? ref.watch(draftCountProvider(box.id)).value
           : ref.watch(unreadCountProvider(box.id)).value,
-      parenthesizedBadge: box.specialUse == SpecialUse.trash,
+      parenthesizedBadge:
+          box.specialUse == SpecialUse.trash ||
+          box.specialUse == SpecialUse.drafts,
       onTap: () => onChooseFolder(SelectedFolder.mailbox(box.id)),
     );
 

@@ -30,6 +30,7 @@ class SettingsData {
     this.templates = const {},
     this.blockedSenders = const {},
     this.contacts = const {},
+    this.filters = const {},
   });
 
   final SettingsCollection labels;
@@ -46,6 +47,10 @@ class SettingsData {
   /// sayaçları (`timesUsed`, `lastUsedAt`) cihaza özgüdür, belgeye yazılmaz.
   final SettingsCollection contacts;
 
+  /// Gelen e-posta filtreleri (sözleşme: web deposunda `docs/SETTINGS-FILTERS-CONTRACT.md`), filtre kimliğiyle anahtarlı.
+  /// Çalışma sırası `position` alanıdır. Telefon bunları şimdilik yalnızca KORUR: yerelde tutmaz, belgeden gelen kaydı aynen taşır.
+  final SettingsCollection filters;
+
   static const SettingsData empty = SettingsData();
 
   Map<String, Object?> toJson() => {
@@ -54,7 +59,17 @@ class SettingsData {
     'templates': templates,
     'blockedSenders': blockedSenders,
     'contacts': contacts,
+    'filters': filters,
   };
+
+  SettingsData withFilters(SettingsCollection filters) => SettingsData(
+    labels: labels,
+    signatures: signatures,
+    templates: templates,
+    blockedSenders: blockedSenders,
+    contacts: contacts,
+    filters: filters,
+  );
 
   factory SettingsData.fromJson(Map<String, Object?> json) => SettingsData(
     labels: _collection(json['labels']),
@@ -62,6 +77,7 @@ class SettingsData {
     templates: _collection(json['templates']),
     blockedSenders: _collection(json['blockedSenders']),
     contacts: _collection(json['contacts']),
+    filters: _collection(json['filters']),
   );
 
   static SettingsCollection _collection(Object? raw) {
@@ -116,7 +132,8 @@ bool settingsDataEqual(SettingsData a, SettingsData b) =>
     settingsDeepEqual(a.signatures, b.signatures) &&
     settingsDeepEqual(a.templates, b.templates) &&
     settingsDeepEqual(a.blockedSenders, b.blockedSenders) &&
-    settingsDeepEqual(a.contacts, b.contacts);
+    settingsDeepEqual(a.contacts, b.contacts) &&
+    settingsDeepEqual(a.filters, b.filters);
 
 /// [local]in [base]ten farklı alanları (base kaydı yoksa hepsini).
 Map<String, Object?> _changedFields(SettingsRecord? base, SettingsRecord local) {
@@ -208,6 +225,30 @@ SettingsCollection _normalizeDefaultSignature(
   };
 }
 
+/// Filtreler `position` sırasıyla çalışır; iki istemci aynı anda ekleyip sıralayabildiğinden konumlar eşit olabilir ya da boşluk kalabilir.
+/// Birleştirmeden sonra (position, anahtar) sırasıyla (anahtar UTF-16 kod birimi sırası) 0..n-1 yeniden numaralanır. Sayısal olmayan ya da
+/// eksik `position` en sona gider; yalnızca `position` alanı yeniden yazılır. KAYNAK: web `normalizeFilterPositions`.
+SettingsCollection _normalizeFilterPositions(SettingsCollection merged) {
+  double rank(SettingsRecord r) {
+    final p = r['position'];
+    return p is num && p.isFinite ? p.toDouble() : double.infinity;
+  }
+
+  final keys = merged.keys.toList()
+    ..sort((a, b) {
+      final ra = rank(merged[a]!);
+      final rb = rank(merged[b]!);
+      if (ra != rb) return ra < rb ? -1 : 1;
+      return a.compareTo(b);
+    });
+  final out = <String, SettingsRecord>{};
+  for (var i = 0; i < keys.length; i++) {
+    final record = merged[keys[i]]!;
+    out[keys[i]] = record['position'] == i ? record : {...record, 'position': i};
+  }
+  return out;
+}
+
 /// [merged], [local]den (yerelin anahtarları ve her kaydın KENDİ alanları
 /// açısından) farklı mı?
 bool _differsFromLocal(SettingsCollection merged, SettingsCollection local) {
@@ -265,12 +306,20 @@ SettingsMergeResult mergeSettings({
     local.contacts,
     remoteData.contacts,
   );
+  final filters = _normalizeFilterPositions(
+    _mergeCollection(
+      effectiveBase?.filters,
+      local.filters,
+      remoteData.filters,
+    ),
+  );
   final merged = SettingsData(
     labels: labels,
     signatures: signatures,
     templates: templates,
     blockedSenders: blockedSenders,
     contacts: contacts,
+    filters: filters,
   );
 
   final hasAny =
@@ -278,7 +327,8 @@ SettingsMergeResult mergeSettings({
       signatures.isNotEmpty ||
       templates.isNotEmpty ||
       blockedSenders.isNotEmpty ||
-      contacts.isNotEmpty;
+      contacts.isNotEmpty ||
+      filters.isNotEmpty;
   final pushNeeded = remote == null
       ? hasAny
       : !settingsDataEqual(merged, remote);
@@ -287,7 +337,8 @@ SettingsMergeResult mergeSettings({
       _differsFromLocal(signatures, local.signatures) ||
       _differsFromLocal(templates, local.templates) ||
       _differsFromLocal(blockedSenders, local.blockedSenders) ||
-      _differsFromLocal(contacts, local.contacts);
+      _differsFromLocal(contacts, local.contacts) ||
+      _differsFromLocal(filters, local.filters);
   return SettingsMergeResult(
     merged: merged,
     pushNeeded: pushNeeded,

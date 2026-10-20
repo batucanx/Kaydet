@@ -176,6 +176,13 @@ class SyncController extends Notifier<SyncState> {
   /// Tüm zamanlayıcı ve dinleyicileri kapatır.
   void _stopWatching() {
     _disposed = true;
+    // Bekleyen geri doldurmalar iptal edilir; `_disposed` olduğundan beklemeden
+    // çıkıp kendilerini `_backfilling`ten temizler.
+    for (final entry in _backfillWaits.entries.toList()) {
+      entry.key.cancel();
+      if (!entry.value.isCompleted) entry.value.complete();
+    }
+    _backfillWaits.clear();
     _idleRefresh?.cancel();
     _idleRefresh = null;
     _mailRefresh?.cancel();
@@ -366,6 +373,7 @@ class SyncController extends Notifier<SyncState> {
     // "ulaşılamıyor" işaretlenir. Etkin olmayan hesap için de izlenir (rozet).
     if (failure is ConnectionFailure) {
       _noteConnectionFailure(accountId);
+      return;
     }
     if (!_isCurrent(accountId)) return;
     state = state.copyWith(lastError: failure);
@@ -454,6 +462,28 @@ class SyncController extends Notifier<SyncState> {
 
   void _markQuiet() {
     _quietUntil = DateTime.now().add(_eventQuietPeriod);
+  }
+
+  /// Hesap başına iki yoklama arasındaki en kısa süre.
+  static const _unreadRefreshGap = Duration(seconds: 60);
+  final Map<int, DateTime> _lastUnreadRefresh = {};
+
+  /// Diğer klasörlerin okunmamış sayısını sunucudan yeniler (bkz.
+  /// `SyncEngine.refreshUnreadCounts`); en çok [_unreadRefreshGap]'te bir.
+  Future<void> _refreshUnreadCounts(
+    SyncEngine engine,
+    int accountId, {
+    bool force = false,
+  }) async {
+    final last = _lastUnreadRefresh[accountId];
+    final now = DateTime.now();
+    if (!force && last != null && now.difference(last) < _unreadRefreshGap) {
+      return;
+    }
+    _lastUnreadRefresh[accountId] = now;
+    final result = await engine.refreshUnreadCounts(accountId);
+    // Başarısız tur bir sonraki eşitlemede hemen yeniden denensin.
+    if (result is Err<int>) _lastUnreadRefresh.remove(accountId);
   }
 
   /// Tüm klasörleri ve seçili klasörün içeriğini eşitler.
@@ -545,6 +575,9 @@ class SyncController extends Notifier<SyncState> {
       // Kuyruktaki kullanıcı eylemleri ve giden kutusu.
       await ref.read(mailRepositoryProvider).processQueue(accountId);
 
+      // İletileri indirilmeyen klasörlerin okunmamış sayıları (arka planda).
+      _fireAndForget(_refreshUnreadCounts(engine, accountId));
+
       // Etiket ve imzalar web ile eşitlenir (en çok 45 sn'de bir; arka planda).
       _fireAndForget(ref.read(settingsSyncServiceProvider).sync(accountId));
 
@@ -624,11 +657,16 @@ class SyncController extends Notifier<SyncState> {
       );
       if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
-        _folderErrors[mailbox.id] = outcome.failure;
-        state = state.copyWith(
-          lastError: outcome.failure,
-          folderErrors: Map.of(_folderErrors),
-        );
+        // Bağlantı hatası afişe çıkmaz (bkz. `_reportFailure`): internet
+        // kapanınca çevrimdışı şeridi 8 sn gecikmeyle gelir; bu arada
+        // "Sunucuya bağlanılamıyor" afişi kısa süre çıkıp kaybolurdu.
+        if (outcome.failure is! ConnectionFailure) {
+          _folderErrors[mailbox.id] = outcome.failure;
+          state = state.copyWith(
+            lastError: outcome.failure,
+            folderErrors: Map.of(_folderErrors),
+          );
+        }
         _reportFailure(accountId, outcome.failure);
         // Bu klasörün eşitlenememesi (ör. yalnızca bu klasörü seçerken oluşan
         // bir sunucu hatası) kullanıcının bekleyen eylemlerini (gönderim,
@@ -648,6 +686,12 @@ class SyncController extends Notifier<SyncState> {
       _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
       await ref.read(mailRepositoryProvider).processQueue(accountId);
       _startBodyPrefetch(engine, accountId, mailbox);
+
+      // Açılan klasörün okunmamış sayısı sunucudan tazelenir (Gelen
+      // Kutusu/Gönderilenler vb. yerel sayımla gösterildiğinden atlanır).
+      _fireAndForget(
+        engine.refreshUnreadCounts(accountId, onlyMailboxId: mailbox.id),
+      );
 
       // Yerel önbellek tavanını aşan eski iletiler kademeli temizlenir
       // (bkz. `MailRepository.trimMailbox`) — arka planda, ekranı bloklamaz.
@@ -799,6 +843,10 @@ class SyncController extends Notifier<SyncState> {
   /// Arka planda geri doldurması sürmekte olan klasörler.
   final Set<int> _backfilling = {};
 
+  /// Başlamayı bekleyen geri doldurmaların zamanlayıcıları; kapanışta iptal
+  /// edilir (bkz. [_stopWatching]).
+  final Map<Timer, Completer<void>> _backfillWaits = {};
+
   /// İlk indirmeden (en yeni 50) sonra klasörü yerel saklama sınırına
   /// ([RetentionPolicy.defaultLimit]) kadar SESSİZCE doldurur.
   ///
@@ -819,7 +867,13 @@ class SyncController extends Notifier<SyncState> {
     // Soğuk açılışta kullanıcı ilk iletilerine bakar/açar; tek bağlantı tek
     // işlem yapabildiği için geri doldurma sayfaları (100 başlık) o ilk
     // saniyelerde kullanıcının dokunuşunun önüne girmesin.
-    await Future<void>.delayed(_backfillStartDelay);
+    // İptal edilebilir bekleme: `Future.delayed` denetleyici kapanınca da
+    // sürerdi (testlerde "bekleyen zamanlayıcı" olarak kalır).
+    final waited = Completer<void>();
+    final timer = Timer(_backfillStartDelay, waited.complete);
+    _backfillWaits[timer] = waited;
+    await waited.future;
+    _backfillWaits.remove(timer);
     // Bekleme sırasında hesap değişmiş, denetleyici kapanmış ya da uygulama
     // arka plana alınmış olabilir: kapanmış bir `ref`'e dokunmadan önce çık.
     if (_disposed || _paused || !_isCurrent(accountId)) return;

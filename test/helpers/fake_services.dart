@@ -152,6 +152,7 @@ class FakeImapService implements ImapService {
   Future<Result<MailboxState>> statusMailbox(
     String path, {
     String? encodedPath,
+    bool includeUnseen = false,
   }) async {
     commandLog.add('status:$path');
     final box = _box(path);

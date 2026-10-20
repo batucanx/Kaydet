@@ -177,6 +177,19 @@ class MailRepository {
         seen ? PendingOpType.markSeen : PendingOpType.markUnseen,
       );
     });
+    // Saklanan (sunucudan gelen) klasör sayısı da değişime uysun.
+    final deltas = <int, int>{};
+    for (final row in rows) {
+      if (row.isSeen == seen || row.isDraft || row.isDeleted) continue;
+      deltas.update(
+        row.mailboxId,
+        (d) => d + (seen ? -1 : 1),
+        ifAbsent: () => seen ? -1 : 1,
+      );
+    }
+    for (final entry in deltas.entries) {
+      await _db.adjustMailboxUnreadCount(entry.key, entry.value);
+    }
     if (seen) onMessagesHandled?.call(messageIds);
     _kickAccountsOf(rows);
   }

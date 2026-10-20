@@ -2,22 +2,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import '../../../app/filter_providers.dart';
 import '../../../app/providers.dart';
 import '../../../app/sync_controller.dart';
 import '../../../core/date_format.dart';
 import '../../../data/database/app_database.dart';
+import '../../../data/services/quick_templates_store.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import 'accounts_settings_screen.dart';
 import 'appearance_settings_screen.dart';
 import 'blocked_senders_settings_screen.dart';
+import 'filters_settings_screen.dart';
 import 'labels_settings_screen.dart';
 import 'maintenance_settings_screen.dart';
 import 'notifications_settings_screen.dart';
 import 'privacy_settings_screen.dart';
 import 'signatures_settings_screen.dart';
 import 'swipe_settings_screen.dart';
+import 'templates_settings_screen.dart';
 
 /// Ayarlar ekranı: kategorilere göre gruplanmış (Grouped List), her satır
 /// kendi alt sayfasına açılan hiyerarşik bir yapı (Drill-down navigation).
@@ -39,6 +43,8 @@ class SettingsScreen extends ConsumerWidget {
         ref.watch(signaturesProvider).value ?? const <SignatureRow>[];
     final blocked =
         ref.watch(blockedSendersProvider).value ?? const <BlockedSenderRow>[];
+    final templates = ref.watch(quickTemplatesProvider);
+    final filters = ref.watch(mailFiltersProvider).value ?? const [];
     final sync = ref.watch(syncControllerProvider);
 
     final themeLabel = settings.themeMode.label;
@@ -175,6 +181,33 @@ class SettingsScreen extends ConsumerWidget {
                   color: t.textTertiary,
                 ),
                 onTap: () => context.pushScreen(const LabelsSettingsScreen()),
+              ),
+              SettingsTile(
+                icon: LucideIcons.fileText,
+                title: 'Şablonlar',
+                subtitle: templates.isEmpty
+                    ? 'Henüz şablon yok'
+                    : '${templates.length} şablon',
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
+                onTap: () =>
+                    context.pushScreen(const TemplatesSettingsScreen()),
+              ),
+              SettingsTile(
+                icon: LucideIcons.funnel,
+                title: 'Filtreler',
+                subtitle: filters.isEmpty
+                    ? 'Henüz filtre yok'
+                    : '${filters.length} filtre',
+                trailing: Icon(
+                  LucideIcons.chevronRight,
+                  size: 18,
+                  color: t.textTertiary,
+                ),
+                onTap: () => context.pushScreen(const FiltersSettingsScreen()),
               ),
               SettingsTile(
                 iconAsset: 'assets/icons/settings_signatures.png',

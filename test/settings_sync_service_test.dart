@@ -412,7 +412,7 @@ void main() {
     ));
     imap.store['INBOX.Kaydet-Settings'] = {};
     final future = jsonEncode({
-      'format': 'kaydet-settings', 'v': 5, 'rev': 40, 'updatedAt': 'x',
+      'format': 'kaydet-settings', 'v': 6, 'rev': 40, 'updatedAt': 'x',
       'writer': 'gelecek', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
     });
     await imap.appendMessage(
@@ -647,6 +647,67 @@ void main() {
     await phone.sync();
     expect(await phone.blocked(), ['a@spam.example:', 'b@spam.example:']);
     expect(phone.latestDocument()!.data.blockedSenders['Tuhaf Anahtar'], {'email': 'adres degil'});
+  });
+
+  test('telefon filters\'ı değiştirmeden geri yazar (web v5 belgesi; başka bir değişiklik yazımı tetikler)', () async {
+    final phone = await _Device.create(imap);
+    await phone.addLabel('Is', 2, keyword: 'kaydet_is');
+    await phone.sync();
+    final box = imap.mailboxes.firstWhere((m) => isSettingsMailbox(m.path, m.delimiter));
+    final filters = {
+      'zz-ikinci': {
+        'name': 'B', 'enabled': false, 'position': 7, 'matchMode': 'any',
+        'conditions': [{'field': 'attachment', 'operator': 'exists'}],
+        'actions': [{'type': 'tuhaf-yeni-eylem'}],
+        'stopProcessing': true, 'gelecekAlan': [1, 'iki', {'u': null}],
+      },
+      'aa-birinci': {
+        'name': 'A', 'enabled': true, 'position': 0, 'matchMode': 'all',
+        'conditions': [{'field': 'from', 'operator': 'contains', 'value': 'x@y.z'}],
+        'actions': [{'type': 'move', 'folder': ['INBOX', 'Fatura']}],
+        'stopProcessing': false,
+      },
+    };
+    // Web: v5 belge, filtreli; bilinmeyen üst düzey alan da var.
+    final latest = phone.latestDocument()!;
+    final web = jsonEncode({
+      'format': 'kaydet-settings', 'v': 5, 'rev': latest.rev + 1,
+      'updatedAt': latest.updatedAt, 'writer': 'web',
+      'labels': latest.data.labels, 'signatures': <String, Object?>{},
+      'templates': <String, Object?>{}, 'blockedSenders': <String, Object?>{},
+      'contacts': <String, Object?>{}, 'filters': filters, 'gelecek': {'k': 1},
+    });
+    final uid = (imap.store[box.path] ?? {}).keys.fold<int>(0, (a, b) => a > b ? a : b) + 1;
+    imap.store.putIfAbsent(box.path, () => {})[uid] = envelope(uid: uid);
+    imap.seedBody(box.path, uid, FetchedBody(plainText: web));
+
+    // Telefonda yerel bir değişiklik: belge yeniden yazılır, filtreler dokunulmadan taşınmalı.
+    await phone.addLabel('Kisisel', 6, keyword: 'kaydet_kisisel');
+    await phone.sync();
+
+    final doc = phone.latestDocument()!;
+    expect(doc.writer, 'mobile');
+    final written = jsonDecode(serializeSettingsDocument(doc)) as Map<String, Object?>;
+    expect(written['v'], 5);
+    expect(written['gelecek'], {'k': 1});
+    // Hem bozuk biçimli (tanınmayan eylem) hem klasörü bu hesapta olmayan kayıt belgede AYNEN taşınır; yeniden numaralama bile
+    // yapılmaz (7 yerinde kalır): yalnızca birleştirmeye giren kayıtlar 0..n-1 numaralanır.
+    expect(written['filters'], filters);
+    expect(await phone.labels(), ['Is:2', 'Kisisel:6']);
+
+    // Değişiklik yoksa yeniden yazım olmaz (idempotans).
+    final appends = imap.commandLog.where((c) => c.startsWith('append')).length;
+    await phone.sync();
+    expect(imap.commandLog.where((c) => c.startsWith('append')).length, appends);
+  });
+
+  test('filtresi olmayan hesap v4 yazar (filters anahtarı yok)', () async {
+    final phone = await _Device.create(imap);
+    await phone.addLabel('Is', 2, keyword: 'kaydet_is');
+    await phone.sync();
+    final doc = jsonDecode(serializeSettingsDocument(phone.latestDocument()!)) as Map<String, Object?>;
+    expect(doc['v'], 4);
+    expect(doc.containsKey('filters'), isFalse);
   });
 
   test('kişi defteri iki yönde taşınır; yeniden kurulumda (yeni veritabanı) belgeden geri gelir; silme de gider', () async {

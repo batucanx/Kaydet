@@ -202,11 +202,15 @@ class MailboxState {
     required this.messageCount,
     this.highestModSeq,
     this.permanentFlags = const [],
+    this.unseenCount,
   });
 
   final int uidValidity;
   final int uidNext;
   final int messageCount;
+
+  /// Sunucunun `STATUS (UNSEEN)` değeri; yalnızca istendiğinde dolar.
+  final int? unseenCount;
   final int? highestModSeq;
   final List<String> permanentFlags;
 

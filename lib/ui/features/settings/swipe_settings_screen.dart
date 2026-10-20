@@ -101,21 +101,21 @@ class SwipeSettingsScreen extends ConsumerWidget {
               children: [
                 for (final action in SwipeAction.values)
                   if (action != SwipeAction.configure)
-                  ListTile(
-                    leading: Icon(
-                      SwipeStyle.forSelection(action, t)?.icon ??
-                          LucideIcons.ban,
-                      color: t.textSecondary,
+                    ListTile(
+                      leading: Icon(
+                        SwipeStyle.forSelection(action, t)?.icon ??
+                            LucideIcons.ban,
+                        color: t.textSecondary,
+                      ),
+                      title: Text(action.label),
+                      trailing: action == current
+                          ? Icon(LucideIcons.check, color: t.accent)
+                          : null,
+                      onTap: () {
+                        onSelected(action);
+                        Navigator.of(sheetContext).pop();
+                      },
                     ),
-                    title: Text(action.label),
-                    trailing: action == current
-                        ? Icon(LucideIcons.check, color: t.accent)
-                        : null,
-                    onTap: () {
-                      onSelected(action);
-                      Navigator.of(sheetContext).pop();
-                    },
-                  ),
               ],
             ),
           ),
@@ -145,7 +145,12 @@ class _SwipeSection extends StatelessWidget {
     final t = context.tokens;
     final textTheme = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(Space.lg, Space.lg, Space.lg, Space.xl),
+      padding: const EdgeInsets.fromLTRB(
+        Space.lg,
+        Space.lg,
+        Space.lg,
+        Space.xl,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -199,12 +204,18 @@ class _SwipePreviewState extends State<SwipePreview>
 
   static final _sequence = TweenSequence<double>([
     TweenSequenceItem(
-      tween: Tween(begin: 0.0, end: 1.0).chain(CurveTween(curve: Curves.easeOutCubic)),
+      tween: Tween(
+        begin: 0.0,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeOutCubic)),
       weight: 35,
     ),
     TweenSequenceItem(tween: ConstantTween(1.0), weight: 30),
     TweenSequenceItem(
-      tween: Tween(begin: 1.0, end: 0.0).chain(CurveTween(curve: Curves.easeInCubic)),
+      tween: Tween(
+        begin: 1.0,
+        end: 0.0,
+      ).chain(CurveTween(curve: Curves.easeInCubic)),
       weight: 25,
     ),
     TweenSequenceItem(tween: ConstantTween(0.0), weight: 10),

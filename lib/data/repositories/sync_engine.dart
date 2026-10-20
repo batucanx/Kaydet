@@ -189,6 +189,48 @@ class SyncEngine {
     return Ok(await _db.mailboxesOf(accountId));
   }
 
+  /// İletilerini indirmediğimiz klasörlerin (Arşiv, özel klasörler…)
+  /// okunmamış sayısını sunucudan `STATUS (UNSEEN)` ile alıp
+  /// `mailboxes.unreadCount`a yazar. Gelen Kutusu, Gönderilenler, Taslaklar,
+  /// Çöp ve İstenmeyen yerel sayımla gösterilir; burada yoklanmaz.
+  /// Tek bir klasörün hatası turu bozmaz; bağlantı hatasında tur biter.
+  Future<Result<int>> refreshUnreadCounts(
+    int accountId, {
+    int? onlyMailboxId,
+  }) => _connection.exclusive<int>(accountId, () async {
+        final boxes = await _db.mailboxesOf(accountId);
+        var updated = 0;
+        for (final box in boxes) {
+          if (onlyMailboxId != null && box.id != onlyMailboxId) continue;
+          if (!box.isSelectable || !box.isSubscribed) continue;
+          if (_localCountedUses.contains(box.specialUse)) continue;
+          final status = await _connection.imap.statusMailbox(
+            box.path,
+            encodedPath: box.encodedPath,
+            includeUnseen: true,
+          );
+          if (status is Err<MailboxState>) {
+            if (status.failure is ConnectionFailure) return Err(status.failure);
+            continue;
+          }
+          final unseen = (status as Ok<MailboxState>).value.unseenCount;
+          if (unseen == null) continue;
+          if (unseen != box.unreadCount) {
+            await _db.setMailboxUnreadCount(box.id, unseen);
+          }
+          updated++;
+        }
+        return Ok(updated);
+      });
+
+  static const _localCountedUses = {
+    SpecialUse.inbox,
+    SpecialUse.sent,
+    SpecialUse.drafts,
+    SpecialUse.trash,
+    SpecialUse.junk,
+  };
+
   // -------------------------------------------------------------- iletiler
 
   /// Bir klasörü eşitler.

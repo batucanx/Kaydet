@@ -1,0 +1,931 @@
+{
+  "mail": {
+    "from": {
+      "email": "Fatura@Example.com",
+      "name": "Ahmet Yılmaz"
+    },
+    "to": [
+      {
+        "email": "me@kaydet.app",
+        "name": ""
+      }
+    ],
+    "cc": [
+      {
+        "email": "muhasebe@company.com",
+        "name": "Muhasebe"
+      }
+    ],
+    "subject": "Ekim FATURA bilgisi",
+    "hasAttachments": false,
+    "body": "Merhaba, ekteki tutar 120 TL dir."
+  },
+  "evaluate": [
+    {
+      "name": "from: equals the address, any case",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "equals",
+          "value": "fatura@example.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: contains a domain part, any case",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "@EXAMPLE.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: contains a part of the display name",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "ahmet"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: equals the display name without Turkish accents",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "equals",
+          "value": "ahmet yilmaz"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: equals needs the whole address",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "equals",
+          "value": "example.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "from: an address typed as <a@b.com>",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "equals",
+          "value": "<fatura@example.com>"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: an address typed as mailto:a@b.com",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "equals",
+          "value": "mailto:fatura@example.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "from: a mail without a usable From",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "x"
+        }
+      ],
+      "mail": {
+        "from": {
+          "email": "",
+          "name": ""
+        }
+      },
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "turkish: i finds a dotless I",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "ısparta"
+        }
+      ],
+      "mail": {
+        "subject": "ISPARTA ŞUBE FİŞİ"
+      },
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "turkish: accents fold (S, I with dot)",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "sube fisi"
+        }
+      ],
+      "mail": {
+        "subject": "ISPARTA ŞUBE FİŞİ"
+      },
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "turkish: i finds I at the start",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "startsWith",
+          "value": "isparta"
+        }
+      ],
+      "mail": {
+        "subject": "ISPARTA ŞUBE FİŞİ"
+      },
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: contains",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "fatura"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: notContains the word is present",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "notContains",
+          "value": "fatura"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "subject: notContains the word is absent",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "notContains",
+          "value": "sipariş"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: startsWith",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "startsWith",
+          "value": "ekim"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: endsWith",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "endsWith",
+          "value": "bilgisi"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: equals the whole subject",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "equals",
+          "value": "ekim fatura bilgisi"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "subject: equals needs all of it",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "equals",
+          "value": "ekim"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "to: equals",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "to",
+          "operator": "equals",
+          "value": "me@kaydet.app"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "cc: contains a domain",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "cc",
+          "operator": "contains",
+          "value": "@company.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "cc: does not look at To",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "cc",
+          "operator": "contains",
+          "value": "kaydet"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "address: any of from, to, cc",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "address",
+          "operator": "contains",
+          "value": "kaydet.app"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "address: nobody",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "address",
+          "operator": "equals",
+          "value": "nobody@x.com"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "body: contains",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "body",
+          "operator": "contains",
+          "value": "120 tl"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "body: unreadable never matches contains",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "body",
+          "operator": "contains",
+          "value": "120"
+        }
+      ],
+      "mail": {
+        "body": null
+      },
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "body: unreadable never matches notContains either",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "body",
+          "operator": "notContains",
+          "value": "120"
+        }
+      ],
+      "mail": {
+        "body": null
+      },
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "attachment: exists with an attachment",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "attachment",
+          "operator": "exists"
+        }
+      ],
+      "mail": {
+        "hasAttachments": true
+      },
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "attachment: exists without one",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "attachment",
+          "operator": "exists"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false
+        ]
+      }
+    },
+    {
+      "name": "attachment: notExists without one",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "attachment",
+          "operator": "notExists"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true
+        ]
+      }
+    },
+    {
+      "name": "ALL: one failing condition fails the filter; every condition is reported",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "@company.com"
+        },
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "fatura"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false,
+          true
+        ]
+      }
+    },
+    {
+      "name": "ALL: every condition true",
+      "matchMode": "all",
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "fatura"
+        },
+        {
+          "field": "attachment",
+          "operator": "notExists"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "name": "ANY: one is enough",
+      "matchMode": "any",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "@company.com"
+        },
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "fatura"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": true,
+        "conditions": [
+          false,
+          true
+        ]
+      }
+    },
+    {
+      "name": "ANY: none matches",
+      "matchMode": "any",
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "@company.com"
+        },
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "sipariş"
+        }
+      ],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": [
+          false,
+          false
+        ]
+      }
+    },
+    {
+      "name": "no conditions never match (ALL)",
+      "matchMode": "all",
+      "conditions": [],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": []
+      }
+    },
+    {
+      "name": "no conditions never match (ANY)",
+      "matchMode": "any",
+      "conditions": [],
+      "mail": {},
+      "expect": {
+        "matched": false,
+        "conditions": []
+      }
+    }
+  ],
+  "names": [
+    {
+      "conditions": [
+        {
+          "field": "from",
+          "operator": "contains",
+          "value": "fatura@example.com"
+        }
+      ],
+      "expect": "Kimden: fatura@example.com"
+    },
+    {
+      "conditions": [
+        {
+          "field": "subject",
+          "operator": "contains",
+          "value": "Fatura"
+        },
+        {
+          "field": "attachment",
+          "operator": "exists"
+        }
+      ],
+      "expect": "Konu: Fatura +1"
+    },
+    {
+      "conditions": [
+        {
+          "field": "attachment",
+          "operator": "exists"
+        }
+      ],
+      "expect": "Ek dosyası var"
+    },
+    {
+      "conditions": [
+        {
+          "field": "attachment",
+          "operator": "notExists"
+        }
+      ],
+      "expect": "Ek dosyası yok"
+    },
+    {
+      "conditions": [
+        {
+          "field": "to",
+          "operator": "equals",
+          "value": "me@kaydet.app"
+        }
+      ],
+      "expect": "Kime: me@kaydet.app"
+    },
+    {
+      "conditions": [
+        {
+          "field": "cc",
+          "operator": "contains",
+          "value": "x@y.com"
+        }
+      ],
+      "expect": "CC: x@y.com"
+    },
+    {
+      "conditions": [
+        {
+          "field": "address",
+          "operator": "contains",
+          "value": "x@y.com"
+        }
+      ],
+      "expect": "E-posta adresi: x@y.com"
+    },
+    {
+      "conditions": [
+        {
+          "field": "body",
+          "operator": "contains",
+          "value": "tutar"
+        }
+      ],
+      "expect": "İçerik: tutar"
+    }
+  ],
+  "validation": [
+    {
+      "name": "one relocation with labels and forwards is fine",
+      "actions": [
+        {
+          "type": "forward",
+          "email": "muhasebe@example.com"
+        },
+        {
+          "type": "label",
+          "labelId": "l1"
+        },
+        {
+          "type": "move",
+          "folderId": "f1"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": []
+    },
+    {
+      "name": "only one action may take the mail out of the Inbox (move + trash)",
+      "actions": [
+        {
+          "type": "move",
+          "folderId": "f1"
+        },
+        {
+          "type": "trash"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.1",
+          "reason": "conflict"
+        }
+      ]
+    },
+    {
+      "name": "only one action may take the mail out of the Inbox (spam + delete)",
+      "actions": [
+        {
+          "type": "spam"
+        },
+        {
+          "type": "delete"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.1",
+          "reason": "conflict"
+        }
+      ]
+    },
+    {
+      "name": "the same label twice is a duplicate",
+      "actions": [
+        {
+          "type": "label",
+          "labelId": "l1"
+        },
+        {
+          "type": "label",
+          "labelId": "l1"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.1",
+          "reason": "duplicate"
+        }
+      ]
+    },
+    {
+      "name": "two different labels are fine",
+      "actions": [
+        {
+          "type": "label",
+          "labelId": "l1"
+        },
+        {
+          "type": "label",
+          "labelId": "l2"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": []
+    },
+    {
+      "name": "a forward address must be an address",
+      "actions": [
+        {
+          "type": "forward",
+          "email": "not-an-address"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.0.email",
+          "reason": "invalid"
+        }
+      ]
+    },
+    {
+      "name": "a filter may not forward to the account itself",
+      "actions": [
+        {
+          "type": "forward",
+          "email": "Me@Kaydet.app"
+        }
+      ],
+      "ownAddresses": [
+        "me@kaydet.app"
+      ],
+      "expect": [
+        {
+          "field": "actions.0.email",
+          "reason": "invalid"
+        }
+      ]
+    },
+    {
+      "name": "two forwards are one too many",
+      "actions": [
+        {
+          "type": "forward",
+          "email": "a@example.com"
+        },
+        {
+          "type": "forward",
+          "email": "b@example.com"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.1",
+          "reason": "too_many"
+        }
+      ]
+    },
+    {
+      "name": "the same address forwarded twice: too many and a duplicate",
+      "actions": [
+        {
+          "type": "forward",
+          "email": "a@example.com"
+        },
+        {
+          "type": "forward",
+          "email": "A@Example.com"
+        }
+      ],
+      "ownAddresses": [],
+      "expect": [
+        {
+          "field": "actions.1",
+          "reason": "too_many"
+        },
+        {
+          "field": "actions.1",
+          "reason": "duplicate"
+        }
+      ]
+    }
+  ]
+}

@@ -20,9 +20,13 @@ import 'settings_merge.dart';
 const String settingsMailboxName = 'Kaydet-Settings';
 const String settingsFormat = 'kaydet-settings';
 /// v2, `templates` (hazır şablonlar), v3 `blockedSenders` (engellenen kullanıcılar), v4 `contacts`
-/// (kişiler) ekledi. Eski belgeler (v1–v3) hâlâ okunur, eksik koleksiyonlar boş sayılır; her yazım v4'tür ve daha eski bir
-/// sürümü bilen uygulama bunu "daha yeni" sayıp eşitlemeye dokunmaz (bilmediği koleksiyonu düşürürdü).
-const int settingsVersion = 4;
+/// (kişiler), v5 `filters` (gelen e-posta filtreleri) ekledi. Eski belgeler (v1–v4) hâlâ okunur, eksik koleksiyonlar boş
+/// sayılır. Yazım, hesapta filtre YOKKEN v4'tür (`filters` anahtarı hiç yazılmaz), VARKEN v5'tir: daha eski bir sürümü bilen
+/// uygulama v5'i "daha yeni" sayıp eşitlemeye dokunmaz (bilmediği koleksiyonu düşürürdü); filtresiz kimse senkrondan kopmaz.
+const int settingsVersion = 5;
+
+/// Filtre içermeyen belgenin yazıldığı sürüm.
+const int settingsVersionWithoutFilters = 4;
 const String settingsSubject = 'Kaydet settings (do not delete)';
 const String settingsHeader = 'X-Kaydet-Settings';
 
@@ -35,6 +39,7 @@ class SettingsDocument {
     required this.updatedAt,
     required this.writer,
     required this.data,
+    this.extra = const {},
   });
 
   final int rev;
@@ -42,9 +47,17 @@ class SettingsDocument {
   final String writer;
   final SettingsData data;
 
+  /// Bu kodun tanımadığı üst düzey alanlar: okunur ve geri yazılır, asla düşürülmez.
+  final Map<String, Object?> extra;
+
+  static const Set<String> knownKeys = {
+    'format', 'v', 'rev', 'updatedAt', 'writer', 'labels', 'signatures',
+    'templates', 'blockedSenders', 'contacts', 'filters',
+  };
+
   Map<String, Object?> toJson() => {
     'format': settingsFormat,
-    'v': settingsVersion,
+    'v': data.filters.isEmpty ? settingsVersionWithoutFilters : settingsVersion,
     'rev': rev,
     'updatedAt': updatedAt,
     'writer': writer,
@@ -53,6 +66,10 @@ class SettingsDocument {
     'templates': data.templates,
     'blockedSenders': data.blockedSenders,
     'contacts': data.contacts,
+    // v4 belgede `filters` anahtarı HİÇ yoktur.
+    if (data.filters.isNotEmpty) 'filters': data.filters,
+    for (final e in extra.entries)
+      if (!knownKeys.contains(e.key)) e.key: e.value,
   };
 }
 
@@ -124,7 +141,8 @@ _Parsed _parse(String text) {
       (json['templates'] != null && !_validCollection(json['templates'])) ||
       (json['blockedSenders'] != null &&
           !_validCollection(json['blockedSenders'])) ||
-      (json['contacts'] != null && !_validCollection(json['contacts']))) {
+      (json['contacts'] != null && !_validCollection(json['contacts'])) ||
+      (json['filters'] != null && !_validCollection(json['filters']))) {
     return const _Parsed(_ParseKind.invalid);
   }
   return _Parsed(
@@ -134,6 +152,10 @@ _Parsed _parse(String text) {
       updatedAt: updatedAt,
       writer: writer,
       data: SettingsData.fromJson(json),
+      extra: {
+        for (final e in json.entries)
+          if (!SettingsDocument.knownKeys.contains(e.key)) e.key: e.value,
+      },
     ),
   );
 }

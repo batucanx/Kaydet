@@ -332,3 +332,37 @@ class PendingOperations extends Table {
   IntColumn get status =>
       intEnum<PendingOpStatus>().withDefault(const Constant(0))();
 }
+
+/// Hesabın gelen e-posta filtreleri. Liste web ve diğer cihazlarla ayar belgesi (`filters` koleksiyonu, v5) üzerinden
+/// eşit tutulur; belgeye yazılırken klasör/etiket kimlikleri taşınabilir adlara çevrilir (bkz. `filter_record.dart`).
+///
+/// Telefon filtreleri YALNIZCA listeler ve düzenler, gelen postaya UYGULAMAZ: eşleşme sayacı, son hata ve
+/// "hangi iletiye ne yapıldı" defteri bu yüzden yoktur (bunlar cihaza özgüdür ve belgeye yazılmaz).
+@DataClassName('MailFilterRow')
+class MailFilters extends Table {
+  /// Filtre kimliği: istemcinin ürettiği, hesap içinde benzersiz dizge (belgedeki koleksiyon anahtarı).
+  TextColumn get id => text()();
+  IntColumn get accountId =>
+      integer().references(Accounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text().withDefault(const Constant(''))();
+  BoolColumn get enabled => boolean().withDefault(const Constant(true))();
+
+  /// Çalışma sırası (sıralama anahtarı; birleştirmeden sonra 0..n-1).
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  /// `all` | `any`.
+  TextColumn get matchMode => text().withDefault(const Constant('all'))();
+
+  /// `FilterCondition.toJson` listesi.
+  TextColumn get conditionsJson => text().withDefault(const Constant('[]'))();
+
+  /// `FilterAction.toJson` listesi (YEREL klasör/etiket kimlikleriyle).
+  TextColumn get actionsJson => text().withDefault(const Constant('[]'))();
+  BoolColumn get stopProcessing =>
+      boolean().withDefault(const Constant(false))();
+  DateTimeColumn get createdAt => dateTime().withDefault(currentDateAndTime)();
+  DateTimeColumn get updatedAt => dateTime().withDefault(currentDateAndTime)();
+
+  @override
+  Set<Column> get primaryKey => {accountId, id};
+}

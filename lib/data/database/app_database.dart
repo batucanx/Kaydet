@@ -61,6 +61,7 @@ class AttachmentSearchResult {
     Signatures,
     Contacts,
     BlockedSenders,
+    MailFilters,
     PendingOperations,
     TranslatedEmailCache,
     MessageLanguages,
@@ -79,7 +80,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 19;
+  int get schemaVersion => 20;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -245,6 +246,10 @@ class AppDatabase extends _$AppDatabase {
       // v18 → v19: Engellenen kullanıcılar tablosu eklendi (yeni tablo; mevcut veri etkilenmez).
       if (from < 19) {
         await m.createTable(blockedSenders);
+      }
+      // v19 → v20: Gelen e-posta filtreleri tablosu eklendi (yeni tablo; mevcut veri etkilenmez).
+      if (from < 20) {
+        await m.createTable(mailFilters);
       }
     },
     beforeOpen: (details) async {
@@ -647,6 +652,24 @@ class AppDatabase extends _$AppDatabase {
     ),
   );
 
+  /// Klasörün sunucudan bilinen okunmamış sayısını yazar. Eşitleme sütunlarına
+  /// ve yerel tercihlere (`upsertMailbox`) dokunmaz.
+  Future<void> setMailboxUnreadCount(int mailboxId, int unread) =>
+      (update(mailboxes)..where((m) => m.id.equals(mailboxId))).write(
+        MailboxesCompanion(unreadCount: Value(unread)),
+      );
+
+  /// Saklanan okunmamış sayısını [delta] kadar kaydırır (0'ın altına inmez).
+  /// Kullanıcı bir iletiyi okundu/okunmadı işaretleyince rozet, sunucu
+  /// yoklamasını beklemeden hemen doğru yöne gider.
+  Future<void> adjustMailboxUnreadCount(int mailboxId, int delta) async {
+    if (delta == 0) return;
+    final box = await mailboxById(mailboxId);
+    if (box == null) return;
+    final next = box.unreadCount + delta;
+    await setMailboxUnreadCount(mailboxId, next < 0 ? 0 : next);
+  }
+
   /// Klasörün yerel önbellek tavanını büyütür (bkz. `RetentionPolicy`) —
   /// kullanıcı yerelde biten listede "daha fazla göster" dedikçe
   /// `SyncController.loadMore` bunu çağırır; aksi hâlde `trimMailbox`
@@ -985,6 +1008,20 @@ class AppDatabase extends _$AppDatabase {
             messages.mailboxId.isIn(mailboxIds) &
                 messages.isSeen.equals(false) &
                 messages.isDraft.equals(false) &
+                messages.isDeleted.equals(false),
+          ))
+        .map((row) => row.read(count) ?? 0)
+        .watchSingle();
+  }
+
+  /// Taslak sayısı: [mailboxIds] klasörlerindeki silinmemiş taslaklar
+  /// (sunucuda olanlar ve henüz yüklenmemiş yerel taslaklar dahil).
+  Stream<int> watchDraftCountIn(List<int> mailboxIds) {
+    final count = countAll();
+    return (selectOnly(messages)
+          ..addColumns([count])
+          ..where(
+            messages.mailboxId.isIn(mailboxIds) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)

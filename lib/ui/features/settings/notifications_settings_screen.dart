@@ -49,9 +49,7 @@ class _NotificationsSettingsScreenState
 
   Future<void> _refreshSystemState() async {
     try {
-      final enabled = await ref
-          .read(notificationServiceProvider)
-          .areEnabled();
+      final enabled = await ref.read(notificationServiceProvider).areEnabled();
       if (mounted) setState(() => _systemEnabled = enabled);
     } on Object catch (_) {
       // Durum okunamadıysa uyarı gösterilmez; anahtar yine çalışır.
@@ -106,8 +104,9 @@ class _NotificationsSettingsScreenState
                       'Yeni ileti bildirimi alabilmek için telefonun '
                       'ayarlarından Kaydet bildirimlerine izin verin.',
                   trailing: const Icon(LucideIcons.chevronRight, size: 18),
-                  onTap: () =>
-                      ref.read(notificationServiceProvider).openSystemSettings(),
+                  onTap: () => ref
+                      .read(notificationServiceProvider)
+                      .openSystemSettings(),
                 ),
               MenuAnchor(
                 animated: true,

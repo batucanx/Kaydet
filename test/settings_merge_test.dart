@@ -82,7 +82,7 @@ void main() {
     test('geçerli belge yoksa NoSettings; daha yeni biçim varsa NewerSettings', () {
       expect(pickLatestSettings(const []), isA<NoSettings>());
       expect(pickLatestSettings(['{"format":"baska"}', '[]']), isA<NoSettings>());
-      final future = jsonEncode({...doc(9).toJson(), 'v': 5});
+      final future = jsonEncode({...doc(9).toJson(), 'v': 6});
       expect(
         pickLatestSettings([serializeSettingsDocument(doc(2)), future]),
         isA<NewerSettings>(),
@@ -183,6 +183,83 @@ void main() {
         (back as FoundSettings).document.data.contacts['a@x.com'],
         {'email': 'a@x.com', 'name': 'Ayşe'},
       );
+    });
+
+    const filterRecord = {
+      'name': 'Faturalar',
+      'enabled': true,
+      'position': 0,
+      'matchMode': 'all',
+      'conditions': [
+        {'field': 'from', 'operator': 'contains', 'value': 'fatura@example.com'},
+      ],
+      'actions': [
+        {'type': 'label', 'label': 'kaydet_fatura'},
+      ],
+      'stopProcessing': false,
+      'gelecekAlan': {'x': 1},
+    };
+
+    test('filtresiz belge v4 yazılır ve `filters` anahtarı hiç yoktur', () {
+      final json = doc(1).toJson();
+      expect(json['v'], 4);
+      expect(json.containsKey('filters'), isFalse);
+      expect(settingsVersion, 5);
+    });
+
+    test('filtreli belge v5 yazılır; filtre kaydı (bilinmeyen alanlar dahil) aynen gidip gelir', () {
+      const withFilter = SettingsDocument(
+        rev: 2,
+        updatedAt: '2026-10-02T10:00:00.000Z',
+        writer: 'mobile',
+        data: SettingsData(filters: {'f1': filterRecord}),
+      );
+      final text = serializeSettingsDocument(withFilter);
+      expect((jsonDecode(text) as Map)['v'], 5);
+      final back = (pickLatestSettings([text]) as FoundSettings).document;
+      expect(back.data.filters['f1'], filterRecord);
+      expect(serializeSettingsDocument(back), text);
+    });
+
+    test('v4 belge okunur: filters boş sayılır', () {
+      final v4 = jsonEncode({
+        'format': 'kaydet-settings', 'v': 4, 'rev': 1, 'updatedAt': 'x',
+        'writer': 'web', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
+      });
+      expect((pickLatestSettings([v4]) as FoundSettings).document.data.filters, isEmpty);
+    });
+
+    test('v5 belge okunur', () {
+      final v5 = jsonEncode({
+        'format': 'kaydet-settings', 'v': 5, 'rev': 1, 'updatedAt': 'x',
+        'writer': 'web', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
+        'filters': {'f1': filterRecord},
+      });
+      expect((pickLatestSettings([v5]) as FoundSettings).document.data.filters, {'f1': filterRecord});
+    });
+
+    test('v6 = newer; geçersiz filters koleksiyonu belgeyi geçersiz kılar', () {
+      final v6 = jsonEncode({
+        'format': 'kaydet-settings', 'v': 6, 'rev': 1, 'updatedAt': 'x',
+        'writer': 'web', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
+      });
+      expect(pickLatestSettings([v6]), isA<NewerSettings>());
+      final bad = jsonEncode({
+        'format': 'kaydet-settings', 'v': 5, 'rev': 1, 'updatedAt': 'x',
+        'writer': 'web', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
+        'filters': {'f1': 'kayıt değil'},
+      });
+      expect(pickLatestSettings([bad]), isA<NoSettings>());
+    });
+
+    test('bilinmeyen üst düzey alanlar düşürülmez', () {
+      final text = jsonEncode({
+        'format': 'kaydet-settings', 'v': 5, 'rev': 1, 'updatedAt': 'x',
+        'writer': 'web', 'labels': <String, Object?>{}, 'signatures': <String, Object?>{},
+        'gelecek': {'a': 1},
+      });
+      final back = (pickLatestSettings([text]) as FoundSettings).document;
+      expect(back.toJson()['gelecek'], {'a': 1});
     });
 
     test('bozuk ya da aşırı büyük belge reddedilir', () {

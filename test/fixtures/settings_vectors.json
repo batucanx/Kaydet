@@ -1906,5 +1906,2042 @@
       "pushNeeded": true,
       "localChanged": false
     }
+  },
+  {
+    "name": "filters: first contact, nothing on the server: push them",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": null,
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "filters: first contact, the server has them: adopt them",
+    "base": null,
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {}
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: added on both sides: both kept, the tie is broken by key",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "c": {
+          "name": "C",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "c": {
+            "name": "C",
+            "enabled": true,
+            "position": 2,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: different fields of one filter changed on both sides are combined",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A2",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": false,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A2",
+            "enabled": false,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: the same field changed on both sides: local wins",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "Yerel",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "Uzak",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "Yerel",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "filters: deleted here, edited there: the edit wins",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A2",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A2",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": false,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: deleted here, untouched there: deleted, positions close the gap",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: deleted there, untouched here: deleted",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: reordered here",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "filters: a gap and a tie in the positions are renumbered",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 7,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "c": {
+          "name": "C",
+          "enabled": true,
+          "position": 7,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "c": {
+            "name": "C",
+            "enabled": true,
+            "position": 2,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: a reorder here and an addition there merge",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "b": {
+          "name": "B",
+          "enabled": true,
+          "position": 1,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "c": {
+          "name": "C",
+          "enabled": true,
+          "position": 2,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "b": {
+            "name": "B",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "c": {
+            "name": "C",
+            "enabled": true,
+            "position": 2,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
+  },
+  {
+    "name": "filters: a field this client does not know survives an edit",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A2",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false,
+          "note": "x"
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A2",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false,
+            "note": "x"
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": false
+    }
+  },
+  {
+    "name": "filters: a record without a usable position sorts last and is numbered",
+    "base": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "local": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "remote": {
+      "labels": {},
+      "signatures": {},
+      "templates": {},
+      "blockedSenders": {},
+      "contacts": {},
+      "filters": {
+        "a": {
+          "name": "A",
+          "enabled": true,
+          "position": 0,
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        },
+        "z": {
+          "name": "Z",
+          "enabled": true,
+          "position": "ilk",
+          "matchMode": "all",
+          "conditions": [
+            {
+              "field": "from",
+              "operator": "contains",
+              "value": "fatura@example.com"
+            }
+          ],
+          "actions": [
+            {
+              "type": "archive"
+            }
+          ],
+          "stopProcessing": false
+        }
+      }
+    },
+    "expect": {
+      "merged": {
+        "labels": {},
+        "signatures": {},
+        "templates": {},
+        "blockedSenders": {},
+        "contacts": {},
+        "filters": {
+          "a": {
+            "name": "A",
+            "enabled": true,
+            "position": 0,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          },
+          "z": {
+            "name": "Z",
+            "enabled": true,
+            "position": 1,
+            "matchMode": "all",
+            "conditions": [
+              {
+                "field": "from",
+                "operator": "contains",
+                "value": "fatura@example.com"
+              }
+            ],
+            "actions": [
+              {
+                "type": "archive"
+              }
+            ],
+            "stopProcessing": false
+          }
+        }
+      },
+      "pushNeeded": true,
+      "localChanged": true
+    }
   }
 ]

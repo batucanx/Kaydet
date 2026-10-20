@@ -43,7 +43,11 @@ class SignaturesSettingsScreen extends ConsumerWidget {
               tooltip: 'İmza ekle',
               onPressed: account == null
                   ? null
-                  : () => showNewSignatureSheet(context, ref, accountId: account.id),
+                  : () => showNewSignatureSheet(
+                      context,
+                      ref,
+                      accountId: account.id,
+                    ),
             ),
           ),
           SettingsGroup(
@@ -132,18 +136,14 @@ class _SignatureListTile extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    LucideIcons.globe,
-                    size: 11,
-                    color: t.textSecondary,
-                  ),
+                  Icon(LucideIcons.globe, size: 11, color: t.textSecondary),
                   const SizedBox(width: 3),
                   Text(
                     'URL',
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontSize: 10,
-                          color: t.textSecondary,
-                        ),
+                      fontSize: 10,
+                      color: t.textSecondary,
+                    ),
                   ),
                 ],
               ),

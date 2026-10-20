@@ -46,9 +46,12 @@ abstract class ImapService {
 
   /// Seçili klasörü DEĞİŞTİRMEDEN klasörün durumunu (`STATUS`) sorar: UIDVALIDITY,
   /// UIDNEXT ve ileti sayısı. Ucuz bir "değişti mi?" yoklaması içindir.
+  /// [includeUnseen] `true` ise okunmamış sayısı da ([MailboxState.unseenCount])
+  /// istenir.
   Future<Result<MailboxState>> statusMailbox(
     String path, {
     String? encodedPath,
+    bool includeUnseen = false,
   });
 
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
@@ -463,6 +466,7 @@ class EnoughMailImapService implements ImapService {
   Future<Result<MailboxState>> statusMailbox(
     String path, {
     String? encodedPath,
+    bool includeUnseen = false,
   }) => _guard(() async {
     final client = _requireClient;
     final separator = client.serverInfo.pathSeparator ?? '/';
@@ -480,12 +484,14 @@ class EnoughMailImapService implements ImapService {
         em.StatusFlags.uidValidity,
         em.StatusFlags.uidNext,
         em.StatusFlags.messages,
+        if (includeUnseen) em.StatusFlags.unseen,
       ],
     );
     final state = MailboxState(
       uidValidity: box.uidValidity ?? 0,
       uidNext: box.uidNext ?? 0,
       messageCount: box.messagesExists,
+      unseenCount: includeUnseen ? box.messagesUnseen : null,
     );
     if (kDebugMode) {
       print(

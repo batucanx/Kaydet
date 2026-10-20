@@ -575,13 +575,42 @@ final unifiedUnreadCountProvider = StreamProvider.family<int, SpecialUse>((
   ref,
   use,
 ) {
+  final boxes = ref.watch(unifiedMailboxesProvider(use));
+  if (boxes.isEmpty) return Stream.value(0);
+  // İletileri indirilmeyen klasörlerde sayı sunucudan gelir (bkz.
+  // [usesLocalUnreadCount]).
+  if (!usesLocalUnreadCount(use)) {
+    return Stream.value(boxes.fold<int>(0, (sum, m) => sum + m.unreadCount));
+  }
+  return ref
+      .watch(databaseProvider)
+      .watchUnreadCountIn(boxes.map((m) => m.id).toList());
+});
+
+/// Tüm hesaplardaki Taslaklar klasörlerinin taslak sayısı.
+final unifiedDraftCountProvider = StreamProvider<int>((ref) {
   final ids = ref
-      .watch(unifiedMailboxesProvider(use))
+      .watch(unifiedMailboxesProvider(SpecialUse.drafts))
       .map((m) => m.id)
       .toList();
   if (ids.isEmpty) return Stream.value(0);
-  return ref.watch(databaseProvider).watchUnreadCountIn(ids);
+  return ref.watch(databaseProvider).watchDraftCountIn(ids);
 });
+
+/// Bu türdeki klasörün okunmamış sayısı yerel ileti sayımından mı gelir?
+///
+/// Gelen Kutusu, Gönderilenler, Çöp ve İstenmeyen tam eşitlenir ve anlık
+/// güncellenir. Diğerlerinin (Arşiv, özel klasörler…) iletileri klasöre
+/// girilene kadar indirilmez; sayıları sunucudan (`STATUS UNSEEN`) gelir ve
+/// `MailboxRow.unreadCount`ta saklanır (bkz. `SyncEngine.refreshUnreadCounts`).
+bool usesLocalUnreadCount(SpecialUse use) => switch (use) {
+  SpecialUse.inbox ||
+  SpecialUse.sent ||
+  SpecialUse.drafts ||
+  SpecialUse.trash ||
+  SpecialUse.junk => true,
+  SpecialUse.archive || SpecialUse.custom => false,
+};
 
 /// Görüntülenen klasörün türü: Tüm Hesaplar modunda birleşik türün kendisi,
 /// aksi hâlde seçili klasörün türü. Silme onayı, kaydırma eylemi gibi
@@ -1155,8 +1184,27 @@ final pageLimitProvider = NotifierProvider<PageLimitNotifier, int>(
 /// güncellenmezdi) hem de gereksiz maliyetliydi (görüntülenen klasörün
 /// listesi her değiştiğinde yan menüdeki TÜM klasörlerin rozeti tekrar
 /// sorgulanırdı).
-final unreadCountProvider = StreamProvider.family<int, int>(
-  (ref, mailboxId) => ref.watch(databaseProvider).watchUnreadCount(mailboxId),
+final unreadCountProvider = StreamProvider.family<int, int>((ref, mailboxId) {
+  final info = ref.watch(
+    allMailboxesProvider.select((async) {
+      for (final m in async.value ?? const <MailboxRow>[]) {
+        if (m.id == mailboxId) return (use: m.specialUse, stored: m.unreadCount);
+      }
+      return null;
+    }),
+  );
+  // Arşiv ve özel klasörler: sayı sunucudan gelip saklanır; klasöre girmek
+  // gerekmez. Diğerleri yerel sayımdır.
+  if (info != null && !usesLocalUnreadCount(info.use)) {
+    return Stream.value(info.stored);
+  }
+  return ref.watch(databaseProvider).watchUnreadCount(mailboxId);
+});
+
+/// Klasördeki taslak sayısı (bkz. `AppDatabase.watchDraftCountIn`).
+final draftCountProvider = StreamProvider.family<int, int>(
+  (ref, mailboxId) =>
+      ref.watch(databaseProvider).watchDraftCountIn([mailboxId]),
 );
 
 /// Belirli bir hesabın sabitlenen ileti sayısı — çoklu hesap yan menüsü

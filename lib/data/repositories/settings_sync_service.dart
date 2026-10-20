@@ -5,7 +5,10 @@ import 'package:drift/drift.dart' show Value;
 
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
+import '../../domain/models/mail_filter.dart';
 import '../../domain/models/quick_template.dart';
+import '../../domain/use_cases/filter_record.dart';
+import '../../domain/use_cases/filter_rules.dart';
 import '../../domain/use_cases/label_keywords.dart';
 import '../../domain/use_cases/settings_document.dart';
 import '../../domain/use_cases/settings_merge.dart';
@@ -13,10 +16,15 @@ import '../database/app_database.dart';
 import '../services/quick_templates_store.dart';
 import '../services/settings_sync_state_store.dart';
 import 'mail_connection.dart';
+import 'mail_filter_repository.dart';
 import 'sender_filter_sync.dart';
 
-/// Hesabın etiketlerini, imzalarını, hazır şablonlarını, engellenen kullanıcılarını ve kişilerini web istemcisiyle IMAP sunucusundaki tek
-/// bir JSON belgesi üzerinden eşit tutar.
+/// Hesabın etiketlerini, imzalarını, hazır şablonlarını, engellenen kullanıcılarını, kişilerini ve gelen e-posta filtrelerini web
+/// istemcisiyle IMAP sunucusundaki tek bir JSON belgesi üzerinden eşit tutar.
+///
+/// Filtreler: belgede klasör/etiket kimliği değil taşınabilir adlar durur (bkz. `filter_record.dart`). Bu hesapta O AN kullanılamayan
+/// kayıt (klasör/etiket yok, arayüzün reddedeceği kural, 100 üstü, bozuk biçim) belgede AYNEN kalır, yerele yazılmaz, birleştirmenin
+/// atasına girmez ("taşınır, silinmez"). Telefon filtreleri uygulamaz, yalnızca saklar ve eşitler.
 ///
 /// Biçim ve birleştirme kuralları `settings_document.dart` ve
 /// `settings_merge.dart` içindedir (web projesindeki `packages/domain/src/
@@ -39,14 +47,28 @@ class SettingsSyncService {
     DateTime Function()? now,
     this.writer = 'mobile',
     this.seedsDefaults = false,
+    this.deferredRetryBase = const Duration(seconds: 20),
   }) : _db = database,
        _connection = connection,
        _state = state,
        _templates = templates,
        _senderFilter = senderFilter,
+       _filters = MailFilterRepository(database: database),
        _now = now ?? DateTime.now;
 
   final AppDatabase _db;
+  final MailFilterRepository _filters;
+
+  /// Klasörü ya da etiketi henüz hesapta olmayan bir filtre (yeni girişte klasörler listelenirken) için ilk yeniden deneme
+  /// gecikmesi; sonrakiler ikiye katlanır (20 sn, 40 sn, 80 sn…), en çok [_deferredRetryLimit] kez. Dakikalık arka plan turu
+  /// ayrıca yakalar.
+  final Duration deferredRetryBase;
+  static const int _deferredRetryLimit = 5;
+  final Map<int, int> _deferredRetries = {};
+
+  /// Filtrelerin belgede tutabileceği bayt payı (belgenin tamamı [settingsMaxChars] üstünde reddedilir). Belgede ya da son
+  /// birleştirmede adı geçen filtre HER ZAMAN paylaşılır; yeni filtre bu pay bitene kadar eklenir, sığmayan yerel kalır.
+  static const int _filtersBudgetBytes = 120000;
   final MailConnection _connection;
   final SettingsSyncStateStore _state;
   final DateTime Function() _now;
@@ -243,18 +265,28 @@ class SettingsSyncService {
       // Belge varsa şablonların doğrusu odur (web'de hepsi silinmişse boş kalmalı): birleştirmeye girmeden
       // yerel depo belgeyle değiştirilir; aksi hâlde varsayılanlar "burada eklendi" sayılıp geri dönerdi.
       await templateStore.replaceAll([
-        for (final e in split.view.templates.entries) _templateOf(e.key, e.value),
+        for (final e in split.view.templates.entries)
+          _templateOf(e.key, e.value),
       ]);
       onTemplatesChanged?.call();
     }
     // Belgede ya da son birleştirmede adı geçen kişiler yerel görünümde HER ZAMAN yer alır (yokluğu silme sayılırdı).
     final base = _parseBase(state.baseJson);
-    final sharedContacts = {...?base?.contacts.keys, ...split.view.contacts.keys};
+    final sharedContacts = {
+      ...?base?.contacts.keys,
+      ...split.view.contacts.keys,
+    };
+    final folders = await _loadFolders(
+      accountId,
+      remoteFull != null && remoteFull.filters.isNotEmpty,
+    );
     var local = await _readLocal(
       accountId,
-      split.view.templates,
+      split.view,
       sharedContacts,
       templateStore,
+      base,
+      folders,
     );
     if (seedsDefaults &&
         remoteFull == null &&
@@ -262,9 +294,11 @@ class SettingsSyncService {
         await _seedDefaults(accountId, local)) {
       local = await _readLocal(
         accountId,
-        split.view.templates,
+        split.view,
         sharedContacts,
         templateStore,
+        base,
+        folders,
       );
     }
     final result = mergeSettings(
@@ -283,6 +317,36 @@ class SettingsSyncService {
       );
     }
 
+    // Filtreler: birleştirme belgedeki iyi biçimli HER filtreyi görür (çalışma sırası tek liste kalsın). Bu hesabın şimdi
+    // kullanabildiği yerele uygulanır; geri kalanı (henüz olmayan klasör/etiket, arayüzün reddedeceği kural) belgede olduğu gibi
+    // taşınır — ne yerelde ne atada yer alır, bu yüzden "burada silindi" diye okunmaz — ve sonraki turda yeniden bakılır.
+    // Etiketler yukarıda uygulandı: çözümleme birleşik belgeye değil hesabın GERÇEK etiketlerine bakar.
+    var merged = result.merged;
+    var deferredFilters = <String, SettingsRecord>{};
+    if (folders != null) {
+      final labelIds = {
+        for (final l in await _db.labelsOf(accountId))
+          (l.imapKeyword ?? labelImapKeyword(l.name)): l.id,
+      };
+      final refs = ResolveRefs(
+        folders: folders,
+        labelIdOf: (key) => labelIds[key],
+        ownAddress: normalizeMailAddress(account.email),
+      );
+      final usable = partitionFilters(
+        merged.filters,
+        (r) => resolveSharedRecord(r, refs),
+      );
+      merged = merged.withFilters(usable.applicable);
+      deferredFilters = usable.deferred;
+      await _applyFilters(
+        accountId,
+        usable.resolved,
+        local,
+        known: {...?base?.filters.keys, ...split.view.filters.keys},
+      );
+    }
+
     // 4. Buradaki değişiklikler (ve birleştirme farkı) sunucuya gider.
     final full = SettingsData(
       labels: {...result.merged.labels, ...split.skipped.labels},
@@ -293,13 +357,20 @@ class SettingsSyncService {
         ...split.skipped.blockedSenders,
       },
       contacts: {...result.merged.contacts, ...split.skipped.contacts},
+      // Birleştirmenin ürettiği, taşınan eski sürümün üstündedir: burada yapılan düzenleme, kullanılamayan uzak sürümle ezilmez.
+      filters: {
+        ...split.skipped.filters,
+        ...deferredFilters,
+        ...merged.filters,
+      },
     );
     final hasAny =
         full.labels.isNotEmpty ||
         full.signatures.isNotEmpty ||
         full.templates.isNotEmpty ||
         full.blockedSenders.isNotEmpty ||
-        full.contacts.isNotEmpty;
+        full.contacts.isNotEmpty ||
+        full.filters.isNotEmpty;
     final push = remoteFull == null
         ? hasAny
         : !settingsDataEqual(full, remoteFull);
@@ -316,6 +387,7 @@ class SettingsSyncService {
           updatedAt: _now().toUtc().toIso8601String(),
           writer: writer,
           data: full,
+          extra: latest is FoundSettings ? latest.document.extra : const {},
         ),
       );
       if (written is Err<void>) return written;
@@ -326,7 +398,7 @@ class SettingsSyncService {
 
     await _state.write(
       accountId,
-      SettingsSyncState(baseJson: jsonEncode(result.merged.toJson()), rev: rev),
+      SettingsSyncState(baseJson: jsonEncode(merged.toJson()), rev: rev),
     );
     // Sunucudaki kural listeyi izler: liste karşı taraftan değiştiyse zorlanır, aksi hâlde sessiz bir
     // denetim (kimse engelli değilse ya da zaten uygulanmışsa atlanır).
@@ -337,10 +409,83 @@ class SettingsSyncService {
         local.data.blockedSenders,
       ),
     );
+    _retryDeferredFilters(
+      accountId,
+      folders != null &&
+          deferredFilters.values.any((r) => parseSharedFilter(r) != null),
+    );
     return okVoid;
   }
 
   static const int _maxDocuments = 20;
+
+  /// Hesabın klasörleri yola göre, ya da filtrelerle yapılacak bir şey yoksa `null` (ne belgede ne hesapta filtre: klasörler
+  /// boşuna okunmaz).
+  Future<FolderIndex?> _loadFolders(
+    int accountId,
+    bool documentHasFilters,
+  ) async {
+    if (!documentHasFilters && await _filters.count(accountId) == 0) {
+      return null;
+    }
+    final rows = await _db.mailboxesOf(accountId);
+    return FolderIndex.of([
+      for (final r in rows)
+        (id: r.id, path: r.path, delimiter: r.delimiter, role: r.specialUse),
+    ]);
+  }
+
+  /// Bir filtre klasörünü/etiketini bekliyor (iyi biçimli ama burada çözülemedi): kısa süre sonra, sonra giderek aralıklı bir tur
+  /// daha iste (en çok [_deferredRetryLimit] kez).
+  void _retryDeferredFilters(int accountId, bool waiting) {
+    if (!waiting) {
+      _deferredRetries.remove(accountId);
+      return;
+    }
+    final attempts = _deferredRetries[accountId] ?? 0;
+    if (attempts >= _deferredRetryLimit) return;
+    _deferredRetries[accountId] = attempts + 1;
+    schedule(accountId, delay: deferredRetryBase * (1 << attempts));
+  }
+
+  /// Hesabın saklı filtrelerini birleşik belgenin KULLANILABİLİR kısmı yapar: yeni ve değişenler (belgenin kimliği ve çalışma
+  /// sırasıyla) yazılır; belgenin artık taşımadığı ya da bu hesabın artık kullanamadığı filtre kaldırılır — ama yalnızca belgenin
+  /// daha önce BİLDİĞİ ([known]) bir filtre: az önce burada eklenen ya da pay yüzünden hiç paylaşılmamış filtre "başka yerde
+  /// silindi" sayılmaz.
+  Future<void> _applyFilters(
+    int accountId,
+    Map<String, ResolvedFilter> resolved,
+    _Local local, {
+    required Set<String> known,
+  }) async {
+    final stale = [
+      for (final id in local.filtersById.keys)
+        if (!resolved.containsKey(id) && known.contains(id)) id,
+    ];
+    if (stale.isEmpty && resolved.isEmpty) return;
+    await _db.transaction(() async {
+      for (final id in stale) {
+        await _filters.removeById(accountId, id);
+      }
+      for (final entry in resolved.entries) {
+        final existing = local.filtersById[entry.key];
+        if (existing != null &&
+            sameFilterDefinition(
+              existing.definition,
+              existing.position,
+              entry.value,
+            )) {
+          continue;
+        }
+        await _filters.put(
+          accountId,
+          entry.key,
+          entry.value.definition,
+          position: entry.value.position,
+        );
+      }
+    });
+  }
 
   /// Tamamen yeni bir hesap (belge yok, daha önce eşitlenmemiş) varsayılan etiket ve imzayla başlar.
   /// Hesabın zaten etiketi/imzası varsa o alana dokunulmaz. Bir şey eklendiyse `true`.
@@ -459,9 +604,11 @@ class SettingsSyncService {
 
   Future<_Local> _readLocal(
     int accountId,
-    SettingsCollection remoteTemplates,
+    SettingsData remoteView,
     Set<String> sharedContacts,
     QuickTemplatesStore? store,
+    SettingsData? base,
+    FolderIndex? folders,
   ) async {
     final labelRows = await _db.labelsOf(accountId);
     final labelsByKey = <String, LabelRow>{};
@@ -499,13 +646,14 @@ class SettingsSyncService {
     final blockedRows = await _db.blockedSendersOf(accountId);
     final blockedByEmail = {for (final row in blockedRows) row.email: row};
     final blockedRecords = <String, SettingsRecord>{
-      for (final row in blockedRows) row.email: {'email': row.email, 'name': row.name},
+      for (final row in blockedRows)
+        row.email: {'email': row.email, 'name': row.name},
     };
     final templatesById = <String, QuickTemplate>{};
     final templateRecords = <String, SettingsRecord>{};
     if (store == null) {
       // Şablonlar bu örnekte eşitlenmiyor: uzaktakini aynen "yerel" say, hiçbir şey değişmesin.
-      templateRecords.addAll(remoteTemplates);
+      templateRecords.addAll(remoteView.templates);
     } else {
       for (final t in store.read()) {
         templatesById[t.id] = t;
@@ -538,6 +686,37 @@ class SettingsSyncService {
       budget -= cost(c);
       take(c);
     }
+    // Filtreler. O an tarif edilemeyen saklı filtre (klasörü ya da etiketi gitmiş) belgenin onun için söylediğini korur: ne
+    // değişir ne silinmiş sayılır. Hiç paylaşılmamış ve paya sığmayan yerel kalır.
+    final filtersById = <String, MailFilter>{};
+    final filterRecords = <String, SettingsRecord>{};
+    if (folders == null) {
+      filterRecords.addAll(remoteView.filters);
+    } else {
+      final labelKeyById = {
+        for (final row in labelRows)
+          row.id: row.imapKeyword ?? labelImapKeyword(row.name),
+      };
+      var filterBudget = _filtersBudgetBytes;
+      for (final filter in await _filters.list(accountId)) {
+        filtersById[filter.id] = filter;
+        final documented =
+            remoteView.filters[filter.id] ?? base?.filters[filter.id];
+        final record =
+            toSharedRecord(
+              filter.definition,
+              filter.position,
+              folderPathById: folders.pathById,
+              labelKeyById: labelKeyById,
+            ) ??
+            documented;
+        if (record == null) continue;
+        final cost = jsonEncode(record).length + filter.id.length + 8;
+        if (documented == null && filterBudget < cost) continue;
+        filterBudget -= cost;
+        filterRecords[filter.id] = record;
+      }
+    }
     return _Local(
       data: SettingsData(
         labels: labelRecords,
@@ -545,7 +724,9 @@ class SettingsSyncService {
         templates: templateRecords,
         blockedSenders: blockedRecords,
         contacts: contactRecords,
+        filters: filterRecords,
       ),
+      filtersById: filtersById,
       contactsByEmail: contactsByEmail,
       labelsByKey: labelsByKey,
       signaturesByKey: sigsByKey,
@@ -586,7 +767,8 @@ class SettingsSyncService {
     final skippedTemplates = <String, SettingsRecord>{};
     for (final entry in remote.templates.entries) {
       final r = entry.value;
-      final ok = r['title'] is String &&
+      final ok =
+          r['title'] is String &&
           (r['title']! as String).trim().isNotEmpty &&
           r['content'] is String &&
           r['isBuiltIn'] is bool;
@@ -620,6 +802,15 @@ class SettingsSyncService {
           (name == null || name is String);
       (ok ? contacts : skippedContacts)[entry.key] = r;
     }
+    // Filtreler: yalnızca BİÇİM yargılanır (klasör/etiketin bu hesapta olması anın işidir, bkz. [partitionFilters]).
+    final filters = <String, SettingsRecord>{};
+    final skippedFilters = <String, SettingsRecord>{};
+    for (final entry in remote.filters.entries) {
+      (parseSharedFilter(entry.value) == null
+              ? skippedFilters
+              : filters)[entry.key] =
+          entry.value;
+    }
     return (
       view: SettingsData(
         labels: labels,
@@ -627,6 +818,7 @@ class SettingsSyncService {
         templates: templates,
         blockedSenders: blocked,
         contacts: contacts,
+        filters: filters,
       ),
       skipped: SettingsData(
         labels: skippedLabels,
@@ -634,6 +826,7 @@ class SettingsSyncService {
         templates: skippedTemplates,
         blockedSenders: skippedBlocked,
         contacts: skippedContacts,
+        filters: skippedFilters,
       ),
     );
   }
@@ -871,9 +1064,13 @@ class _Local {
     required this.templatesById,
     required this.blockedByEmail,
     required this.contactsByEmail,
+    required this.filtersById,
   });
 
   final SettingsData data;
+
+  /// Hesabın saklı filtreleri kimliğiyle (filtre desteği yoksa boş).
+  final Map<String, MailFilter> filtersById;
   final Map<String, LabelRow> labelsByKey;
   final Map<String, SignatureRow> signaturesByKey;
   final Map<String, QuickTemplate> templatesById;
