@@ -58,7 +58,6 @@ class _ImageSizePromptSheet extends StatelessWidget {
               SettingsTile(
                 icon: LucideIcons.imageDown,
                 title: 'Resim boyutunu küçült',
-                subtitle: 'Daha hızlı gönderilir, kalite az düşer',
                 onTap: () =>
                     Navigator.of(context).pop(ImageSizeChoice.reduced),
               ),

@@ -34,7 +34,6 @@ class PrivacySettingsScreen extends ConsumerWidget {
               SettingsTile(
                 icon: LucideIcons.trash2,
                 title: 'Silmeden önce sor',
-                subtitle: 'Kalıcı silme işlemlerinde onay iste',
                 trailing: Switch(
                   value: settings.confirmBeforeDelete,
                   onChanged: (value) => ref

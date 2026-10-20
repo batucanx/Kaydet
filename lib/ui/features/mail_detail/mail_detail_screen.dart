@@ -193,9 +193,13 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     final delay = ref.read(settingsProvider).markSeenDelayMs;
     _seenTimer = Timer(Duration(milliseconds: delay), () async {
       if (!mounted) return;
-      final row = await ref.read(messageProvider(_messageId).future);
+      // Beklerken başka iletiye geçilmiş olabilir: işaret, zamanlayıcının
+      // kurulduğu iletiye yazılır.
+      final id = _messageId;
+      final row = await ref.read(messageProvider(id).future);
+      if (!mounted) return;
       if (row != null && !row.isSeen) {
-        await ref.read(mailRepositoryProvider).setSeen([_messageId], true);
+        await ref.read(mailRepositoryProvider).setSeen([id], true);
       }
     });
   }

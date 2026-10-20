@@ -396,6 +396,9 @@ class SyncController extends Notifier<SyncState> {
   static const Duration _retryMaxDelay = Duration(minutes: 15);
 
   void _noteConnectionFailure(int accountId) {
+    // Uygulama arka plandayken (soket uykuda ölür) sunucuyu suçlamayız; öne
+    // gelince taze bir deneme yapılır (bkz. `resume`).
+    if (_paused) return;
     // Cihaz çevrimdışıyken sunucuyu suçlamayız (bkz. çevrimdışı şeridi).
     if (state.isOffline) {
       _connectionFailures.remove(accountId);
@@ -1066,8 +1069,12 @@ class SyncController extends Notifier<SyncState> {
       _foldersSyncing = false;
       _markQuiet();
       if (!_disposed) {
-        await _restartIdle();
-        _drainPendingFolderSync();
+        // Tur sürerken hesap değiştiyse yeni hesabın `syncAll` çağrısı
+        // `_foldersSyncing` yüzünden düşmüştü; burada yeniden başlatılır.
+        if (!_handOffIfSwitched(accountId)) {
+          await _restartIdle();
+          _drainPendingFolderSync();
+        }
       }
     }
   }
@@ -1236,10 +1243,15 @@ class SyncController extends Notifier<SyncState> {
     _serverChangeDebounce?.cancel();
     _serverChangeDebounce = null;
     _serverChangePending = false;
-    await _serverChanges?.cancel();
+    // Alanlar `cancel()` beklenmeden ÖNCE boşaltılır: bekleme sırasında
+    // `resume()` yeni abonelikleri kurarsa, sonradan `null` yazmak onları
+    // izlenmez (ve bir daha iptal edilemez) bırakırdı.
+    final changes = _serverChanges;
     _serverChanges = null;
-    await _remotePushes?.cancel();
+    await changes?.cancel();
+    final pushes = _remotePushes;
     _remotePushes = null;
+    await pushes?.cancel();
     _pushDebounce?.cancel();
     _pushDebounce = null;
     await ref.read(mailConnectionProvider).imap.stopIdle();
@@ -1248,6 +1260,14 @@ class SyncController extends Notifier<SyncState> {
   /// Uygulama öne geldiğinde yeniden eşitlenir.
   Future<void> resume() async {
     _paused = false;
+    // Uzun süre arka planda kalındıysa eski hata sayaçları ve "ulaşılamıyor"
+    // şeridi bayat bilgidir: sıfırlanır, şerit yalnızca YENİ eşitleme
+    // denemeleri gerçekten başarısız olursa yeniden çıkar.
+    _connectionFailures.clear();
+    _retryNotBefore.clear();
+    if (state.unreachableAccounts.isNotEmpty) {
+      state = state.copyWith(unreachableAccounts: const {});
+    }
     _fireAndForget(ref.read(pushStubsProvider.notifier).refresh());
     // Arka planda başka bir isolate (push/periyodik görev) veritabanına yazmış
     // olabilir; Drift akışları bunu kendiliğinden görmez, liste hemen tazelenir.

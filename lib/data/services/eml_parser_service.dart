@@ -158,7 +158,15 @@ abstract final class EmlParserService {
       r'(?<=[^\n-])(?=(?:Return-Path|Delivered-To|Envelope-to|Delivery-date|ARC-[A-Za-z0-9-]+|DKIM-Signature|Authentication-Results|Message-ID|Message-Id|MIME-Version|X-[A-Za-z0-9-]+|From|Reply-To|In-Reply-To|References|Content-Type|Content-Transfer-Encoding|Content-Disposition|Content-ID|Content-Id|Cc|Bcc|To|Subject|Date)\s*:)',
       caseSensitive: false,
     );
-    result = result.replaceAll(knownHeaders, '\n');
+    // Yalnızca başlık bölümünde (ilk boş satıra kadar): gövdede `Photo:`,
+    // `Update:`, `max-width:` gibi sözcükler `To:`/`Date:`/`X-…:` sanılıp
+    // ortalarından satır kırılırdı. Boş satır yoksa (tüm metin çökmüş) hepsi
+    // başlık sayılır.
+    final headerBlockEnd = result.indexOf('\n\n');
+    result = headerBlockEnd == -1
+        ? result.replaceAll(knownHeaders, '\n')
+        : result.substring(0, headerBlockEnd).replaceAll(knownHeaders, '\n') +
+              result.substring(headerBlockEnd);
 
     // 3. Yapışmış MIME boundary sınırlarını ayır
     for (final boundary in boundaries) {
@@ -1033,7 +1041,11 @@ abstract final class EmlParserService {
         final bytes = MailTextDecoderFallback.decodeQuotedPrintable(clean);
         return _decodeBytesWithCharset(bytes, charset);
       } catch (_) {}
-    } else if (charset != null && charset.isNotEmpty) {
+    } else if (charset != null &&
+        charset.isNotEmpty &&
+        !clean.codeUnits.any((c) => c > 0xFF)) {
+      // 0xFF üstü karakter varsa metin zaten çözülmüştür (ör. UTF-8 8bit
+      // gövde): bayta indirgemek `ş`/`ğ`/`İ` gibi harfleri bozardı.
       return _decodeBytesWithCharset(Uint8List.fromList(clean.codeUnits), charset);
     }
     return clean;

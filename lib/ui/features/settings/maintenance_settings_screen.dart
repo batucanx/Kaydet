@@ -44,13 +44,11 @@ class MaintenanceSettingsScreen extends ConsumerWidget {
               SettingsTile(
                 icon: LucideIcons.hardDrive,
                 title: 'Önbelleği temizle',
-                subtitle: 'İndirilen ileti içeriklerini siler, iletiler kalır',
                 onTap: () => _clearCache(context, ref),
               ),
               SettingsTile(
                 icon: LucideIcons.trash2,
                 title: 'Çöp kutusunu boşalt',
-                subtitle: 'Çöp kutusundaki tüm iletileri kalıcı olarak siler',
                 isDestructive: true,
                 onTap: () => _emptyTrash(context, ref),
               ),

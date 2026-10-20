@@ -151,6 +151,13 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// gösteriliyordu.
   bool _readyToPop = false;
 
+  /// [_closeScreen] çalışıyor: ikinci bir kapatma isteği yok sayılır.
+  bool _closing = false;
+
+  /// [_send] çalışıyor (onay pencereleri dahil): ikinci bir gönder isteği yok
+  /// sayılır — aksi hâlde aynı ileti iki kez kuyruğa girebilir.
+  bool _sendInFlight = false;
+
   final SpeechToText _speech = SpeechToText();
   bool _speechReady = false;
   bool _listening = false;
@@ -666,14 +673,16 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   static String _prefixSubject(String subject, String prefix) {
     final trimmed = subject.trim();
-    final lower = trimmed.toLowerCase();
-    if (lower.startsWith('re:') ||
-        lower.startsWith('yanıt:') ||
-        lower.startsWith('yanit:') ||
-        lower.startsWith('fwd:') ||
-        lower.startsWith('ilet:')) {
-      return trimmed;
-    }
+    // Türkçe büyük/küçük harf ve aksan katlamasıyla ("İlet:" → "ilet:",
+    // "Yanıt:" → "yanit:"); düz `toLowerCase()` "İlet:"i tanımaz ve ön eki
+    // ikilerdi.
+    final folded = foldForSearch(trimmed);
+    // Yalnızca AYNI türdeki ön ek tekrarlanmaz: "Yanıt: x" iletilirken "İlet:"
+    // eklenir, "Fwd: x" yanıtlanırken "Yanıt:" eklenir.
+    final existing = prefix == 'İlet'
+        ? const ['fwd:', 'fw:', 'ilet:']
+        : const ['re:', 'yanit:', 'yan:', 'ynt:'];
+    if (existing.any(folded.startsWith)) return trimmed;
     return '$prefix: $trimmed';
   }
 
@@ -977,6 +986,16 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   );
 
   Future<void> _send() async {
+    if (_sendInFlight) return;
+    _sendInFlight = true;
+    try {
+      await _sendImpl();
+    } finally {
+      _sendInFlight = false;
+    }
+  }
+
+  Future<void> _sendImpl() async {
     final accountId = _fromAccountId;
     if (accountId == null) return;
 
@@ -1122,7 +1141,18 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// pop yalnızca BİR kez gerçekleşir (bkz. [_readyToPop] alanının
   /// açıklaması).
   Future<void> _closeScreen() async {
-    final draftId = await _saveDraftOnExit();
+    // Art arda gelen geri/kapat dokunuşları: taslak kaydı bitmeden ikincisi
+    // başlarsa `_draftId` henüz null olduğundan aynı metin için ikinci bir
+    // taslak oluşurdu.
+    if (_closing) return;
+    _closing = true;
+    int? draftId;
+    try {
+      draftId = await _saveDraftOnExit();
+    } on Object {
+      _closing = false;
+      rethrow;
+    }
     if (!mounted) return;
     setState(() => _readyToPop = true);
     Navigator.of(
@@ -1606,7 +1636,18 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
       ),
       onResult: (result) {
         final spoken = result.recognizedWords;
-        if (spoken.isEmpty) return;
+        // Ekran kapandıktan sonra gelen son sonuç, atılmış denetleyiciye
+        // dokunmamalı.
+        if (!mounted || spoken.isEmpty) return;
+        // Dinleme sürerken kullanıcı metni kısaltmış olabilir: indeks ve
+        // uzunluk belge sınırına çekilir (aksi hâlde `substring`/`replaceText`
+        // aralık dışı hata verir).
+        final documentEnd = _quill.document.length - 1;
+        _speechInsertIndex = _speechInsertIndex.clamp(0, documentEnd);
+        _speechInsertedLength = _speechInsertedLength.clamp(
+          0,
+          documentEnd - _speechInsertIndex,
+        );
         // Kısmi sonuçlar her seferinde o ana kadar tanınan TÜM cümleyi
         // getirir — bu yüzden önceki eklemenin üzerine, aynı noktada
         // yeniden yazılır.

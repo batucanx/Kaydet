@@ -176,9 +176,6 @@ class _FiltersSettingsScreenState extends ConsumerState<FiltersSettingsScreen> {
             ? EmptyState(
                 icon: LucideIcons.funnel,
                 title: 'Henüz oluşturulmuş bir filtre yok.',
-                description:
-                    'Gelen e-postalarınızı otomatik olarak düzenlemek için '
-                    'ilk filtrenizi oluşturun.',
                 action: FilledButton(
                   onPressed: () => _edit(null),
                   child: const Text('Filtre oluştur'),
@@ -187,19 +184,7 @@ class _FiltersSettingsScreenState extends ConsumerState<FiltersSettingsScreen> {
             : ListView(
                 padding: const EdgeInsets.only(bottom: Space.huge),
                 children: [
-                  const _InfoNote(),
-                  SectionHeader(
-                    'FİLTRELER',
-                    trailing: Padding(
-                      padding: const EdgeInsets.only(right: Space.sm),
-                      child: Text(
-                        '${list.length} filtre · çalışma sırasına göre',
-                        style: Theme.of(
-                          context,
-                        ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                      ),
-                    ),
-                  ),
+                  const SectionHeader('FİLTRELER'),
                   for (var i = 0; i < list.length; i++)
                     _FilterCard(
                       key: ValueKey(list[i].id),
@@ -231,41 +216,6 @@ class _FiltersSettingsScreenState extends ConsumerState<FiltersSettingsScreen> {
                     ),
                 ],
               ),
-      ),
-    );
-  }
-}
-
-/// Telefonun filtrelerle ne yapıp ne yapmadığını söyleyen kısa not.
-class _InfoNote extends StatelessWidget {
-  const _InfoNote();
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        Space.lg,
-        Space.md,
-        Space.lg,
-        Space.xs,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(LucideIcons.info, size: IconSize.sm, color: t.textTertiary),
-          const SizedBox(width: Space.sm),
-          Expanded(
-            child: Text(
-              'Filtreler web ve diğer cihazlarınızla eşitlenir. Bu cihazda '
-              'düzenleyebilir ve bir iletide deneyebilirsiniz; gelen '
-              'e-postalara bu cihaz uygulamaz.',
-              style: Theme.of(
-                context,
-              ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-            ),
-          ),
-        ],
       ),
     );
   }

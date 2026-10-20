@@ -140,14 +140,6 @@ class _QuickTemplatesSheetState extends ConsumerState<QuickTemplatesSheet> {
                             fontWeight: FontWeight.w700,
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Sık kullandığınız metinleri tek dokunuşla ekleyin',
-                          style: AppText.bodyMedium.copyWith(
-                            fontSize: 12,
-                            color: t.textTertiary,
-                          ),
-                        ),
                       ],
                     ),
                   ),

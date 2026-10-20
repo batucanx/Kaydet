@@ -104,6 +104,9 @@ class AccountWatcher {
   DateTime? _lastFolderSync;
   Future<void>? _loop;
   Completer<void>? _wake;
+
+  /// Uyku dışındayken gelen uyandırma isteği (bkz. [_waitForWake]).
+  bool _wakeRequested = false;
   Timer? _debounceTimer;
   StreamSubscription<void>? _changes;
 
@@ -116,6 +119,7 @@ class AccountWatcher {
   void start() {
     if (_running) return;
     _running = true;
+    _wakeRequested = false;
     _loop = _run();
   }
 
@@ -251,6 +255,8 @@ class AccountWatcher {
   }
 
   Future<_SyncResult> _syncInbox(int inboxId) async {
+    // Bu eşitleme, öncesinde birikmiş uyandırma isteklerini zaten karşılar.
+    _wakeRequested = false;
     _syncing = true;
     try {
       // Her turda satır yeniden okunur: `syncMailbox` UIDVALIDITY'yi verilen
@@ -311,6 +317,13 @@ class AccountWatcher {
   /// [timeout] dolana ya da [_interrupt] çağrılana dek bekler. Hem IDLE
   /// turunu hem geri çekilme uykusunu kapsar; `stop()` ikisini de hemen keser.
   Future<void> _waitForWake(Duration timeout) async {
+    // Uyku başlamadan ÖNCE gelen bir uyandırma (eşitleme sonrası klasör
+    // yenilenirken gelen sunucu olayı, `nudge`) kaybolmamalı; aksi hâlde yeni
+    // ileti bir sonraki IDLE turuna (dakikalarca) kadar görünmezdi.
+    if (_wakeRequested) {
+      _wakeRequested = false;
+      return;
+    }
     final wake = Completer<void>();
     _wake = wake;
     final timer = Timer(timeout, _interrupt);
@@ -321,7 +334,11 @@ class AccountWatcher {
 
   void _interrupt() {
     final wake = _wake;
-    if (wake != null && !wake.isCompleted) wake.complete();
+    if (wake == null) {
+      _wakeRequested = true;
+    } else if (!wake.isCompleted) {
+      wake.complete();
+    }
   }
 
   Future<void> _closeConnection() async {

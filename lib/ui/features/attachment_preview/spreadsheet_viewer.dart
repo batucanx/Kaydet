@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:xml/xml.dart';
 
 import '../../../data/database/app_database.dart';
+import '../../../data/services/eml_parser_service.dart'
+    show MailTextDecoderFallback;
 import '../../core/actions/attachment_actions.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
@@ -128,9 +131,18 @@ class SpreadsheetParser {
       );
       final sstDoc = XmlDocument.parse(sstXml);
       for (final si in sstDoc.findAllElements('si')) {
+        // Yalnızca asıl metin: `<t>` ya da zengin `<r><t>` parçaları. Ses
+        // bilgisi (`<rPh><t>`) metne eklenmez (aksi hâlde metin ikilenirdi).
         final buffer = StringBuffer();
-        for (final t in si.findAllElements('t')) {
-          buffer.write(t.innerText);
+        for (final child in si.childElements) {
+          final name = child.name.local;
+          if (name == 't') {
+            buffer.write(child.innerText);
+          } else if (name == 'r') {
+            for (final t in child.findElements('t')) {
+              buffer.write(t.innerText);
+            }
+          }
         }
         sharedStrings.add(buffer.toString());
       }
@@ -293,8 +305,12 @@ class SpreadsheetParser {
 
   /// CSV veya TSV içeriğini ayrıştırır.
   static SpreadsheetBook parseCsvBytes(List<int> bytes, {bool isTsv = false}) {
-    final rawText = utf8.decode(bytes, allowMalformed: true);
-    final lines = const LineSplitter().convert(rawText);
+    // Türkçe Excel'in "CSV (virgülle ayrılmış)" çıktısı çoğu zaman UTF-8 değil
+    // Windows-1254'tür: geçerli UTF-8 değilse oradan çözülür (aksi hâlde
+    // ş/ğ/İ harfleri `�` olurdu). UTF-8 BOM'u ilk hücreye karışmasın diye atılır.
+    var rawText = _decodeCsvText(bytes);
+    if (rawText.startsWith('﻿')) rawText = rawText.substring(1);
+    final lines = _splitCsvRecords(rawText);
     if (lines.isEmpty) {
       return const SpreadsheetBook(sheets: []);
     }
@@ -341,6 +357,39 @@ class SpreadsheetParser {
         SpreadsheetSheet(name: 'Veri Tablosu', rows: rows, columnCount: maxCol),
       ],
     );
+  }
+
+  static String _decodeCsvText(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return MailTextDecoderFallback.decodeWindows1254(
+        Uint8List.fromList(bytes),
+      );
+    }
+  }
+
+  /// Metni kayıtlara (satırlara) böler; tırnak içindeki satır sonları kaydı
+  /// bölmez (çok satırlı hücreler).
+  static List<String> _splitCsvRecords(String text) {
+    final records = <String>[];
+    final buffer = StringBuffer();
+    var inQuotes = false;
+    for (var i = 0; i < text.length; i++) {
+      final ch = text[i];
+      if (ch == '"') {
+        inQuotes = !inQuotes;
+        buffer.write(ch);
+      } else if (!inQuotes && (ch == '\n' || ch == '\r')) {
+        if (ch == '\r' && i + 1 < text.length && text[i + 1] == '\n') i++;
+        records.add(buffer.toString());
+        buffer.clear();
+      } else {
+        buffer.write(ch);
+      }
+    }
+    if (buffer.isNotEmpty) records.add(buffer.toString());
+    return records;
   }
 
   static List<String> _parseCsvLine(String line, String sep) {

@@ -209,9 +209,6 @@ class _ContactsScreenState extends ConsumerState<ContactsScreen> {
       return const EmptyState(
         icon: LucideIcons.users,
         title: 'Henüz kişi yok',
-        description:
-            'Bir ileti gönderip aldıkça kişileriniz burada otomatik '
-            'birikir; isterseniz sağ üstten elle de ekleyebilirsiniz.',
       );
     }
     if (visible.isEmpty) {

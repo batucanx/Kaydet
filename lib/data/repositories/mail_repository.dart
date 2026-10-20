@@ -659,9 +659,14 @@ class MailRepository {
       var isCorruptOffice = false;
       if ((nameLower.endsWith('.docx') || nameLower.endsWith('.xlsx')) && length >= 4) {
         try {
-          final header = file.openSync(mode: FileMode.read).readSync(4);
-          if (header[0] != 0x50 || header[1] != 0x4B) {
-            isCorruptOffice = true;
+          final raf = file.openSync(mode: FileMode.read);
+          try {
+            final header = raf.readSync(4);
+            if (header[0] != 0x50 || header[1] != 0x4B) {
+              isCorruptOffice = true;
+            }
+          } finally {
+            raf.closeSync();
           }
         } catch (_) {}
       }
@@ -939,6 +944,10 @@ class MailRepository {
     }
 
     final pending = await _db.pendingSendOperationsFor(messageId);
+    // Gönderim işlemi artık `pending` değil ama ileti hâlâ `queued`: işlem
+    // sahiplenilmiş (`running`) ve SMTP'ye geçmek üzere; geri çekmek aynı
+    // iletiyi hem göndermek hem taslağa döndürmek olurdu.
+    if (pending.isEmpty && row.outboxState == OutboxState.queued) return false;
     if (pending.isNotEmpty) {
       final cancelled = await _db.cancelPendingOperations(
         pending.map((p) => p.id).toList(),

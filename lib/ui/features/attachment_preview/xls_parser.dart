@@ -351,7 +351,7 @@ class _BiffWorkbookReader {
         i++;
       } else if (r.type == _rtSst) {
         final merged = _mergeContinues(records, i);
-        sharedStrings = _readSst(merged.data);
+        sharedStrings = _readSst(merged.data, merged.boundaries);
         i = merged.nextIndex;
       } else {
         i++;
@@ -407,16 +407,24 @@ class _BiffWorkbookReader {
   /// [recordIndex]'teki kaydı ve ondan HEMEN SONRA gelen tüm CONTINUE
   /// kayıtlarını tek bir bayt dizisinde birleştirir (yalnızca SST için
   /// gereklidir — diğer tüm kayıt türleri tek bir kayda sığar).
-  ({Uint8List data, int nextIndex}) _mergeContinues(List<_RawRecord> records, int recordIndex) {
+  ({Uint8List data, int nextIndex, Set<int> boundaries}) _mergeContinues(List<_RawRecord> records, int recordIndex) {
     final chunks = <Uint8List>[
       Uint8List.sublistView(_bytes, records[recordIndex].dataStart, records[recordIndex].dataStart + records[recordIndex].length),
     ];
+    // Birleşik arabellekte her CONTINUE parçasının başladığı konumlar: bir
+    // dize bir parça sınırında bölünürse devamı 1 baytlık sıkıştırma
+    // bayrağıyla başlar (bkz. [_readRichExtString]).
+    final boundaries = <int>{};
+    var offset = chunks.first.length;
     var next = recordIndex + 1;
     while (next < records.length && records[next].type == _rtContinue) {
-      chunks.add(Uint8List.sublistView(_bytes, records[next].dataStart, records[next].dataStart + records[next].length));
+      boundaries.add(offset);
+      final chunk = Uint8List.sublistView(_bytes, records[next].dataStart, records[next].dataStart + records[next].length);
+      chunks.add(chunk);
+      offset += chunk.length;
       next++;
     }
-    return (data: _CfbFile._concat(chunks), nextIndex: next);
+    return (data: _CfbFile._concat(chunks), nextIndex: next, boundaries: boundaries);
   }
 
   /// SST kaydını (CONTINUE'larıyla birleştirilmiş hâliyle) çözer.
@@ -427,16 +435,18 @@ class _BiffWorkbookReader {
   /// aşabilir — ancak burada zaten TÜM CONTINUE verisi tek bir düz arabelleğe
   /// birleştirildiğinden (bkz. [_mergeContinues]), asıl BIFF8 tuhaflığı olan
   /// "kayıt sınırında kırpılan dizenin devamında bayrak baytının tekrar
-  /// gelmesi" kuralı burada ÖNEMSİZDİR: birleştirilmiş arabellek üzerinde
-  /// dizeler normal şekilde art arda okunur.
-  List<String> _readSst(Uint8List merged) {
+  /// gelmesi" kuralı birleştirilmiş arabellekte de GEÇERLİDİR: sınırda bölünen
+  /// dizenin devamı 1 baytlık sıkıştırma bayrağıyla başlar ve bu bayt metin
+  /// sayılmamalıdır; aksi hâlde sonraki tüm dizeler kayar. [boundaries]
+  /// CONTINUE parçalarının birleşik arabellekteki başlangıç konumlarıdır.
+  List<String> _readSst(Uint8List merged, Set<int> boundaries) {
     if (merged.length < 8) return const [];
     final data = ByteData.sublistView(merged);
     final unique = data.getUint32(4, Endian.little);
     final strings = <String>[];
     var pos = 8;
     for (var i = 0; i < unique && pos < merged.length; i++) {
-      final read = _readRichExtString(merged, data, pos);
+      final read = _readRichExtString(merged, data, pos, boundaries);
       strings.add(read.$1);
       pos = read.$2;
     }
@@ -446,11 +456,16 @@ class _BiffWorkbookReader {
   /// `XLUnicodeRichExtendedString`i (SST/LABEL/RSTRING/STRING ortak biçimi)
   /// okur: `[cch:u16][grbit:u8][cRun:u16?][cbExtRst:u32?][karakterler]
   /// [rgRun: cRun*4 bayt]?[ExtRst: cbExtRst bayt]?`.
-  (String, int) _readRichExtString(Uint8List buf, ByteData data, int pos) {
+  (String, int) _readRichExtString(
+    Uint8List buf,
+    ByteData data,
+    int pos, [
+    Set<int> boundaries = const {},
+  ]) {
     if (pos + 3 > buf.length) return ('', buf.length);
     final cch = data.getUint16(pos, Endian.little);
     final flags = buf[pos + 2];
-    final compressed = flags & 0x01 == 0;
+    var compressed = flags & 0x01 == 0;
     final hasRich = flags & 0x08 != 0;
     final hasExt = flags & 0x04 != 0;
     var cursor = pos + 3;
@@ -478,6 +493,13 @@ class _BiffWorkbookReader {
 
     final sb = StringBuffer();
     for (var c = 0; c < cch; c++) {
+      // CONTINUE sınırında bölünmüş dizenin devamı yeni bir bayrak baytıyla
+      // başlar (bit 0: 16-bit karakter); metne katılmaz.
+      if (boundaries.contains(cursor)) {
+        if (cursor + 1 > buf.length) break;
+        compressed = buf[cursor] & 0x01 == 0;
+        cursor += 1;
+      }
       if (compressed) {
         if (cursor + 1 > buf.length) break;
         sb.writeCharCode(buf[cursor]);

@@ -669,24 +669,7 @@ class _NewSignatureSheetState extends ConsumerState<_NewSignatureSheet> {
     final text = _bodyController.text.trim();
     final hasImage = _imageType != 'none';
 
-    if (text.isEmpty && !hasImage) {
-      return Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(Space.md),
-        decoration: BoxDecoration(
-          color: t.surfaceDeep,
-          borderRadius: BorderRadius.circular(Radii.md),
-          border: Border.all(color: t.border),
-        ),
-        child: Center(
-          child: Text(
-            'İmza metni veya görsel eklediğinizde önizleme burada görünecektir.',
-            style: TextStyle(color: t.textTertiary, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-    }
+    if (text.isEmpty && !hasImage) return const SizedBox.shrink();
 
     Widget? imageWidget;
     if (hasImage) {
