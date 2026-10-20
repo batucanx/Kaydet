@@ -232,9 +232,6 @@ class _FilterEditorScreenState extends ConsumerState<FilterEditorScreen> {
     final labels = ref.watch(labelsProvider).value ?? const <LabelRow>[];
     final targets = _targets(mailboxes);
     final creating = widget.initial == null;
-    final firstForward = _actions.indexWhere(
-      (a) => a.type == FilterActionType.forward,
-    );
 
     return Scaffold(
       appBar: AppBar(
@@ -261,10 +258,7 @@ class _FilterEditorScreenState extends ConsumerState<FilterEditorScreen> {
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
                 labelText: 'Filtre adı',
-                hintText: 'Örn: Fatura mailleri',
-                helperText:
-                    'İsteğe bağlı. Boş bırakırsanız ilk koşula göre adlandırılır.',
-                helperMaxLines: 2,
+                hintText: 'İsteğe bağlı',
                 counterText: '',
               ),
               onChanged: (_) => _edited(() {}),
@@ -273,13 +267,13 @@ class _FilterEditorScreenState extends ConsumerState<FilterEditorScreen> {
             Semantics(
               header: true,
               child: Text(
-                'Şu e-postalar için…',
+                'Koşullar',
                 style: theme.textTheme.titleSmall,
               ),
             ),
             const SizedBox(height: Space.sm),
             _Pick<FilterMatchMode>(
-              label: 'Şu koşulların',
+              label: 'Eşleşme',
               value: _mode,
               items: const [
                 (FilterMatchMode.all, 'tümü sağlandığında'),
@@ -319,7 +313,7 @@ class _FilterEditorScreenState extends ConsumerState<FilterEditorScreen> {
             Semantics(
               header: true,
               child: Text(
-                'Şu işlemleri uygula:',
+                'İşlemler',
                 style: theme.textTheme.titleSmall,
               ),
             ),
@@ -336,10 +330,6 @@ class _FilterEditorScreenState extends ConsumerState<FilterEditorScreen> {
                     _errors['actions.$i.folderId'] ??
                     _errors['actions.$i'],
                 canRemove: _actions.length > 1,
-                showSingleForwardNote:
-                    firstForward == i &&
-                    _errors['actions.$i.email'] == null &&
-                    _errors['actions.$i'] == null,
                 onChanged: (fn) => _edited(fn),
                 onRemove: () => _edited(() {
                   _actions.removeAt(i).email.dispose();
@@ -446,7 +436,7 @@ class _Pick<T> extends StatelessWidget {
           isExpanded: true,
           isDense: true,
           value: value,
-          hint: Text(label),
+          hint: const Text('Seçin'),
           items: [
             for (final (v, text) in items)
               DropdownMenuItem<T>(
@@ -504,7 +494,7 @@ class _ConditionCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _Pick<String>(
-                  label: 'Koşul $n: alan',
+                  label: 'Alan',
                   value: choice.key,
                   items: [for (final f in fieldChoices) (f.key, f.label)],
                   onChanged: (key) => onChanged(() {
@@ -527,7 +517,7 @@ class _ConditionCard extends StatelessWidget {
           if (c.hasValue) ...[
             const SizedBox(height: Space.sm),
             _Pick<FilterOperator>(
-              label: 'Koşul $n: işleç',
+              label: 'İşleç',
               value: c.operator,
               items: [
                 for (final op in operatorsFor(c.field)) (op, operatorLabel(op)),
@@ -546,7 +536,7 @@ class _ConditionCard extends StatelessWidget {
                   ? TextInputType.text
                   : TextInputType.emailAddress,
               decoration: InputDecoration(
-                labelText: 'Koşul $n: değer',
+                labelText: 'Değer',
                 hintText: c.field == FilterField.subject
                     ? 'Örn: Fatura'
                     : c.field == FilterField.body
@@ -573,7 +563,6 @@ class _ActionCard extends StatelessWidget {
     required this.labels,
     required this.error,
     required this.canRemove,
-    required this.showSingleForwardNote,
     required this.onChanged,
     required this.onRemove,
   });
@@ -584,7 +573,6 @@ class _ActionCard extends StatelessWidget {
   final List<LabelRow> labels;
   final String? error;
   final bool canRemove;
-  final bool showSingleForwardNote;
   final void Function(VoidCallback change) onChanged;
   final VoidCallback onRemove;
 
@@ -608,7 +596,7 @@ class _ActionCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _Pick<FilterActionType>(
-                  label: 'İşlem $n',
+                  label: 'İşlem',
                   value: row.type,
                   items: [
                     for (final a in actionChoices) (a.type, a.label),
@@ -633,7 +621,7 @@ class _ActionCard extends StatelessWidget {
           if (row.type == FilterActionType.move) ...[
             const SizedBox(height: Space.sm),
             _Pick<int>(
-              label: 'İşlem $n: klasör',
+              label: 'Klasör',
               value: row.folderId,
               error: error,
               items: [
@@ -646,7 +634,7 @@ class _ActionCard extends StatelessWidget {
           if (row.type == FilterActionType.label) ...[
             const SizedBox(height: Space.sm),
             _Pick<int>(
-              label: 'İşlem $n: etiket',
+              label: 'Etiket',
               value: row.labelId,
               error: error,
               items: [
@@ -663,22 +651,12 @@ class _ActionCard extends StatelessWidget {
               autocorrect: false,
               keyboardType: TextInputType.emailAddress,
               decoration: InputDecoration(
-                labelText: 'İşlem $n: e-posta adresi',
+                labelText: 'E-posta adresi',
                 hintText: 'muhasebe@example.com',
                 errorText: error,
               ),
               onChanged: (_) => onChanged(() {}),
             ),
-            if (showSingleForwardNote)
-              Padding(
-                padding: const EdgeInsets.only(top: Space.xs),
-                child: Text(
-                  'Bu filtre sadece tek bir adrese iletebilir.',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: t.textTertiary,
-                  ),
-                ),
-              ),
           ],
           if (row.type != FilterActionType.move &&
               row.type != FilterActionType.label &&
@@ -708,8 +686,7 @@ class _ActionCard extends StatelessWidget {
                   const SizedBox(width: Space.sm),
                   Expanded(
                     child: Text(
-                      'İleti sunucudan kalıcı olarak silinir ve geri alınamaz. '
-                      'Çöp kutusuna taşımak için “Çöp kutusuna taşı”yı seçin.',
+                      'İleti kalıcı olarak silinir, geri alınamaz.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: t.textSecondary,
                       ),
@@ -747,7 +724,6 @@ class _FilterTesterState extends ConsumerState<_FilterTester> {
   String? _error;
   FilterEvaluation? _result;
   List<FilterCondition> _tested = const [];
-  bool _bodyUnavailable = false;
 
   Future<void> _openPanel() async {
     setState(() {
@@ -807,7 +783,6 @@ class _FilterTesterState extends ConsumerState<_FilterTester> {
         _running = false;
         _tested = conditions;
         _result = evaluateFilter(d.matchMode, conditions, mail);
-        _bodyUnavailable = needsBody && mail.body == null;
       });
     } on Object {
       if (mounted) {
@@ -845,12 +820,6 @@ class _FilterTesterState extends ConsumerState<_FilterTester> {
           Semantics(
             header: true,
             child: Text('Filtreyi test et', style: theme.textTheme.titleSmall),
-          ),
-          const SizedBox(height: Space.xs),
-          Text(
-            'Bir e-posta seçin; filtrenin hangi koşulları sağladığını görün. '
-            'Hiçbir şey değiştirilmez.',
-            style: theme.textTheme.bodySmall?.copyWith(color: t.textSecondary),
           ),
           const SizedBox(height: Space.sm),
           if (_load == _Load.loading)
@@ -898,16 +867,6 @@ class _FilterTesterState extends ConsumerState<_FilterTester> {
               ),
             ),
           ],
-          if (!ready)
-            Padding(
-              padding: const EdgeInsets.only(top: Space.sm),
-              child: Text(
-                'Önce koşullardaki boş değerleri doldurun.',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: t.textTertiary,
-                ),
-              ),
-            ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(top: Space.sm),
@@ -961,17 +920,6 @@ class _FilterTesterState extends ConsumerState<_FilterTester> {
                         color: result.matched ? t.success : t.textSecondary,
                       ),
                     ),
-                    if (_bodyUnavailable)
-                      Padding(
-                        padding: const EdgeInsets.only(top: Space.xs),
-                        child: Text(
-                          'E-postanın içeriği okunamadığı için “İçerik” '
-                          'koşulları eşleşmedi sayıldı.',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: t.textTertiary,
-                          ),
-                        ),
-                      ),
                   ],
                 ),
               ),

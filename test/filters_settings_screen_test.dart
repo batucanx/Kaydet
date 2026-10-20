@@ -252,7 +252,7 @@ void main() {
       await open(tester);
       await tester.tap(find.text('Filtre oluştur'));
       await settle(tester);
-      expect(find.text('Şu e-postalar için…'), findsOneWidget);
+      expect(find.text('Koşullar'), findsOneWidget);
 
       await tester.scrollUntilVisible(
         find.text('Filtreyi oluştur'),
@@ -284,7 +284,7 @@ void main() {
       'Faturalarım',
     );
     await tester.enterText(
-      find.widgetWithText(TextField, 'Koşul 1: değer'),
+      find.widgetWithText(TextField, 'Değer'),
       'fatura@example.com',
     );
     await tester.tap(find.byType(DropdownButton<int>));

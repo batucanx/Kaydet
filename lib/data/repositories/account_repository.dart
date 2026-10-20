@@ -561,6 +561,28 @@ class AccountRepository {
         AccountsCompanion(displayName: Value(displayName)),
       );
 
+  /// Çıkıştan önce ayar belgesini (filtreler, etiketler, imzalar…) sunucuyla eşitler.
+  ///
+  /// Filtreler cihazda silinir ama sunucudaki belgede kalır ve yeniden girişte geri iner;
+  /// yalnızca henüz eşitlenmemiş (az önce yapılmış ya da çevrimdışıyken yapılmış) değişiklik
+  /// kaybolur. İki tur çalıştırılır: süren bir tura katılan ilk çağrı, son değişikliği
+  /// içermeyebilir. Eşitlenemezse `false` döner; çıkış kararı çağırana kalır.
+  Future<bool> flushSettings(int accountId) async {
+    final sync = _settingsSync;
+    if (sync == null) return true;
+    try {
+      for (var i = 0; i < 2; i++) {
+        final result = await sync
+            .sync(accountId, force: true)
+            .timeout(const Duration(seconds: 15));
+        if (result is! Ok<void>) return false;
+      }
+      return true;
+    } on Object catch (_) {
+      return false;
+    }
+  }
+
   /// Hesaptan çıkış: bağlantı kapanır, şifre ve tüm yerel veri silinir.
   ///
   /// Ağ tarafında ne olursa olsun çıkış tamamlanır. Sunucu yanıt vermezken

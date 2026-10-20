@@ -138,6 +138,35 @@ class AccountsSettingsScreen extends ConsumerWidget {
     context.pushScreen(const LoginScreen(isAddingAccount: true));
   }
 
+  /// Çıkıştan önce ayarları eşitler; eşitlenemezse çıkışın devam edip etmeyeceğini sorar.
+  Future<bool> _settingsSaved(
+    BuildContext context,
+    ProviderContainer container,
+    int accountId,
+  ) async {
+    final navigator = Navigator.of(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _SignOutProgress(),
+    );
+    final saved = await container
+        .read(accountRepositoryProvider)
+        .flushSettings(accountId);
+    navigator.pop();
+    if (saved || !context.mounted) return saved;
+    final proceed = await confirmDialog(
+      context,
+      title: 'Ayarlar eşitlenemedi',
+      message:
+          'Filtreler ve diğer ayarlardaki son değişiklikler sunucuya '
+          'kaydedilemedi. Şimdi çıkış yaparsanız bu değişiklikler kaybolur.',
+      confirmLabel: 'Yine de çıkış yap',
+      destructive: true,
+    );
+    return proceed == true;
+  }
+
   /// Bir hesabı cihazdan kaldırır: şifre ve tüm yerel verisi silinir.
   ///
   /// [target] o an etkin değilse (hesap listesinden doğrudan silme) ekran
@@ -165,6 +194,11 @@ class AccountsSettingsScreen extends ConsumerWidget {
     if (confirmed != true || !context.mounted) return;
 
     final container = ProviderScope.containerOf(context, listen: false);
+
+    // Filtreler ve diğer ayarlar sunucudaki belgede saklanır; çıkıştan önce son
+    // değişiklikler oraya yazılır. Yazılamazsa (çevrimdışı) kullanıcı uyarılır.
+    if (!await _settingsSaved(context, container, target.id)) return;
+    if (!context.mounted) return;
 
     if (!removingActiveAccount) {
       // Etkin olmayan bir hesap siliniyor: bu ekrandan hiç ayrılmayız,
