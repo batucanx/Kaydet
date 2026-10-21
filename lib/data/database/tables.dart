@@ -140,6 +140,18 @@ class Messages extends Table {
       intEnum<OutboxState>().withDefault(const Constant(0))();
   TextColumn get outboxError => text().nullable()();
 
+  /// SMTP sunucusunun iletiyi kabul ettiği an ve yanıt metni (ör. kuyruk kimliği).
+  DateTimeColumn get smtpAcceptedAt => dateTime().nullable()();
+  TextColumn get smtpReply => text().nullable()();
+
+  /// İletinin Gönderilenler klasöründe Message-ID ile doğrulandığı an.
+  DateTimeColumn get sentVerifiedAt => dateTime().nullable()();
+
+  /// Sunucudan gelen iade (bounce) iletisinden anlaşılan teslim hatası.
+  /// SMTP kabulü teslim garantisi değildir; hata sonradan iade iletisiyle gelir.
+  DateTimeColumn get deliveryFailedAt => dateTime().nullable()();
+  TextColumn get deliveryFailureReason => text().nullable()();
+
   /// Yanıt/iletme oluştururken kaynak iletiye bağlanmak için.
   IntColumn get replyToMessageId => integer().nullable()();
 }

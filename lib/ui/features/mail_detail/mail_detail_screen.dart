@@ -396,6 +396,11 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
                                     onRecipientsExpanded: (v) =>
                                         _recipientsExpanded = v,
                                   ),
+                                  if (message.smtpAcceptedAt != null ||
+                                      message.deliveryFailedAt != null) ...[
+                                    const SizedBox(height: Space.sm),
+                                    _DeliveryInfo(message: message),
+                                  ],
                                   const SizedBox(height: Space.md),
                                   if (attachments.isNotEmpty) ...[
                                     _AttachmentStrip(attachments: attachments),
@@ -460,6 +465,139 @@ List<String> _decodeLabelNames(String json) {
     // Bozuk etiket verisi başlığı/menüyü engellemez.
   }
   return const [];
+}
+
+/// Gönderilen iletinin sunucu kaydı: tek satır özet, dokununca ayrıntılar.
+///
+/// SMTP sunucusunun iletiyi kabul etmesi teslim garantisi DEĞİLDİR; alıcı
+/// sunucusu iletiyi sonradan reddederse sunucu bir iade iletisi gönderir ve
+/// neden burada gösterilir (bkz. `MailRepository.detectBounces`).
+class _DeliveryInfo extends StatefulWidget {
+  const _DeliveryInfo({required this.message});
+
+  final MessageRow message;
+
+  @override
+  State<_DeliveryInfo> createState() => _DeliveryInfoState();
+}
+
+class _DeliveryInfoState extends State<_DeliveryInfo> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final message = widget.message;
+    final accepted = message.smtpAcceptedAt;
+    final failedAt = message.deliveryFailedAt;
+    if (accepted == null && failedAt == null) return const SizedBox.shrink();
+    final verified = message.sentVerifiedAt;
+    final reply = message.smtpReply;
+    final failed = failedAt != null;
+
+    final recipients = [
+      ...EmailAddress.decodeList(message.toAddrJson),
+      ...EmailAddress.decodeList(message.ccJson),
+      ...EmailAddress.decodeList(message.bccJson),
+    ].map((a) => a.email).toList();
+
+    final summary = failed ? 'Teslim edilemedi' : 'Sunucu kabul etti';
+    final color = failed ? t.danger : t.textTertiary;
+
+    Widget line(String label, String value) => Padding(
+      padding: const EdgeInsets.only(top: Space.xs),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(
+              text: '$label  ',
+              style: AppText.labelSmall.copyWith(color: t.textTertiary),
+            ),
+            TextSpan(
+              text: value,
+              style: AppText.labelSmall.copyWith(color: t.textSecondary),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return Semantics(
+      button: true,
+      expanded: _expanded,
+      label: 'Gönderim bilgisi: $summary',
+      child: InkWell(
+        onTap: () => setState(() => _expanded = !_expanded),
+        borderRadius: BorderRadius.circular(Radii.sm),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.xs),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  if (failed)
+                    Icon(LucideIcons.triangleAlert, size: 13, color: color)
+                  else
+                    SentPlaneIcon(size: 13, color: color),
+                  const SizedBox(width: Space.xs),
+                  Text(
+                    summary,
+                    style: AppText.labelSmall.copyWith(color: color),
+                  ),
+                  const SizedBox(width: Space.xs),
+                  Icon(
+                    _expanded
+                        ? LucideIcons.chevronUp
+                        : LucideIcons.chevronDown,
+                    size: 12,
+                    color: t.textTertiary,
+                  ),
+                ],
+              ),
+              if (_expanded) ...[
+                if (failed)
+                  line(
+                    'Neden:',
+                    message.deliveryFailureReason ?? 'İade iletisi alındı',
+                  ),
+                if (accepted != null)
+                  line(
+                    'Posta sunucusu kabul etti:',
+                    formatDetailDate(accepted),
+                  ),
+                if (recipients.isNotEmpty)
+                  line('Alıcılar:', recipients.join(', ')),
+                if (reply != null && reply.isNotEmpty)
+                  line('Sunucu yanıtı:', reply),
+                line(
+                  'Gönderilenler klasöründe:',
+                  verified != null
+                      ? 'kayıtlı, ${formatDetailDate(verified)}'
+                      : 'kayıt bekleniyor',
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(top: Space.xs),
+                  child: Text(
+                    failed
+                        ? 'Sunucu bu iletiyi alıcıya teslim edemedi ve '
+                              'size bir iade iletisi gönderdi.'
+                        : 'Sunucunun iletiyi kabul etmesi, alıcıya '
+                              'ulaştığının garantisi değildir. Teslim '
+                              'edilemezse sunucu size bir iade iletisi '
+                              'gönderir ve burada gösterilir.',
+                    style: AppText.labelSmall.copyWith(
+                      color: t.textTertiary,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _Header extends ConsumerWidget {

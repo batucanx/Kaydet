@@ -190,38 +190,114 @@ class SyncEngine {
   }
 
   /// İletilerini indirmediğimiz klasörlerin (Arşiv, özel klasörler…)
-  /// okunmamış sayısını sunucudan `STATUS (UNSEEN)` ile alıp
-  /// `mailboxes.unreadCount`a yazar. Gelen Kutusu, Gönderilenler, Taslaklar,
-  /// Çöp ve İstenmeyen yerel sayımla gösterilir; burada yoklanmaz.
+  /// okunmamış sayısını SUNUCUDAN alıp `mailboxes.unreadCount`a yazar. Gelen
+  /// Kutusu, Gönderilenler, Taslaklar, Çöp ve İstenmeyen yerel sayımla
+  /// gösterilir; burada yoklanmaz.
+  ///
+  /// Sayı `STATUS (UNSEEN)` ile alınır; sıfırdan büyükse `\Deleted` işaretli
+  /// iletiler çıkarılarak (`UID SEARCH UNSEEN UNDELETED`) doğrulanır — liste
+  /// bu iletileri göstermez, rozet de saymamalı. [onlyMailboxIds] verilirse
+  /// yalnızca o klasörler yoklanır.
+  ///
+  /// Her klasör KENDİ işlem kilidinde yoklanır: onlarca klasörü tek kilitte
+  /// dolaşmak, bu sürede kullanıcının açtığı iletinin gövdesini beklettirirdi.
   /// Tek bir klasörün hatası turu bozmaz; bağlantı hatasında tur biter.
   Future<Result<int>> refreshUnreadCounts(
     int accountId, {
-    int? onlyMailboxId,
-  }) => _connection.exclusive<int>(accountId, () async {
-        final boxes = await _db.mailboxesOf(accountId);
-        var updated = 0;
-        for (final box in boxes) {
-          if (onlyMailboxId != null && box.id != onlyMailboxId) continue;
-          if (!box.isSelectable || !box.isSubscribed) continue;
-          if (_localCountedUses.contains(box.specialUse)) continue;
-          final status = await _connection.imap.statusMailbox(
-            box.path,
-            encodedPath: box.encodedPath,
-            includeUnseen: true,
+    Set<int>? onlyMailboxIds,
+  }) async {
+    final boxes = await _db.mailboxesOf(accountId);
+    var updated = 0;
+    for (final box in boxes) {
+      if (onlyMailboxIds != null && !onlyMailboxIds.contains(box.id)) continue;
+      // Abonelik bayrağına BAKILMAZ: `LIST` yanıtı `\Subscribed`'ı her
+      // sunucuda döndürmez (ve yan menü abone olmayan klasörleri de gösterir);
+      // abone görünmeyen klasörün rozeti sonsuza dek bayat kalırdı.
+      if (!box.isSelectable) continue;
+      if (_localCountedUses.contains(box.specialUse)) continue;
+      final result = await _connection.exclusive<bool>(
+        accountId,
+        () => _refreshUnreadCount(accountId, box.id),
+      );
+      if (result is Err<bool>) {
+        if (result.failure is ConnectionFailure) return Err(result.failure);
+        continue;
+      }
+      if ((result as Ok<bool>).value) updated++;
+    }
+    return Ok(updated);
+  }
+
+  /// Aynı durumdaki (STATUS değerleri değişmemiş) klasörün doğrulanmış sayısı
+  /// bu süre boyunca yeniden doğrulanmaz — doğrulama klasörü geçici seçer.
+  static const _unseenCheckTtl = Duration(minutes: 10);
+  final Map<int, _UnseenCheck> _unseenChecks = {};
+
+  /// Tek klasörün sayısını yoklar; [MailConnection.exclusive] içinde çağrılır.
+  /// Değer yazıldıysa `true`.
+  Future<Result<bool>> _refreshUnreadCount(int accountId, int mailboxId) async {
+    final box = await _db.mailboxById(mailboxId);
+    if (box == null || !box.isSelectable) return const Ok(false);
+
+    final status = await _connection.imap.statusMailbox(
+      box.path,
+      encodedPath: box.encodedPath,
+      includeUnseen: true,
+    );
+    if (status is Err<MailboxState>) return Err(status.failure);
+    final state = (status as Ok<MailboxState>).value;
+    final reported = state.unseenCount;
+    if (reported == null) return const Ok(false);
+
+    var unseen = reported;
+    if (reported > 0) {
+      final cached = _unseenChecks[mailboxId];
+      final fresh =
+          cached != null &&
+          cached.reported == reported &&
+          cached.uidNext == state.uidNext &&
+          cached.messageCount == state.messageCount &&
+          DateTime.now().difference(cached.at) < _unseenCheckTtl;
+      if (fresh) {
+        unseen = cached.exact;
+      } else {
+        final exact = await _connection.imap.countUnseen(
+          path: box.path,
+          encodedPath: box.encodedPath,
+        );
+        if (exact is Ok<int>) {
+          // `UNSEEN UNDELETED` hiçbir zaman `UNSEEN`den büyük olamaz.
+          unseen = min(reported, exact.value);
+          _unseenChecks[mailboxId] = _UnseenCheck(
+            reported: reported,
+            uidNext: state.uidNext,
+            messageCount: state.messageCount,
+            exact: unseen,
+            at: DateTime.now(),
           );
-          if (status is Err<MailboxState>) {
-            if (status.failure is ConnectionFailure) return Err(status.failure);
-            continue;
-          }
-          final unseen = (status as Ok<MailboxState>).value.unseenCount;
-          if (unseen == null) continue;
-          if (unseen != box.unreadCount) {
-            await _db.setMailboxUnreadCount(box.id, unseen);
-          }
-          updated++;
+        } else if ((exact as Err<int>).failure is ConnectionFailure) {
+          return Err(exact.failure);
         }
-        return Ok(updated);
-      });
+        // Başka bir hata: doğrulanamadı, STATUS değeri kullanılır.
+      }
+    } else {
+      _unseenChecks.remove(mailboxId);
+    }
+
+    // Bekleyen bir okundu/okunmadı/taşıma işlemi varken sunucudan okunan sayı
+    // henüz o işlemi içermez; yazılırsa kullanıcının az önceki eylemi rozette
+    // geri alınırdı. İşlem tamamlanınca kuyruk bu klasörü yeniden yoklar.
+    if ((await _lockedUids(accountId, mailboxId)).isNotEmpty) {
+      return const Ok(false);
+    }
+
+    final current = await _db.mailboxById(mailboxId);
+    if (current == null) return const Ok(false);
+    if (unseen != current.unreadCount) {
+      await _db.setMailboxUnreadCount(mailboxId, unseen);
+    }
+    return const Ok(true);
+  }
 
   static const _localCountedUses = {
     SpecialUse.inbox,
@@ -1155,6 +1231,9 @@ class SyncEngine {
       final isForwarded = remote.flags.any(
         (f) => f.toLowerCase() == r'$forwarded',
       );
+      // Başka bir istemci iletiyi sonradan `\Deleted` işaretlediyse (ya da
+      // işareti kaldırdıysa) liste ve rozetler sunucudaki gerçeği izlemeli.
+      final isDeleted = remote.flags.contains(r'\Deleted');
       final keywords = remote.flags
           .where((f) => !f.startsWith(r'\') && f.toLowerCase() != r'$forwarded')
           .toList();
@@ -1166,6 +1245,7 @@ class SyncEngine {
           row.isFlagged == isFlagged &&
           row.isAnswered == isAnswered &&
           row.isForwarded == isForwarded &&
+          row.isDeleted == isDeleted &&
           row.labelsJson == labelsJson) {
         continue;
       }
@@ -1177,6 +1257,7 @@ class SyncEngine {
           isFlagged: Value(isFlagged),
           isAnswered: Value(isAnswered),
           isForwarded: Value(isForwarded),
+          isDeleted: Value(isDeleted),
           labelsJson: Value(labelsJson),
         ),
       ));
@@ -1218,4 +1299,24 @@ class SyncEngine {
     }
     return locked;
   }
+}
+
+/// Bir klasörün doğrulanmış okunmamış sayısı (bkz. `_refreshUnreadCount`).
+class _UnseenCheck {
+  const _UnseenCheck({
+    required this.reported,
+    required this.uidNext,
+    required this.messageCount,
+    required this.exact,
+    required this.at,
+  });
+
+  /// Doğrulama anındaki `STATUS (UNSEEN)` değeri ve klasör durumu.
+  final int reported;
+  final int uidNext;
+  final int messageCount;
+
+  /// `\Deleted` işaretliler çıkarıldıktan sonraki sayı.
+  final int exact;
+  final DateTime at;
 }

@@ -80,7 +80,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 20;
+  int get schemaVersion => 22;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -250,6 +250,18 @@ class AppDatabase extends _$AppDatabase {
       // v19 → v20: Gelen e-posta filtreleri tablosu eklendi (yeni tablo; mevcut veri etkilenmez).
       if (from < 20) {
         await m.createTable(mailFilters);
+      }
+      // v20 → v21: Gönderim onayı (SMTP kabulü + Gönderilenler doğrulaması)
+      // için nullable kolonlar; mevcut iletiler etkilenmez.
+      if (from < 21) {
+        await m.addColumn(messages, messages.smtpAcceptedAt);
+        await m.addColumn(messages, messages.smtpReply);
+        await m.addColumn(messages, messages.sentVerifiedAt);
+      }
+      // v21 → v22: İade (bounce) iletisinden anlaşılan teslim hatası; nullable.
+      if (from < 22) {
+        await m.addColumn(messages, messages.deliveryFailedAt);
+        await m.addColumn(messages, messages.deliveryFailureReason);
       }
     },
     beforeOpen: (details) async {

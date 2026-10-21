@@ -53,7 +53,7 @@ void main() {
   tearDown(() => db.close());
 
   test('şema 20: tablo oluşur, varsayılan filtre yoktur', () async {
-    expect(db.schemaVersion, 20);
+    expect(db.schemaVersion, 22);
     expect(await repo.list(accountId), isEmpty);
     expect(await repo.count(accountId), 0);
   });
@@ -189,6 +189,16 @@ void main() {
           ),
         );
         await old.customStatement('DROP TABLE mail_filters');
+        // v21'de eklenen kolonlar eski şemada yoktu; yoksa `addColumn` çakışır.
+        for (final column in const [
+          'smtp_accepted_at',
+          'smtp_reply',
+          'sent_verified_at',
+          'delivery_failed_at',
+          'delivery_failure_reason',
+        ]) {
+          await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
+        }
         await old.customStatement('PRAGMA user_version = 19');
         await old.close();
 
@@ -196,6 +206,49 @@ void main() {
         final migrated = MailFilterRepository(database: old);
         expect(await migrated.count(id), 0);
         expect((await migrated.add(id, _def('Yeni'))).ok, isTrue);
+        expect((await old.allAccounts()).single.email, 'a@b.com');
+        await old.close();
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
+    'göç 20 → 22: gönderim onayı ve teslim hatası kolonları eklenir, veri korunur',
+    () async {
+      final dir = Directory.systemTemp.createTempSync('kaydet_mig21');
+      final file = File('${dir.path}/k.sqlite');
+      try {
+        var old = AppDatabase.forTesting(NativeDatabase(file));
+        await old.insertAccount(
+          AccountsCompanion.insert(
+            email: 'a@b.com',
+            username: 'a',
+            imapHost: 'h',
+            smtpHost: 'h',
+          ),
+        );
+        for (final column in const [
+          'smtp_accepted_at',
+          'smtp_reply',
+          'sent_verified_at',
+          'delivery_failed_at',
+          'delivery_failure_reason',
+        ]) {
+          await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
+        }
+        await old.customStatement('PRAGMA user_version = 20');
+        await old.close();
+
+        old = AppDatabase.forTesting(NativeDatabase(file));
+        final rows = await old
+            .customSelect(
+              'SELECT smtp_accepted_at, smtp_reply, sent_verified_at, '
+              'delivery_failed_at, delivery_failure_reason FROM messages',
+            )
+            .get();
+        expect(rows, isEmpty);
         expect((await old.allAccounts()).single.email, 'a@b.com');
         await old.close();
       } finally {

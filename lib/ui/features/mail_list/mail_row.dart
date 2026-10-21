@@ -258,8 +258,15 @@ class MailRow extends StatelessWidget {
                       const SizedBox(height: Space.xs),
                       _accountLine(context, account!),
                     ],
-                    if (outbox != OutboxState.none &&
-                        outbox != OutboxState.sent) ...[
+                    if ((outbox != OutboxState.none &&
+                            outbox != OutboxState.sent) ||
+                        // Gönderilen ileti: SMTP kabulü / sunucu doğrulaması
+                        // gösterilir. Sunucudan eşitlenen satırlarda bu bilgi
+                        // yoktur, rozet çıkmaz.
+                        (isSentFolder &&
+                            outbox == OutboxState.sent &&
+                            (message.smtpAcceptedAt != null ||
+                                message.deliveryFailedAt != null))) ...[
                       const SizedBox(height: Space.xs),
                       _outboxBadge(context, outbox),
                     ],
@@ -505,12 +512,23 @@ class MailRow extends StatelessWidget {
         message.outboxError ?? 'Gönderilemedi',
         t.danger,
       ),
-      _ => (LucideIcons.check, 'Gönderildi', t.success),
+      // Teslim hatası, sunucunun gönderdiği iade iletisinden anlaşılır.
+      _ when message.deliveryFailedAt != null => (
+        LucideIcons.triangleAlert,
+        'Teslim edilemedi: ${message.deliveryFailureReason ?? 'iade iletisi alındı'}',
+        t.danger,
+      ),
+      // SMTP kabulü teslim garantisi DEĞİLDİR; "başarı" rengi/ifadesi kullanılmaz.
+      // `null` simge: kâğıt uçağı (`SentPlaneIcon`).
+      _ => (null, 'Sunucu kabul etti', t.textTertiary),
     };
 
     return Row(
       children: [
-        Icon(icon, size: 12, color: color),
+        if (icon == null)
+          SentPlaneIcon(size: 12, color: color)
+        else
+          Icon(icon, size: 12, color: color),
         const SizedBox(width: Space.xs),
         Expanded(
           child: Text(

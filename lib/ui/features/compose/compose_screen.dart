@@ -268,6 +268,12 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   bool get _isBrandNewMessage =>
       widget.mode == ComposeMode.newMessage && widget.draftId == null;
 
+  /// "Kime" alanına odaklanılacak açılışlar: yeni ileti ve İlet. İletmede
+  /// alıcı henüz yoktur; odak gövdeye düşerse kullanıcı adresi gövdeye yazar.
+  bool get _focusRecipientOnOpen =>
+      _isBrandNewMessage ||
+      (widget.mode == ComposeMode.forward && widget.draftId == null);
+
   void _showKeyboard() {
     if (!mounted) return;
     SystemChannels.textInput.invokeMethod<void>('TextInput.show');
@@ -280,7 +286,7 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// — gövde hiçbir karede odağı almaz. Yalnızca rota geçiş animasyonu
   /// bitene kadar beklenir; aksi hâlde platform klavyeyi görmezden gelir.
   void _showKeyboardAfterTransition() {
-    if (!_isBrandNewMessage) return;
+    if (!_focusRecipientOnOpen) return;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -532,6 +538,8 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
       final docDelta = Delta();
       docDelta.insert('\n');
       if (sigDelta.isNotEmpty) {
+        // Yazma satırı ile imza arasında 1 boş satır bırakılır.
+        docDelta.insert('\n');
         for (final op in sigDelta.toList()) {
           docDelta.push(op);
         }
@@ -1834,7 +1842,7 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
                     label: 'Kime',
                     controller: _to,
                     focusNode: _toFocus,
-                    autofocus: _isBrandNewMessage,
+                    autofocus: _focusRecipientOnOpen,
                     accountId: fromAccountId,
                     onChipsChanged: (chips) {
                       _hasRecipientChips.value = chips.any((a) => a.isValid);

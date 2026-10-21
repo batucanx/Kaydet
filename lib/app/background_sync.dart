@@ -290,6 +290,9 @@ Future<bool> runBackgroundSync({
       // eşdeğeri — orada uygulama süreci canlı kaldığı için `unawaited`
       // güvenli, burada değil).
       await repository.trimMailbox(inbox.id);
+
+      // Teslim edilemeyen iletilerin iade bildirimleri (bkz. `detectBounces`).
+      await repository.detectBounces(account.id);
     }
 
     // Başka bir cihazdan okunan/silinen iletilerin bildirimleri kalkar.

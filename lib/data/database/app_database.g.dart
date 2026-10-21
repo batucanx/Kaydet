@@ -2403,6 +2403,64 @@ class $MessagesTable extends Messages
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _smtpAcceptedAtMeta = const VerificationMeta(
+    'smtpAcceptedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> smtpAcceptedAt =
+      GeneratedColumn<DateTime>(
+        'smtp_accepted_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _smtpReplyMeta = const VerificationMeta(
+    'smtpReply',
+  );
+  @override
+  late final GeneratedColumn<String> smtpReply = GeneratedColumn<String>(
+    'smtp_reply',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _sentVerifiedAtMeta = const VerificationMeta(
+    'sentVerifiedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> sentVerifiedAt =
+      GeneratedColumn<DateTime>(
+        'sent_verified_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _deliveryFailedAtMeta = const VerificationMeta(
+    'deliveryFailedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> deliveryFailedAt =
+      GeneratedColumn<DateTime>(
+        'delivery_failed_at',
+        aliasedName,
+        true,
+        type: DriftSqlType.dateTime,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _deliveryFailureReasonMeta =
+      const VerificationMeta('deliveryFailureReason');
+  @override
+  late final GeneratedColumn<String> deliveryFailureReason =
+      GeneratedColumn<String>(
+        'delivery_failure_reason',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _replyToMessageIdMeta = const VerificationMeta(
     'replyToMessageId',
   );
@@ -2446,6 +2504,11 @@ class $MessagesTable extends Messages
     isLocalOnly,
     outboxState,
     outboxError,
+    smtpAcceptedAt,
+    smtpReply,
+    sentVerifiedAt,
+    deliveryFailedAt,
+    deliveryFailureReason,
     replyToMessageId,
   ];
   @override
@@ -2664,6 +2727,48 @@ class $MessagesTable extends Messages
         ),
       );
     }
+    if (data.containsKey('smtp_accepted_at')) {
+      context.handle(
+        _smtpAcceptedAtMeta,
+        smtpAcceptedAt.isAcceptableOrUnknown(
+          data['smtp_accepted_at']!,
+          _smtpAcceptedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('smtp_reply')) {
+      context.handle(
+        _smtpReplyMeta,
+        smtpReply.isAcceptableOrUnknown(data['smtp_reply']!, _smtpReplyMeta),
+      );
+    }
+    if (data.containsKey('sent_verified_at')) {
+      context.handle(
+        _sentVerifiedAtMeta,
+        sentVerifiedAt.isAcceptableOrUnknown(
+          data['sent_verified_at']!,
+          _sentVerifiedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('delivery_failed_at')) {
+      context.handle(
+        _deliveryFailedAtMeta,
+        deliveryFailedAt.isAcceptableOrUnknown(
+          data['delivery_failed_at']!,
+          _deliveryFailedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('delivery_failure_reason')) {
+      context.handle(
+        _deliveryFailureReasonMeta,
+        deliveryFailureReason.isAcceptableOrUnknown(
+          data['delivery_failure_reason']!,
+          _deliveryFailureReasonMeta,
+        ),
+      );
+    }
     if (data.containsKey('reply_to_message_id')) {
       context.handle(
         _replyToMessageIdMeta,
@@ -2804,6 +2909,26 @@ class $MessagesTable extends Messages
         DriftSqlType.string,
         data['${effectivePrefix}outbox_error'],
       ),
+      smtpAcceptedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}smtp_accepted_at'],
+      ),
+      smtpReply: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}smtp_reply'],
+      ),
+      sentVerifiedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}sent_verified_at'],
+      ),
+      deliveryFailedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}delivery_failed_at'],
+      ),
+      deliveryFailureReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}delivery_failure_reason'],
+      ),
       replyToMessageId: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}reply_to_message_id'],
@@ -2863,6 +2988,18 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   final OutboxState outboxState;
   final String? outboxError;
 
+  /// SMTP sunucusunun iletiyi kabul ettiği an ve yanıt metni (ör. kuyruk kimliği).
+  final DateTime? smtpAcceptedAt;
+  final String? smtpReply;
+
+  /// İletinin Gönderilenler klasöründe Message-ID ile doğrulandığı an.
+  final DateTime? sentVerifiedAt;
+
+  /// Sunucudan gelen iade (bounce) iletisinden anlaşılan teslim hatası.
+  /// SMTP kabulü teslim garantisi değildir; hata sonradan iade iletisiyle gelir.
+  final DateTime? deliveryFailedAt;
+  final String? deliveryFailureReason;
+
   /// Yanıt/iletme oluştururken kaynak iletiye bağlanmak için.
   final int? replyToMessageId;
   const MessageRow({
@@ -2896,6 +3033,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     required this.isLocalOnly,
     required this.outboxState,
     this.outboxError,
+    this.smtpAcceptedAt,
+    this.smtpReply,
+    this.sentVerifiedAt,
+    this.deliveryFailedAt,
+    this.deliveryFailureReason,
     this.replyToMessageId,
   });
   @override
@@ -2947,6 +3089,21 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     if (!nullToAbsent || outboxError != null) {
       map['outbox_error'] = Variable<String>(outboxError);
     }
+    if (!nullToAbsent || smtpAcceptedAt != null) {
+      map['smtp_accepted_at'] = Variable<DateTime>(smtpAcceptedAt);
+    }
+    if (!nullToAbsent || smtpReply != null) {
+      map['smtp_reply'] = Variable<String>(smtpReply);
+    }
+    if (!nullToAbsent || sentVerifiedAt != null) {
+      map['sent_verified_at'] = Variable<DateTime>(sentVerifiedAt);
+    }
+    if (!nullToAbsent || deliveryFailedAt != null) {
+      map['delivery_failed_at'] = Variable<DateTime>(deliveryFailedAt);
+    }
+    if (!nullToAbsent || deliveryFailureReason != null) {
+      map['delivery_failure_reason'] = Variable<String>(deliveryFailureReason);
+    }
     if (!nullToAbsent || replyToMessageId != null) {
       map['reply_to_message_id'] = Variable<int>(replyToMessageId);
     }
@@ -2995,6 +3152,21 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       outboxError: outboxError == null && nullToAbsent
           ? const Value.absent()
           : Value(outboxError),
+      smtpAcceptedAt: smtpAcceptedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(smtpAcceptedAt),
+      smtpReply: smtpReply == null && nullToAbsent
+          ? const Value.absent()
+          : Value(smtpReply),
+      sentVerifiedAt: sentVerifiedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sentVerifiedAt),
+      deliveryFailedAt: deliveryFailedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deliveryFailedAt),
+      deliveryFailureReason: deliveryFailureReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deliveryFailureReason),
       replyToMessageId: replyToMessageId == null && nullToAbsent
           ? const Value.absent()
           : Value(replyToMessageId),
@@ -3039,6 +3211,15 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
         serializer.fromJson<int>(json['outboxState']),
       ),
       outboxError: serializer.fromJson<String?>(json['outboxError']),
+      smtpAcceptedAt: serializer.fromJson<DateTime?>(json['smtpAcceptedAt']),
+      smtpReply: serializer.fromJson<String?>(json['smtpReply']),
+      sentVerifiedAt: serializer.fromJson<DateTime?>(json['sentVerifiedAt']),
+      deliveryFailedAt: serializer.fromJson<DateTime?>(
+        json['deliveryFailedAt'],
+      ),
+      deliveryFailureReason: serializer.fromJson<String?>(
+        json['deliveryFailureReason'],
+      ),
       replyToMessageId: serializer.fromJson<int?>(json['replyToMessageId']),
     );
   }
@@ -3078,6 +3259,13 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
         $MessagesTable.$converteroutboxState.toJson(outboxState),
       ),
       'outboxError': serializer.toJson<String?>(outboxError),
+      'smtpAcceptedAt': serializer.toJson<DateTime?>(smtpAcceptedAt),
+      'smtpReply': serializer.toJson<String?>(smtpReply),
+      'sentVerifiedAt': serializer.toJson<DateTime?>(sentVerifiedAt),
+      'deliveryFailedAt': serializer.toJson<DateTime?>(deliveryFailedAt),
+      'deliveryFailureReason': serializer.toJson<String?>(
+        deliveryFailureReason,
+      ),
       'replyToMessageId': serializer.toJson<int?>(replyToMessageId),
     };
   }
@@ -3113,6 +3301,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     bool? isLocalOnly,
     OutboxState? outboxState,
     Value<String?> outboxError = const Value.absent(),
+    Value<DateTime?> smtpAcceptedAt = const Value.absent(),
+    Value<String?> smtpReply = const Value.absent(),
+    Value<DateTime?> sentVerifiedAt = const Value.absent(),
+    Value<DateTime?> deliveryFailedAt = const Value.absent(),
+    Value<String?> deliveryFailureReason = const Value.absent(),
     Value<int?> replyToMessageId = const Value.absent(),
   }) => MessageRow(
     id: id ?? this.id,
@@ -3151,6 +3344,19 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isLocalOnly: isLocalOnly ?? this.isLocalOnly,
     outboxState: outboxState ?? this.outboxState,
     outboxError: outboxError.present ? outboxError.value : this.outboxError,
+    smtpAcceptedAt: smtpAcceptedAt.present
+        ? smtpAcceptedAt.value
+        : this.smtpAcceptedAt,
+    smtpReply: smtpReply.present ? smtpReply.value : this.smtpReply,
+    sentVerifiedAt: sentVerifiedAt.present
+        ? sentVerifiedAt.value
+        : this.sentVerifiedAt,
+    deliveryFailedAt: deliveryFailedAt.present
+        ? deliveryFailedAt.value
+        : this.deliveryFailedAt,
+    deliveryFailureReason: deliveryFailureReason.present
+        ? deliveryFailureReason.value
+        : this.deliveryFailureReason,
     replyToMessageId: replyToMessageId.present
         ? replyToMessageId.value
         : this.replyToMessageId,
@@ -3211,6 +3417,19 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       outboxError: data.outboxError.present
           ? data.outboxError.value
           : this.outboxError,
+      smtpAcceptedAt: data.smtpAcceptedAt.present
+          ? data.smtpAcceptedAt.value
+          : this.smtpAcceptedAt,
+      smtpReply: data.smtpReply.present ? data.smtpReply.value : this.smtpReply,
+      sentVerifiedAt: data.sentVerifiedAt.present
+          ? data.sentVerifiedAt.value
+          : this.sentVerifiedAt,
+      deliveryFailedAt: data.deliveryFailedAt.present
+          ? data.deliveryFailedAt.value
+          : this.deliveryFailedAt,
+      deliveryFailureReason: data.deliveryFailureReason.present
+          ? data.deliveryFailureReason.value
+          : this.deliveryFailureReason,
       replyToMessageId: data.replyToMessageId.present
           ? data.replyToMessageId.value
           : this.replyToMessageId,
@@ -3250,6 +3469,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('isLocalOnly: $isLocalOnly, ')
           ..write('outboxState: $outboxState, ')
           ..write('outboxError: $outboxError, ')
+          ..write('smtpAcceptedAt: $smtpAcceptedAt, ')
+          ..write('smtpReply: $smtpReply, ')
+          ..write('sentVerifiedAt: $sentVerifiedAt, ')
+          ..write('deliveryFailedAt: $deliveryFailedAt, ')
+          ..write('deliveryFailureReason: $deliveryFailureReason, ')
           ..write('replyToMessageId: $replyToMessageId')
           ..write(')'))
         .toString();
@@ -3287,6 +3511,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isLocalOnly,
     outboxState,
     outboxError,
+    smtpAcceptedAt,
+    smtpReply,
+    sentVerifiedAt,
+    deliveryFailedAt,
+    deliveryFailureReason,
     replyToMessageId,
   ]);
   @override
@@ -3323,6 +3552,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.isLocalOnly == this.isLocalOnly &&
           other.outboxState == this.outboxState &&
           other.outboxError == this.outboxError &&
+          other.smtpAcceptedAt == this.smtpAcceptedAt &&
+          other.smtpReply == this.smtpReply &&
+          other.sentVerifiedAt == this.sentVerifiedAt &&
+          other.deliveryFailedAt == this.deliveryFailedAt &&
+          other.deliveryFailureReason == this.deliveryFailureReason &&
           other.replyToMessageId == this.replyToMessageId);
 }
 
@@ -3357,6 +3591,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<bool> isLocalOnly;
   final Value<OutboxState> outboxState;
   final Value<String?> outboxError;
+  final Value<DateTime?> smtpAcceptedAt;
+  final Value<String?> smtpReply;
+  final Value<DateTime?> sentVerifiedAt;
+  final Value<DateTime?> deliveryFailedAt;
+  final Value<String?> deliveryFailureReason;
   final Value<int?> replyToMessageId;
   const MessagesCompanion({
     this.id = const Value.absent(),
@@ -3389,6 +3628,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isLocalOnly = const Value.absent(),
     this.outboxState = const Value.absent(),
     this.outboxError = const Value.absent(),
+    this.smtpAcceptedAt = const Value.absent(),
+    this.smtpReply = const Value.absent(),
+    this.sentVerifiedAt = const Value.absent(),
+    this.deliveryFailedAt = const Value.absent(),
+    this.deliveryFailureReason = const Value.absent(),
     this.replyToMessageId = const Value.absent(),
   });
   MessagesCompanion.insert({
@@ -3422,6 +3666,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isLocalOnly = const Value.absent(),
     this.outboxState = const Value.absent(),
     this.outboxError = const Value.absent(),
+    this.smtpAcceptedAt = const Value.absent(),
+    this.smtpReply = const Value.absent(),
+    this.sentVerifiedAt = const Value.absent(),
+    this.deliveryFailedAt = const Value.absent(),
+    this.deliveryFailureReason = const Value.absent(),
     this.replyToMessageId = const Value.absent(),
   }) : accountId = Value(accountId),
        mailboxId = Value(mailboxId),
@@ -3457,6 +3706,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<bool>? isLocalOnly,
     Expression<int>? outboxState,
     Expression<String>? outboxError,
+    Expression<DateTime>? smtpAcceptedAt,
+    Expression<String>? smtpReply,
+    Expression<DateTime>? sentVerifiedAt,
+    Expression<DateTime>? deliveryFailedAt,
+    Expression<String>? deliveryFailureReason,
     Expression<int>? replyToMessageId,
   }) {
     return RawValuesInsertable({
@@ -3490,6 +3744,12 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (isLocalOnly != null) 'is_local_only': isLocalOnly,
       if (outboxState != null) 'outbox_state': outboxState,
       if (outboxError != null) 'outbox_error': outboxError,
+      if (smtpAcceptedAt != null) 'smtp_accepted_at': smtpAcceptedAt,
+      if (smtpReply != null) 'smtp_reply': smtpReply,
+      if (sentVerifiedAt != null) 'sent_verified_at': sentVerifiedAt,
+      if (deliveryFailedAt != null) 'delivery_failed_at': deliveryFailedAt,
+      if (deliveryFailureReason != null)
+        'delivery_failure_reason': deliveryFailureReason,
       if (replyToMessageId != null) 'reply_to_message_id': replyToMessageId,
     });
   }
@@ -3525,6 +3785,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<bool>? isLocalOnly,
     Value<OutboxState>? outboxState,
     Value<String?>? outboxError,
+    Value<DateTime?>? smtpAcceptedAt,
+    Value<String?>? smtpReply,
+    Value<DateTime?>? sentVerifiedAt,
+    Value<DateTime?>? deliveryFailedAt,
+    Value<String?>? deliveryFailureReason,
     Value<int?>? replyToMessageId,
   }) {
     return MessagesCompanion(
@@ -3558,6 +3823,12 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       isLocalOnly: isLocalOnly ?? this.isLocalOnly,
       outboxState: outboxState ?? this.outboxState,
       outboxError: outboxError ?? this.outboxError,
+      smtpAcceptedAt: smtpAcceptedAt ?? this.smtpAcceptedAt,
+      smtpReply: smtpReply ?? this.smtpReply,
+      sentVerifiedAt: sentVerifiedAt ?? this.sentVerifiedAt,
+      deliveryFailedAt: deliveryFailedAt ?? this.deliveryFailedAt,
+      deliveryFailureReason:
+          deliveryFailureReason ?? this.deliveryFailureReason,
       replyToMessageId: replyToMessageId ?? this.replyToMessageId,
     );
   }
@@ -3657,6 +3928,23 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (outboxError.present) {
       map['outbox_error'] = Variable<String>(outboxError.value);
     }
+    if (smtpAcceptedAt.present) {
+      map['smtp_accepted_at'] = Variable<DateTime>(smtpAcceptedAt.value);
+    }
+    if (smtpReply.present) {
+      map['smtp_reply'] = Variable<String>(smtpReply.value);
+    }
+    if (sentVerifiedAt.present) {
+      map['sent_verified_at'] = Variable<DateTime>(sentVerifiedAt.value);
+    }
+    if (deliveryFailedAt.present) {
+      map['delivery_failed_at'] = Variable<DateTime>(deliveryFailedAt.value);
+    }
+    if (deliveryFailureReason.present) {
+      map['delivery_failure_reason'] = Variable<String>(
+        deliveryFailureReason.value,
+      );
+    }
     if (replyToMessageId.present) {
       map['reply_to_message_id'] = Variable<int>(replyToMessageId.value);
     }
@@ -3696,6 +3984,11 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('isLocalOnly: $isLocalOnly, ')
           ..write('outboxState: $outboxState, ')
           ..write('outboxError: $outboxError, ')
+          ..write('smtpAcceptedAt: $smtpAcceptedAt, ')
+          ..write('smtpReply: $smtpReply, ')
+          ..write('sentVerifiedAt: $sentVerifiedAt, ')
+          ..write('deliveryFailedAt: $deliveryFailedAt, ')
+          ..write('deliveryFailureReason: $deliveryFailureReason, ')
           ..write('replyToMessageId: $replyToMessageId')
           ..write(')'))
         .toString();
@@ -10432,6 +10725,11 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<bool> isLocalOnly,
       Value<OutboxState> outboxState,
       Value<String?> outboxError,
+      Value<DateTime?> smtpAcceptedAt,
+      Value<String?> smtpReply,
+      Value<DateTime?> sentVerifiedAt,
+      Value<DateTime?> deliveryFailedAt,
+      Value<String?> deliveryFailureReason,
       Value<int?> replyToMessageId,
     });
 typedef $$MessagesTableUpdateCompanionBuilder =
@@ -10466,6 +10764,11 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<bool> isLocalOnly,
       Value<OutboxState> outboxState,
       Value<String?> outboxError,
+      Value<DateTime?> smtpAcceptedAt,
+      Value<String?> smtpReply,
+      Value<DateTime?> sentVerifiedAt,
+      Value<DateTime?> deliveryFailedAt,
+      Value<String?> deliveryFailureReason,
       Value<int?> replyToMessageId,
     });
 
@@ -10736,6 +11039,31 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get outboxError => $composableBuilder(
     column: $table.outboxError,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get smtpAcceptedAt => $composableBuilder(
+    column: $table.smtpAcceptedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get smtpReply => $composableBuilder(
+    column: $table.smtpReply,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get sentVerifiedAt => $composableBuilder(
+    column: $table.sentVerifiedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get deliveryFailedAt => $composableBuilder(
+    column: $table.deliveryFailedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get deliveryFailureReason => $composableBuilder(
+    column: $table.deliveryFailureReason,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11040,6 +11368,31 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<DateTime> get smtpAcceptedAt => $composableBuilder(
+    column: $table.smtpAcceptedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get smtpReply => $composableBuilder(
+    column: $table.smtpReply,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get sentVerifiedAt => $composableBuilder(
+    column: $table.sentVerifiedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get deliveryFailedAt => $composableBuilder(
+    column: $table.deliveryFailedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get deliveryFailureReason => $composableBuilder(
+    column: $table.deliveryFailureReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get replyToMessageId => $composableBuilder(
     column: $table.replyToMessageId,
     builder: (column) => ColumnOrderings(column),
@@ -11207,6 +11560,29 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get outboxError => $composableBuilder(
     column: $table.outboxError,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get smtpAcceptedAt => $composableBuilder(
+    column: $table.smtpAcceptedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get smtpReply =>
+      $composableBuilder(column: $table.smtpReply, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get sentVerifiedAt => $composableBuilder(
+    column: $table.sentVerifiedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get deliveryFailedAt => $composableBuilder(
+    column: $table.deliveryFailedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get deliveryFailureReason => $composableBuilder(
+    column: $table.deliveryFailureReason,
     builder: (column) => column,
   );
 
@@ -11428,6 +11804,11 @@ class $$MessagesTableTableManager
                 Value<bool> isLocalOnly = const Value.absent(),
                 Value<OutboxState> outboxState = const Value.absent(),
                 Value<String?> outboxError = const Value.absent(),
+                Value<DateTime?> smtpAcceptedAt = const Value.absent(),
+                Value<String?> smtpReply = const Value.absent(),
+                Value<DateTime?> sentVerifiedAt = const Value.absent(),
+                Value<DateTime?> deliveryFailedAt = const Value.absent(),
+                Value<String?> deliveryFailureReason = const Value.absent(),
                 Value<int?> replyToMessageId = const Value.absent(),
               }) => MessagesCompanion(
                 id: id,
@@ -11460,6 +11841,11 @@ class $$MessagesTableTableManager
                 isLocalOnly: isLocalOnly,
                 outboxState: outboxState,
                 outboxError: outboxError,
+                smtpAcceptedAt: smtpAcceptedAt,
+                smtpReply: smtpReply,
+                sentVerifiedAt: sentVerifiedAt,
+                deliveryFailedAt: deliveryFailedAt,
+                deliveryFailureReason: deliveryFailureReason,
                 replyToMessageId: replyToMessageId,
               ),
           createCompanionCallback:
@@ -11494,6 +11880,11 @@ class $$MessagesTableTableManager
                 Value<bool> isLocalOnly = const Value.absent(),
                 Value<OutboxState> outboxState = const Value.absent(),
                 Value<String?> outboxError = const Value.absent(),
+                Value<DateTime?> smtpAcceptedAt = const Value.absent(),
+                Value<String?> smtpReply = const Value.absent(),
+                Value<DateTime?> sentVerifiedAt = const Value.absent(),
+                Value<DateTime?> deliveryFailedAt = const Value.absent(),
+                Value<String?> deliveryFailureReason = const Value.absent(),
                 Value<int?> replyToMessageId = const Value.absent(),
               }) => MessagesCompanion.insert(
                 id: id,
@@ -11526,6 +11917,11 @@ class $$MessagesTableTableManager
                 isLocalOnly: isLocalOnly,
                 outboxState: outboxState,
                 outboxError: outboxError,
+                smtpAcceptedAt: smtpAcceptedAt,
+                smtpReply: smtpReply,
+                sentVerifiedAt: sentVerifiedAt,
+                deliveryFailedAt: deliveryFailedAt,
+                deliveryFailureReason: deliveryFailureReason,
                 replyToMessageId: replyToMessageId,
               ),
           withReferenceMapper: (p0) => p0

@@ -10,6 +10,7 @@ import '../../core/mail_log.dart';
 import '../../core/result.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/repositories/draft_repository.dart';
+import '../../domain/use_cases/bounce_parser.dart';
 import '../../domain/use_cases/folder_mapping.dart';
 import '../../domain/use_cases/label_keywords.dart';
 import '../database/app_database.dart';
@@ -329,6 +330,7 @@ class MailRepository {
         await _db.deleteMessages(remote.map((r) => r.id).toList());
         return ids;
       });
+      await _adjustUnreadForRemoved(remote, sign: -1);
       onMessagesHandled?.call(remote.map((r) => r.id).toList());
       _scheduleKick(accountId, undoWindow);
 
@@ -371,7 +373,10 @@ class MailRepository {
         if (restored is Err<int>) return false;
       }
       final cancelled = await _db.cancelPendingOperations(operationIds);
-      if (cancelled == operationIds.length) return true;
+      if (cancelled == operationIds.length) {
+        await _adjustUnreadForRemoved(removed, sign: 1);
+        return true;
+      }
 
       // Bekleme süresi tam bu sırada doldu ve işlem sunucuya gitti: geri
       // yüklenen satırlar artık bayat UID taşıyor, kaldırılır (ileti
@@ -442,8 +447,30 @@ class MailRepository {
       }
       await _db.deleteMessages(rows.map((r) => r.id).toList());
     });
+    await _adjustUnreadForRemoved(remote, sign: -1);
     onMessagesHandled?.call(rows.map((r) => r.id).toList());
     _kickAccountsOf(rows);
+  }
+
+  /// Yerelden kaldırılan (taşınan/silinen) ya da geri getirilen okunmamış
+  /// iletilerin klasör sayısına ([sign] = -1 / +1) yansıması.
+  ///
+  /// Arşiv ve özel klasörlerin rozeti sunucudan gelen saklı sayıdır (bkz.
+  /// `usesLocalUnreadCount`); düzeltme olmasa ileti kaybolduktan sonra rozet,
+  /// sunucu yoklamasına kadar eski sayıyı gösterirdi. Sunucu işlemi bitince
+  /// sayı zaten sunucudan yeniden okunur (bkz. `_processAccountQueue`).
+  Future<void> _adjustUnreadForRemoved(
+    Iterable<MessageRow> rows, {
+    required int sign,
+  }) async {
+    final deltas = <int, int>{};
+    for (final row in rows) {
+      if (row.isSeen || row.isDraft || row.isDeleted) continue;
+      deltas.update(row.mailboxId, (d) => d + sign, ifAbsent: () => sign);
+    }
+    for (final entry in deltas.entries) {
+      await _db.adjustMailboxUnreadCount(entry.key, entry.value);
+    }
   }
 
   /// Arşivler: iletiyi sunucuda gerçekten Arşiv klasörüne taşır. Swipe, seçim
@@ -1106,6 +1133,12 @@ class MailRepository {
     // sunucudan yeniden okunur; böylece ekran sunucudaki gerçek durumu gösterir.
     final movedInto = <int>{};
 
+    // Okundu/okunmadı/taşıma/silme işlemlerinin KAYNAK klasörleri: bu
+    // klasörlerin sunucudan gelen okunmamış sayısı işlem sonrası yeniden
+    // okunur (bkz. `SyncEngine.refreshUnreadCounts`). İşlem başarısız olsa da
+    // okunur — iyimser yerel düzeltme sunucudaki gerçekle uyuşmayabilir.
+    final countedFolders = <int>{};
+
     for (final op in operations) {
       // Bu işlemi yürütmeye başlamadan hemen önce kirasını tazele: parti
       // içindeki önceki işlemler zaman aldıysa (ör. yavaş bir gönderim),
@@ -1118,6 +1151,10 @@ class MailRepository {
       final wasReclaimed = op.status == PendingOpStatus.running;
       MailLog.repository('run op ${op.id} ${op.type.name}');
       final result = await _execute(accountId, op, wasReclaimed);
+      if (_changesUnreadCount(op.type)) {
+        final sourceId = _payloadOf(op)['mailboxId'];
+        if (sourceId is int) countedFolders.add(sourceId);
+      }
       await result.fold(
         (_) async {
           MailLog.remote('op ${op.id} ${op.type.name} SUCCESS');
@@ -1153,7 +1190,22 @@ class MailRepository {
         ),
       );
     }
+
+    countedFolders.addAll(movedInto);
+    if (countedFolders.isNotEmpty) {
+      await _sync.refreshUnreadCounts(
+        accountId,
+        onlyMailboxIds: countedFolders,
+      );
+    }
   }
+
+  /// Bu işlem klasörün okunmamış sayısını değiştirebilir mi?
+  static bool _changesUnreadCount(PendingOpType type) =>
+      type == PendingOpType.markSeen ||
+      type == PendingOpType.markUnseen ||
+      type == PendingOpType.move ||
+      type == PendingOpType.deletePermanently;
 
   /// Taşıma işleminin hedef klasörü (yerel satır); çözülemezse `null`.
   Future<MailboxRow?> _targetMailboxOf(
@@ -1316,6 +1368,9 @@ class MailRepository {
       case PendingOpType.send:
         return _sendQueued(accountId, payload, wasReclaimed: wasReclaimed);
 
+      case PendingOpType.verifySent:
+        return _verifySent(accountId, op, payload);
+
       case PendingOpType.deleteDraft:
         final messageId = payload['messageId'] as int?;
         if (messageId != null) {
@@ -1465,6 +1520,7 @@ class MailRepository {
 
       case PendingOpType.appendDraft:
       case PendingOpType.send:
+      case PendingOpType.verifySent:
         // `_execute` bunları buraya göndermez.
         return okVoid;
     }
@@ -1589,6 +1645,14 @@ class MailRepository {
     );
     if (appended is Err<int?>) return Err(appended.failure);
 
+    if (isSentCopy) {
+      await _confirmInSent(
+        accountId: accountId,
+        messageId: messageId,
+        mailboxPath: targetPath,
+        encodedPath: targetBox?.encodedPath,
+      );
+    }
     await _linkAppendedMessage(
       messageId: messageId,
       mailboxPath: targetPath,
@@ -1596,6 +1660,192 @@ class MailRepository {
       newUid: (appended as Ok<int?>).value,
     );
     return okVoid;
+  }
+
+  /// Gönderilen iletinin Gönderilenler klasöründe durduğunu sunucudan sorar.
+  ///
+  /// Bulunursa `sentVerifiedAt` yazılır; bulunamazsa ya da sorgu hata verirse
+  /// `verifySent` işlemi kuyruğa alınır. Bu bir HATA DEĞİLDİR: SMTP iletiyi
+  /// zaten kabul etmiştir, yeniden gönderim yapılmaz.
+  Future<void> _confirmInSent({
+    required int accountId,
+    required int messageId,
+    required String mailboxPath,
+    String? encodedPath,
+  }) async {
+    final found = await _searchSentCopy(
+      accountId: accountId,
+      messageId: messageId,
+      mailboxPath: mailboxPath,
+      encodedPath: encodedPath,
+    );
+    if (found is Ok<bool> && found.value) {
+      await _markSentVerified(messageId);
+      return;
+    }
+    await _db.enqueue(
+      PendingOperationsCompanion.insert(
+        accountId: accountId,
+        type: PendingOpType.verifySent,
+        payloadJson: Value(jsonEncode({'messageId': messageId})),
+        nextAttemptAt: Value(
+          DateTime.now().toUtc().add(const Duration(seconds: 30)),
+        ),
+      ),
+    );
+  }
+
+  Future<Result<bool>> _searchSentCopy({
+    required int accountId,
+    required int messageId,
+    required String mailboxPath,
+    String? encodedPath,
+  }) async {
+    final row = await _db.messageById(messageId);
+    final header = row?.messageIdHeader;
+    if (header == null || header.isEmpty) return const Ok(false);
+    return _connection.exclusive<bool>(
+      accountId,
+      () => _connection.imap.existsByMessageId(
+        path: mailboxPath,
+        encodedPath: encodedPath,
+        messageId: header,
+      ),
+    );
+  }
+
+  Future<void> _markSentVerified(int messageId) => _db.updateMessage(
+    messageId,
+    MessagesCompanion(sentVerifiedAt: Value(DateTime.now().toUtc())),
+  );
+
+  /// Bu süreçte zaten incelenmiş iade adayları (`mailboxId:uid`); aynı iade
+  /// iletisi her eşitlemede yeniden indirilmesin.
+  final Set<String> _inspectedBounces = {};
+
+  /// Gelen kutusundaki iade (bounce) iletilerinden, son 14 günde sunucunun
+  /// kabul ettiği iletilerin teslim hatalarını bulur ve nedenini yazar.
+  ///
+  /// SMTP kabulü teslim garantisi değildir; alıcı sunucusunun reddi yalnızca
+  /// sonradan gelen bir iade iletisiyle öğrenilir. Eşleştirme iade iletisinin
+  /// ham kaynağında gönderilen iletinin `Message-ID` değeri aranarak yapılır
+  /// (yanlış iletiye hata yazmamak için başka bir ipucu kullanılmaz).
+  /// Hiçbir hata dışarı fırlatmaz. Dönüş: işaretlenen ileti sayısı.
+  Future<int> detectBounces(int accountId) async {
+    try {
+      final since = DateTime.now().toUtc().subtract(const Duration(days: 14));
+      final pending =
+          await (_db.select(_db.messages)..where(
+                (m) =>
+                    m.accountId.equals(accountId) &
+                    m.smtpAcceptedAt.isBiggerOrEqualValue(since) &
+                    m.deliveryFailedAt.isNull() &
+                    m.messageIdHeader.isNotNull(),
+              ))
+              .get();
+      if (pending.isEmpty) return 0;
+
+      final inbox = await _db.mailboxBySpecialUse(accountId, SpecialUse.inbox);
+      if (inbox == null) return 0;
+
+      // İade, gönderimden önce gelemez (küçük bir saat farkı payıyla).
+      final earliest = pending
+          .map((r) => r.smtpAcceptedAt!)
+          .reduce((a, b) => a.isBefore(b) ? a : b)
+          .subtract(const Duration(minutes: 5));
+      final candidates =
+          await (_db.select(_db.messages)..where(
+                (m) =>
+                    m.mailboxId.equals(inbox.id) &
+                    m.uid.isNotNull() &
+                    m.isLocalOnly.equals(false) &
+                    m.dateUtc.isBiggerOrEqualValue(earliest) &
+                    // İade iletileri küçüktür; büyük iletiler indirilmez.
+                    m.sizeBytes.isSmallerOrEqualValue(2 * 1024 * 1024),
+              ))
+              .get();
+
+      var marked = 0;
+      for (final candidate in candidates) {
+        if (pending.isEmpty) break;
+        final key = '${candidate.mailboxId}:${candidate.uid}';
+        if (_inspectedBounces.contains(key)) continue;
+        if (!BounceParser.looksLikeBounce(
+          fromEmail: candidate.fromEmail,
+          fromName: candidate.fromName,
+          subject: candidate.subject,
+        )) {
+          continue;
+        }
+
+        final fetched = await _connection.exclusive<String>(accountId, () async {
+          final selected = await _connection.selectVerified(inbox);
+          if (selected is Err<MailboxState>) return Err(selected.failure);
+          return _connection.imap.fetchRawSource(candidate.uid!);
+        });
+        // Bağlantı hatasında işaretlenmez: sonraki eşitlemede yeniden denenir.
+        if (fetched is! Ok<String>) continue;
+        _inspectedBounces.add(key);
+
+        final source = fetched.value;
+        final report = BounceParser.parse(source);
+        if (report == null) continue;
+
+        for (final row in List.of(pending)) {
+          if (!BounceParser.mentionsMessageId(source, row.messageIdHeader!)) {
+            continue;
+          }
+          await _db.updateMessage(
+            row.id,
+            MessagesCompanion(
+              deliveryFailedAt: Value(candidate.dateUtc),
+              deliveryFailureReason: Value(report.reason),
+            ),
+          );
+          pending.remove(row);
+          marked++;
+        }
+      }
+      return marked;
+    } catch (error) {
+      MailLog.remote('detectBounces hata: $error');
+      return 0;
+    }
+  }
+
+  /// `verifySent` işlemi: Gönderilenler kopyasını yeniden sorgular. En fazla
+  /// 3 denemeden sonra sessizce vazgeçilir; ileti `sent` kalır, hata yazılmaz.
+  Future<Result<void>> _verifySent(
+    int accountId,
+    PendingOperationRow op,
+    Map<String, dynamic> payload,
+  ) async {
+    final messageId = payload['messageId'];
+    if (messageId is! int) return okVoid;
+
+    final row = await _db.messageById(messageId);
+    if (row == null || row.sentVerifiedAt != null) return okVoid;
+    // Gönderilenler'e yazma henüz bitmedi: kopya yazılınca doğrulama orada yapılır.
+    if (row.isLocalOnly) return okVoid;
+
+    final box = await _db.mailboxById(row.mailboxId);
+    if (box == null) return okVoid;
+
+    final found = await _searchSentCopy(
+      accountId: accountId,
+      messageId: messageId,
+      mailboxPath: box.path,
+      encodedPath: box.encodedPath,
+    );
+    if (found is Ok<bool> && found.value) {
+      await _markSentVerified(messageId);
+      return okVoid;
+    }
+    // Üçüncü başarısız denemeden sonra vazgeç (30 sn, 5 dk, 30 dk).
+    if (op.attemptCount >= 2) return okVoid;
+    return Err(
+      found is Err<bool> ? found.failure : const MessageNotFoundFailure(),
+    );
   }
 
   /// Sunucuya yazılan yerel kopyayı gerçek kayda bağlar.
@@ -1699,13 +1949,17 @@ class MailRepository {
     // Gönderim başarılı — bu noktadan sonra ASLA tekrar gönderilmez.
     MailLog.remote('SMTP SUCCESS id=$messageId');
     final sentMessage = (sent as Ok<SentMessage>).value;
+    final acceptedAt = DateTime.now().toUtc();
     await _db.updateMessage(
       messageId,
       MessagesCompanion(
         outboxState: const Value(OutboxState.sent),
         outboxError: const Value(null),
         messageIdHeader: Value(sentMessage.messageId),
-        dateUtc: Value(DateTime.now().toUtc()),
+        dateUtc: Value(acceptedAt),
+        // Kullanıcıya gösterilecek gönderim kanıtı: SMTP sunucusu kabul etti.
+        smtpAcceptedAt: Value(acceptedAt),
+        smtpReply: Value(sentMessage.serverReply),
       ),
     );
 
@@ -1763,6 +2017,14 @@ class MailRepository {
 
     final newUid = (appended as Ok<int?>).value;
     MailLog.remote('APPEND SUCCESS ${targetBox.path} uid=$newUid');
+    // Bağlamadan ÖNCE doğrulanır: `_linkAppendedMessage` bazı durumlarda yerel
+    // satırı siler ve doğrulama bilgisi yazılamaz hâle gelir.
+    await _confirmInSent(
+      accountId: accountId,
+      messageId: messageId,
+      mailboxPath: targetBox.path,
+      encodedPath: targetBox.encodedPath,
+    );
     await _linkAppendedMessage(
       messageId: messageId,
       mailboxPath: targetBox.path,

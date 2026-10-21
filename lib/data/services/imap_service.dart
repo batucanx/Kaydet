@@ -54,6 +54,18 @@ abstract class ImapService {
     bool includeUnseen = false,
   });
 
+  /// [path] klasöründeki okunmamış VE `\Deleted` işaretli olmayan ileti sayısı
+  /// (`UID SEARCH UNSEEN UNDELETED`).
+  ///
+  /// `STATUS (UNSEEN)` `\Deleted` işaretli (henüz EXPUNGE edilmemiş) iletileri
+  /// de sayar; diğer istemciler ve bu uygulamanın listesi onları gizler, yani
+  /// rozet listede görünmeyen iletiler için "okunmamış" der. Bu komut listede
+  /// görünen kümeyle birebir aynı sayıyı verir.
+  ///
+  /// Klasör geçici olarak seçilir; önceden seçili klasör (IDLE'ın izlediği)
+  /// geri seçilir.
+  Future<Result<int>> countUnseen({required String path, String? encodedPath});
+
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
   Future<Result<List<int>>> searchAllUids();
 
@@ -127,6 +139,21 @@ abstract class ImapService {
     required String targetPath,
     String? encodedPath,
     List<String> flags = const [],
+  });
+
+  /// Seçili klasördeki iletinin HAM kaynağını (başlıklar + tüm parçalar) döner.
+  /// İade iletilerini ayrıştırmak için kullanılır; en çok [maxChars] karakter.
+  Future<Result<String>> fetchRawSource(int uid, {int maxChars = 200000});
+
+  /// [path] klasöründe `Message-ID` başlığı [messageId] olan ileti var mı?
+  ///
+  /// Gönderilen iletinin Gönderilenler klasöründe gerçekten durduğunu sunucudan
+  /// doğrulamak için kullanılır. `<>` parantezli ve parantezsiz biçimler eşdeğerdir.
+  /// SELECT ve SEARCH aynı kilit altında yapılır (bkz. [moveMessages]).
+  Future<Result<bool>> existsByMessageId({
+    required String path,
+    String? encodedPath,
+    required String messageId,
   });
 
   /// Klasör oluşturur.
@@ -501,6 +528,43 @@ class EnoughMailImapService implements ImapService {
       );
     }
     return state;
+  });
+
+  @override
+  Future<Result<int>> countUnseen({
+    required String path,
+    String? encodedPath,
+  }) => _guard(() async {
+    final client = _requireClient;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    final wirePath = (encodedPath != null && encodedPath.isNotEmpty)
+        ? encodedPath
+        : em.Mailbox.encode(path, separator);
+    final previous = _selectedPath;
+    final switched = previous != wirePath;
+    if (switched) {
+      // Başarısız SELECT sonrası seçili klasör belirsizdir; sonraki komutlar
+      // `_selectedPath`e güvenmesin.
+      _selectedPath = null;
+      await client.selectMailboxByPath(wirePath);
+      _selectedPath = wirePath;
+    }
+    try {
+      final result = await client.uidSearchMessages(
+        searchCriteria: 'UNSEEN UNDELETED',
+      );
+      return result.matchingSequence?.toList().length ?? 0;
+    } finally {
+      // IDLE'ın ve sonraki işlemlerin beklediği klasör geri seçilir.
+      if (switched && previous != null) {
+        try {
+          await client.selectMailboxByPath(previous);
+          _selectedPath = previous;
+        } on Object catch (_) {
+          _selectedPath = null;
+        }
+      }
+    }
   });
 
   @override
@@ -1109,6 +1173,48 @@ class EnoughMailImapService implements ImapService {
       rethrow;
     }
   }, timeout: _appendResponseTimeout + _outerSlack);
+
+  @override
+  Future<Result<String>> fetchRawSource(int uid, {int maxChars = 200000}) =>
+      _guard(() async {
+        final result = await _requireClient.uidFetchMessages(
+          em.MessageSequence.fromId(uid, isUid: true),
+          '(UID BODY.PEEK[])',
+          responseTimeout: _bodyResponseTimeout,
+        );
+        final message = result.messages.firstOrNull;
+        if (message == null) throw const MessageNotFoundException();
+        final source = message.mimeData?.toString() ?? message.renderMessage();
+        return source.length > maxChars ? source.substring(0, maxChars) : source;
+      });
+
+  @override
+  Future<Result<bool>> existsByMessageId({
+    required String path,
+    String? encodedPath,
+    required String messageId,
+  }) => _guard(() async {
+    final bare = messageId.trim().replaceAll(RegExp(r'^<|>$'), '');
+    // SEARCH kriterini bozacak karakterler; geçerli bir Message-ID'de olmaz.
+    if (bare.isEmpty || bare.contains(RegExp(r'["\\\r\n]'))) return false;
+
+    final client = _requireClient;
+    final separator = client.serverInfo.pathSeparator ?? '/';
+    final wirePath = (encodedPath != null && encodedPath.isNotEmpty)
+        ? encodedPath
+        : em.Mailbox.encode(path, separator);
+    if (_selectedPath != wirePath) {
+      await client.selectMailboxByPath(wirePath);
+      _selectedPath = wirePath;
+    }
+
+    // HEADER araması alt dize eşleşmesidir; parantezsiz arama her iki biçimi
+    // de yakalar.
+    final result = await client.uidSearchMessages(
+      searchCriteria: 'HEADER Message-ID "$bare"',
+    );
+    return (result.matchingSequence?.toList() ?? const <int>[]).isNotEmpty;
+  });
 
   @override
   Future<Result<void>> createMailbox(String path) => _guard(() async {

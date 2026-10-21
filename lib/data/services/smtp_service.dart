@@ -21,9 +21,17 @@ import 'attachment_files.dart';
 /// tek işlem sayılırsa APPEND hatasında gönderim tekrarlanır ve alıcı
 /// iletiyi iki kez alır.
 class SentMessage {
-  const SentMessage({required this.messageId, required this.mimeSource});
+  const SentMessage({
+    required this.messageId,
+    required this.mimeSource,
+    this.serverReply,
+  });
   final String messageId;
   final String mimeSource;
+
+  /// SMTP sunucusunun kabul yanıtı (ör. `250 2.0.0 OK queued as 8F3A`).
+  /// Kullanıcıya gönderim kanıtı olarak gösterilir.
+  final String? serverReply;
 }
 
 abstract class SmtpService {
@@ -78,6 +86,7 @@ class EnoughMailSmtpService implements SmtpService {
         SentMessage(
           messageId: wire.messageId,
           mimeSource: MimeBuilder.withBccHeader(wire.source, message.bcc),
+          serverReply: _formatReply(response),
         ),
       );
     } catch (error) {
@@ -85,6 +94,15 @@ class EnoughMailSmtpService implements SmtpService {
     } finally {
       await _close(client);
     }
+  }
+
+  /// Yanıtı `250 <metin>` biçiminde tek satıra indirir; boşsa `null`.
+  static String? _formatReply(em.SmtpResponse response) {
+    final text = response.message?.trim() ?? '';
+    final code = response.code;
+    if (code == null && text.isEmpty) return null;
+    final reply = [if (code != null) '$code', text].join(' ').trim();
+    return reply.length > 300 ? reply.substring(0, 300) : reply;
   }
 
   @override

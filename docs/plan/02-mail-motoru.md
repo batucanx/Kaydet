@@ -128,6 +128,14 @@ React'te `handleSendMail` sadece listeye bir nesne ekliyordu. Gerçekte gönderi
 
 > Adım 4 ile 5'in ayrılması şart. İkisi tek işlem sayılırsa, APPEND hatasında gönderim tekrarlanır ve **alıcı maili iki kez alır**.
 
+**Gönderim kaydı ve teslim hatası:** SMTP `250` yanıtı iletinin sunucu kuyruğuna **kabul edildiğini** gösterir, alıcıya ulaştığını DEĞİL. Alıcı sunucusunun sonraki reddi yalnızca sunucunun gönderdiği bir iade (bounce) iletisiyle öğrenilir. Bu yüzden arayüz hiçbir zaman "teslim edildi / doğrulandı" demez.
+
+1. **SMTP kabulü** — `smtpAcceptedAt` + `smtpReply` (ör. `250 2.0.0 OK queued as …`), adım 4 başarılı olunca yazılır. Satırda "Sunucu kabul etti".
+2. **Gönderilenler kaydı** — adım 5'ten sonra IMAP `UID SEARCH HEADER Message-ID` ile kopya aranır, bulunursa `sentVerifiedAt` yazılır (yalnızca detayda "Gönderilenler klasöründe kayıtlı"). Bulunamazsa `verifySent` kuyruk işi (30 sn / 5 dk / 30 dk, en çok 3 deneme); vazgeçilirse ileti `sent` kalır, hata sayılmaz, yeniden gönderilmez.
+3. **Teslim hatası** — `MailRepository.detectBounces`, her gelen kutusu eşitlemesinden sonra son 14 gündeki gönderimler için gelen kutusundaki iade adaylarını (`BounceParser.looksLikeBounce`) bulur, ham kaynağını indirir ve **yalnızca** gönderilen iletinin `Message-ID` değeri kaynakta geçiyorsa `deliveryFailedAt` + `deliveryFailureReason` yazar (RFC 3464 `Status`/`Diagnostic-Code`; gecikme bildirimi `Action: delayed` hata sayılmaz). Satırda kırmızı "Teslim edilemedi: <neden>".
+
+Bilinen sınırlar: `enough_mail` çok alıcılı gönderimde sonuncu dışındaki `RCPT TO` reddini yok sayar (ileti kalan alıcılara gider, `250` döner); DSN (`NOTIFY`) desteklenmez, bu yüzden pozitif teslim kanıtı yoktur. İade iletisi orijinalin `Message-ID`'sini içermiyorsa eşleştirilemez. UID dönmeyen sunucularda yerel satır `APPEND` sonrası silinip sunucudan yeniden geldiği için bu bilgiler korunmaz.
+
 ## 2.6 Taslaklar
 
 - Compose ekranında **3 saniyelik yazma duraklamasında** yerel taslak otomatik kaydedilir (uygulama çökse bile kayıp yok).

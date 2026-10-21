@@ -185,6 +185,13 @@ class SyncController extends Notifier<SyncState> {
     _backfillWaits.clear();
     _idleRefresh?.cancel();
     _idleRefresh = null;
+    _secondaryFolderTimer?.cancel();
+    _secondaryFolderTimer = null;
+    final secondaryWait = _secondaryFolderWait;
+    _secondaryFolderWait = null;
+    if (secondaryWait != null && !secondaryWait.isCompleted) {
+      secondaryWait.complete(false);
+    }
     _mailRefresh?.cancel();
     _mailRefresh = null;
     _folderRefresh?.cancel();
@@ -471,6 +478,8 @@ class SyncController extends Notifier<SyncState> {
   static const _secondaryFolderDelay = Duration(seconds: 4);
   static const _secondaryFolderGap = Duration(minutes: 2);
   final Map<int, DateTime> _lastSecondarySync = {};
+  Timer? _secondaryFolderTimer;
+  Completer<bool>? _secondaryFolderWait;
 
   /// Hesap başına iki yoklama arasındaki en kısa süre.
   static const _unreadRefreshGap = Duration(seconds: 60);
@@ -492,6 +501,17 @@ class SyncController extends Notifier<SyncState> {
     final result = await engine.refreshUnreadCounts(accountId);
     // Başarısız tur bir sonraki eşitlemede hemen yeniden denensin.
     if (result is Err<int>) _lastUnreadRefresh.remove(accountId);
+    await _resumeIdleAfterBackgroundWork(accountId);
+  }
+
+  /// Arka plandaki sunucu yoklamaları (rozet sayıları) her komutta IDLE'ı
+  /// bitirir; tur [syncAll]'ın `finally` bloğunda IDLE'ı çoktan yeniden
+  /// başlatmış olabilir. Yoklama bitince IDLE geri kurulmazsa anlık güncelleme
+  /// bir sonraki tura kadar (en çok 8 dk) sessizce kapalı kalırdı.
+  Future<void> _resumeIdleAfterBackgroundWork(int accountId) async {
+    if (_disposed || _paused || _running || _foldersSyncing) return;
+    if (!_isCurrent(accountId)) return;
+    await _restartIdle();
   }
 
   /// Tüm klasörleri ve seçili klasörün içeriğini eşitler.
@@ -634,7 +654,24 @@ class SyncController extends Notifier<SyncState> {
     }
     _lastSecondarySync[accountId] = DateTime.now();
 
-    await Future<void>.delayed(_secondaryFolderDelay);
+    // İptal edilebilir bekleme: `Future.delayed` dispose/çıkıştan sonra da
+    // çalışır ve silinmiş hesabın durumuna dokunurdu (bkz. `_stopWatching`).
+    final waited = Completer<bool>();
+    _secondaryFolderWait?.complete(false);
+    _secondaryFolderWait = waited;
+    _secondaryFolderTimer?.cancel();
+    _secondaryFolderTimer = Timer(_secondaryFolderDelay, () {
+      if (!waited.isCompleted) waited.complete(true);
+    });
+    final stillWanted = await waited.future;
+    if (identical(_secondaryFolderWait, waited)) {
+      _secondaryFolderWait = null;
+      _secondaryFolderTimer = null;
+    }
+    if (!stillWanted) {
+      _lastSecondarySync.remove(accountId);
+      return;
+    }
 
     bool busy() =>
         _disposed ||
@@ -745,13 +782,21 @@ class SyncController extends Notifier<SyncState> {
       );
       _fireAndForget(ref.read(pushStubsProvider.notifier).reconcile());
       await ref.read(mailRepositoryProvider).processQueue(accountId);
+      if (mailbox.specialUse == SpecialUse.inbox) {
+        // Sunucudan gelen iade iletileri gönderilen iletilerin teslim hatasını bildirir.
+        _fireAndForget(ref.read(mailRepositoryProvider).detectBounces(accountId));
+      }
       _startBodyPrefetch(engine, accountId, mailbox);
 
       // Açılan klasörün okunmamış sayısı sunucudan tazelenir (Gelen
       // Kutusu/Gönderilenler vb. yerel sayımla gösterildiğinden atlanır).
-      _fireAndForget(
-        engine.refreshUnreadCounts(accountId, onlyMailboxId: mailbox.id),
-      );
+      _fireAndForget(() async {
+        await engine.refreshUnreadCounts(
+          accountId,
+          onlyMailboxIds: {mailbox.id},
+        );
+        await _resumeIdleAfterBackgroundWork(accountId);
+      }());
 
       // Yerel önbellek tavanını aşan eski iletiler kademeli temizlenir
       // (bkz. `MailRepository.trimMailbox`) — arka planda, ekranı bloklamaz.
@@ -818,6 +863,9 @@ class SyncController extends Notifier<SyncState> {
         }
         _noteReachable(id);
         await repository.processQueue(id);
+        if (box.specialUse == SpecialUse.inbox) {
+          _fireAndForget(repository.detectBounces(id));
+        }
         _fireAndForget(repository.trimMailbox(box.id));
         _startBackfill(id, box.id);
         if (id == activeId) {

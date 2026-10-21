@@ -22,6 +22,9 @@ class FakeImapService implements ImapService {
   /// Ayarlanırsa `fetchFlags` bu hatayla döner (bayrak eşitleme hatası).
   AppFailure? failFlags;
 
+  /// Ayarlanırsa `appendMessage` bu hatayla döner (Gönderilenler yazma hatası).
+  AppFailure? failAppend;
+
   /// `fetchBody`/`fetchAttachment` yanıt vermeden önce beklenen süre; iki
   /// işlemin sıralanıp sıralanmadığını sınamak için.
   Duration bodyDelay = Duration.zero;
@@ -159,12 +162,36 @@ class FakeImapService implements ImapService {
     final maxUid = box.keys.isEmpty
         ? 0
         : box.keys.reduce((a, b) => a > b ? a : b);
+    // Gerçek `STATUS (UNSEEN)` gibi `\Deleted` işaretli iletileri de sayar.
+    final unseen = box.values.where((e) => !e.flags.contains(r'\Seen')).length;
     return Ok(
       MailboxState(
         uidValidity: uidValidity,
         uidNext: maxUid + 1,
         messageCount: box.length,
+        unseenCount: includeUnseen ? unseen : null,
       ),
+    );
+  }
+
+  /// Ayarlanırsa `countUnseen` bu hatayla döner.
+  AppFailure? failCountUnseen;
+
+  @override
+  Future<Result<int>> countUnseen({
+    required String path,
+    String? encodedPath,
+  }) async {
+    commandLog.add('countUnseen:$path');
+    final failure = failCountUnseen;
+    if (failure != null) return Err(failure);
+    return Ok(
+      _box(path).values
+          .where(
+            (e) =>
+                !e.flags.contains(r'\Seen') && !e.flags.contains(r'\Deleted'),
+          )
+          .length,
     );
   }
 
@@ -352,6 +379,8 @@ class FakeImapService implements ImapService {
     List<String> flags = const [],
   }) async {
     commandLog.add('append:$targetPath');
+    final appendFailure = failAppend;
+    if (appendFailure != null) return Err(appendFailure);
     final box = _box(targetPath);
     final uid =
         box.keys.isEmpty ? 1 : box.keys.reduce((a, b) => a > b ? a : b) + 1;
@@ -379,6 +408,35 @@ class FakeImapService implements ImapService {
       messageId: messageId,
     );
     return Ok(uid);
+  }
+
+  /// path → UID → ham ileti kaynağı (`fetchRawSource`, iade iletisi testleri).
+  final Map<String, Map<int, String>> rawSources = {};
+
+  @override
+  Future<Result<String>> fetchRawSource(int uid, {int maxChars = 200000}) async {
+    commandLog.add('raw:${selectedPath ?? 'INBOX'}:$uid');
+    final source = rawSources[selectedPath ?? 'INBOX']?[uid];
+    if (source == null) return const Err(MessageNotFoundFailure());
+    return Ok(source);
+  }
+
+  /// Ayarlanırsa `existsByMessageId` bu hatayla döner (doğrulama başarısızlığı).
+  AppFailure? failExistsByMessageId;
+
+  @override
+  Future<Result<bool>> existsByMessageId({
+    required String path,
+    String? encodedPath,
+    required String messageId,
+  }) async {
+    commandLog.add('exists:$path');
+    final failure = failExistsByMessageId;
+    if (failure != null) return Err(failure);
+    String bare(String? id) => (id ?? '').trim().replaceAll(RegExp(r'^<|>$'), '');
+    final wanted = bare(messageId);
+    final found = _box(path).values.any((e) => bare(e.messageId) == wanted);
+    return Ok(found);
   }
 
   /// `unsubscribe:` komutlarının yolları (ayar klasörünü gizleme testleri için).
@@ -511,10 +569,14 @@ class FakeSmtpService implements SmtpService {
     final failure = failOnSend;
     if (failure != null) return Err(failure);
     sent.add(message);
+    final messageId = 'gonderildi-${sent.length}@test';
     return Ok(
       SentMessage(
-        messageId: 'gonderildi-${sent.length}@test',
-        mimeSource: 'Subject: ${message.subject}\r\n\r\n${message.plainText}',
+        messageId: messageId,
+        mimeSource:
+            'Message-ID: <$messageId>\r\n'
+            'Subject: ${message.subject}\r\n\r\n${message.plainText}',
+        serverReply: '250 2.0.0 OK queued as FAKE${sent.length}',
       ),
     );
   }

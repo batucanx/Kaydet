@@ -41,29 +41,17 @@ Future<void> main() async {
     const SystemUiOverlayStyle(statusBarColor: Colors.transparent),
   );
 
-  final settingsStore = await AppSettingsStore.create();
-  final quickTemplatesStore = await QuickTemplatesStore.create();
-
   // Android FCM köprüsü: native `onPush`/`onToken` çağrıları kaçmasın diye
   // erken kurulur (bkz. `AndroidPushChannel`). Android dışında etkisizdir.
   AndroidPushChannel.instance.install();
 
-  // Bildirim kanalı işleyicisi (APNs token'ı) motor hazır olur olmaz kurulu
-  // olmalı; bu yüzden `runApp`ten önce beklenir.
-  try {
-    final notifications = NotificationService();
-    await notifications.initialize(
-      onBackgroundResponse: notificationBackgroundHandler,
-    );
-    // Uygulamayı bir bildirime dokunarak açan kullanıcının hedefi BURADA,
-    // `runApp`ten, sağlayıcılardan, veritabanından ve eşitlemeden ÖNCE
-    // yakalanır; bunlardan hiçbiri bilgiyi kaybettiremez (bkz.
-    // `NotificationIntake`). Gezinme, hedef çözülünce `NotificationNavigator`
-    // tarafından yapılır.
-    await NotificationIntake.start(notifications);
-  } on Object catch (error) {
-    debugPrint('Bildirimler kurulamadı: $error');
-  }
+  // Üçü birbirinden bağımsız platform kanalı çağrısıdır; art arda beklemek
+  // soğuk açılışta her birinin gecikmesini toplar. Birlikte beklenir.
+  final (settingsStore, quickTemplatesStore, _) = await (
+    AppSettingsStore.create(),
+    QuickTemplatesStore.create(),
+    _initNotifications(),
+  ).wait;
 
   runApp(
     ProviderScope(
@@ -78,6 +66,25 @@ Future<void> main() async {
   // Aşağıdakiler ilk kareyi geciktirmesin diye `runApp`ten SONRA kurulur
   // (iOS'ta soğuk açılışta beyaz açılış ekranı bu kareyi bekler).
   unawaited(_initAfterFirstFrame(settingsStore));
+}
+
+/// Bildirim kanalı işleyicisi (APNs token'ı) motor hazır olur olmaz kurulu
+/// olmalı; bu yüzden `runApp`ten önce beklenir. Hata açılışı engellemez.
+Future<void> _initNotifications() async {
+  try {
+    final notifications = NotificationService();
+    await notifications.initialize(
+      onBackgroundResponse: notificationBackgroundHandler,
+    );
+    // Uygulamayı bir bildirime dokunarak açan kullanıcının hedefi BURADA,
+    // `runApp`ten, sağlayıcılardan, veritabanından ve eşitlemeden ÖNCE
+    // yakalanır; bunlardan hiçbiri bilgiyi kaybettiremez (bkz.
+    // `NotificationIntake`). Gezinme, hedef çözülünce `NotificationNavigator`
+    // tarafından yapılır.
+    await NotificationIntake.start(notifications);
+  } on Object catch (error) {
+    debugPrint('Bildirimler kurulamadı: $error');
+  }
 }
 
 Future<void> _initAfterFirstFrame(AppSettingsStore settingsStore) async {

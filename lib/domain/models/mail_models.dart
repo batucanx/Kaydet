@@ -33,6 +33,10 @@ enum PendingOpType {
   appendDraft,
   deleteDraft,
   send,
+
+  /// Gönderilen iletinin Gönderilenler klasöründe bulunduğunu doğrular.
+  /// `intEnum` olarak saklandığı için sıra değişmemeli: yeni değerler sona.
+  verifySent,
 }
 
 /// Kuyruk durumu.

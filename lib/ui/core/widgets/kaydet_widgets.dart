@@ -81,6 +81,25 @@ class KaydetAvatar extends StatelessWidget {
   }
 }
 
+/// Gönderim onayı rozetinin kâğıt uçağı. PNG tek renkli çizgidir; [color]
+/// ile tema rengine boyanır (bkz. `assets/icons/send.png`).
+class SentPlaneIcon extends StatelessWidget {
+  const SentPlaneIcon({super.key, required this.size, required this.color});
+
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Image.asset(
+    'assets/icons/send.png',
+    width: size,
+    height: size,
+    color: color,
+    filterQuality: FilterQuality.medium,
+    excludeFromSemantics: true,
+  );
+}
+
 /// Gönderen avatarı — tanınan marka alan adları için gerçek logo gösterir.
 ///
 /// Kişisel e-posta sağlayıcılarında (Gmail, Outlook, …) ve seçili
