@@ -76,7 +76,7 @@ class AppSettings {
     this.notificationsEnabled = true,
     this.notificationPermissionAsked = false,
     this.showBrandLogos = true,
-    this.groupMessages = true,
+    this.groupMessages = false,
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
     this.swipeRight = SwipeAction.configure,
@@ -167,7 +167,7 @@ class AppSettingsStore {
       notificationsEnabled: _prefs.getBool(_kNotifications) ?? true,
       notificationPermissionAsked: _prefs.getBool(_kPermissionAsked) ?? false,
       showBrandLogos: _prefs.getBool(_kBrandLogos) ?? true,
-      groupMessages: _prefs.getBool(_kGroupMessages) ?? true,
+      groupMessages: _prefs.getBool(_kGroupMessages) ?? false,
       syncFrequency: syncIndex == null
           ? SyncFrequency.push
           : SyncFrequency.values[syncIndex.clamp(

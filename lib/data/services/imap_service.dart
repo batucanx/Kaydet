@@ -69,6 +69,10 @@ abstract class ImapService {
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
   Future<Result<List<int>>> searchAllUids();
 
+  /// Seçili klasörde sunucu tarafı `UID SEARCH` (bkz. `ImapSearchCriteria`);
+  /// eşleşen UID'ler. Yerel kopyada olmayan (eski) iletileri bulmak içindir.
+  Future<Result<List<int>>> searchUids(String criteria);
+
   /// Verilen UID aralığının başlıklarını çeker.
   Future<Result<List<FetchedEnvelope>>> fetchEnvelopes(List<int> uids);
 
@@ -575,6 +579,18 @@ class EnoughMailImapService implements ImapService {
     return result.matchingSequence?.toList() ?? <int>[];
   });
 
+  /// Metin aramaları gövdeyi de taradığından büyük klasörlerde saniyeler sürer.
+  static const Duration _searchResponseTimeout = Duration(seconds: 45);
+
+  @override
+  Future<Result<List<int>>> searchUids(String criteria) => _guard(() async {
+    final result = await _requireClient.uidSearchMessages(
+      searchCriteria: criteria,
+      responseTimeout: _searchResponseTimeout,
+    );
+    return result.matchingSequence?.toList() ?? <int>[];
+  }, timeout: _searchResponseTimeout + _outerSlack);
+
   /// Başlık çekmek için kullanılan FETCH tanımı.
   ///
   /// `BODY.PEEK[HEADER]` kullanılır — `BODY[HEADER]` deseydik sunucu iletiyi
@@ -681,10 +697,9 @@ class EnoughMailImapService implements ImapService {
             .toList();
 
     final envelope = message.envelope;
-    final date =
-        envelope?.date ??
-        message.decodeDate() ??
-        DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    // `Date` başlığı eksik/bozuk iletiler 1970'e düşmesin: eşitleme anı,
+    // yeni gelen ileti için geliş zamanına en yakın değerdir.
+    final date = envelope?.date ?? message.decodeDate() ?? DateTime.now();
 
     var hasAttachments = false;
     try {

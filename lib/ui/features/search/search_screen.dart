@@ -6,13 +6,14 @@ import '../../../app/providers.dart';
 import '../../../app/search_providers.dart';
 import '../../../data/database/app_database.dart';
 import '../../../domain/models/mail_models.dart';
+import '../../../domain/models/search_filters.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../compose/compose_launcher.dart';
 import '../mail_detail/mail_detail_screen.dart';
-import 'search_filters_screen.dart';
+import 'search_filter_chips.dart';
 import 'search_result_rows.dart';
 
 /// Gelişmiş, çok katmanlı arama ekranı (Outlook'un arama ekranı gibi).
@@ -29,6 +30,20 @@ class SearchScreen extends ConsumerStatefulWidget {
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
+
+  /// Filtre çipleri (Ekli · Tarih · Klasörler · Gönderen · Alıcı) alanın
+  /// sağındaki filtre düğmesiyle açılıp kapanır (web'deki gibi). Bir filtre
+  /// etkinken çipler her zaman görünür: etkin bir filtre gizlenmesin.
+  bool _filtersOpen = false;
+
+  /// Web'deki gibi: filtre düğmesi çipleri açar; çipler açıkken (ya da bir
+  /// filtre etkinken) basmak çipleri kapatır ve düz, filtresiz aramaya döner.
+  void _toggleFilters(bool showChips) {
+    if (showChips) {
+      ref.read(searchFiltersProvider.notifier).clear();
+    }
+    setState(() => _filtersOpen = !showChips);
+  }
 
   @override
   void dispose() {
@@ -58,16 +73,15 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final query = ref.watch(searchQueryProvider);
-    final category = ref.watch(searchCategoryProvider);
-    // Dosyalar sekmesi Outlook'taki gibi hiç yazı yazılmadan da sonuç
-    // görünümünü açar: sorgu boşken en son ekleri gözat modunda listeler
-    // (bkz. `attachmentSearchResultsProvider`). Diğer kategoriler yalnızca
-    // bir sorgu yazılınca aktifleşir.
-    final isActive =
-        query.trim().isNotEmpty || category == SearchCategory.files;
+    final filters = ref.watch(searchFiltersProvider);
+    // Metin olmadan da, tek başına seçim yapan bir filtre (Ekli, Dosyalar,
+    // tarih, kişi, klasör) tam bir aramadır ve sonuçları açar (web'deki
+    // `isRunnableSearch`): "Dosyalar" Outlook'taki gibi hiç yazı yazılmadan en
+    // son ekleri listeler (bkz. `attachmentSearchResultsProvider`).
+    final isActive = query.trim().isNotEmpty || filters.selectsOnItsOwn;
+    final showChips = _filtersOpen || filters.isActive;
     // Filtreleri yalnızca sonuç görünümü izler; sorgu tamamen silinip boş
-    // görünüme dönüldüğünde `autoDispose` onları sıfırlardı. Kategori ve hesap
-    // kapsamı gibi (bunları hep bağlı widget'lar izler) ekran açıkken korunsun.
+    // görünüme dönüldüğünde `autoDispose` onları sıfırlardı. Hesap kapsamı gibi (bunları hep bağlı widget'lar izler) ekran açıkken korunsun.
     ref.listen(searchFiltersProvider, (_, _) {});
 
     final scaffold = Scaffold(
@@ -121,14 +135,26 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                     },
                   ),
           ),
+          _FilterToggleButton(
+            open: showChips,
+            count: filters.activeCount,
+            onPressed: () => _toggleFilters(showChips),
+          ),
           const _AccountSelectorButton(),
           const SizedBox(width: Space.xs),
         ],
       ),
       body: Column(
         children: [
-          const _CategoryChipRow(),
-          const Divider(height: 1),
+          AnimatedSize(
+            duration: context.motion(Motion.base),
+            curve: Motion.standard,
+            alignment: Alignment.topCenter,
+            child: showChips
+                ? const SearchFilterChips()
+                : const SizedBox(width: double.infinity),
+          ),
+          const _RemoteSearchStatus(),
           Expanded(
             child: isActive
                 ? const _SearchResultsView()
@@ -138,6 +164,39 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       ),
     );
     return KaydetDepthCoverEffect(child: scaffold);
+  }
+}
+
+// ------------------------------------------------------------ filtre düğmesi
+
+/// Alanın sağındaki filtre düğmesi: filtre çiplerini açar/kapatır. Etkin filtre
+/// sayısı bir rozetle gösterilir (web'deki `SearchBar` filtre düğmesi gibi).
+class _FilterToggleButton extends StatelessWidget {
+  const _FilterToggleButton({
+    required this.open,
+    required this.count,
+    required this.onPressed,
+  });
+
+  final bool open;
+  final int count;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return IconButton(
+      tooltip: count > 0 ? 'Filtre, $count etkin' : 'Filtre',
+      isSelected: open,
+      onPressed: onPressed,
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text('$count'),
+        backgroundColor: t.accent,
+        textColor: t.onAccentFill,
+        child: const Icon(LucideIcons.slidersHorizontal),
+      ),
+    );
   }
 }
 
@@ -204,80 +263,51 @@ class _AccountSelectorButton extends ConsumerWidget {
   }
 }
 
-// --------------------------------------------------------- filtre çipleri
+// ---------------------------------------------------- sunucu araması durumu
 
-class _CategoryChipRow extends ConsumerWidget {
-  const _CategoryChipRow();
-
-  static const _labels = {
-    SearchCategory.all: 'Tümü',
-    SearchCategory.mail: 'Posta',
-    SearchCategory.contacts: 'Kişiler',
-    SearchCategory.files: 'Dosyalar',
-  };
+/// Sunucu araması (bkz. `remoteSearchProvider`) sürerken ince bir ilerleme
+/// çubuğu; sunucuya ulaşılamadıysa tek satırlık bir not. Yerel sonuçlar bunu
+/// beklemeden gösterilir.
+class _RemoteSearchStatus extends ConsumerWidget {
+  const _RemoteSearchStatus();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final selected = ref.watch(searchCategoryProvider);
-    final notifier = ref.read(searchCategoryProvider.notifier);
-
-    return SizedBox(
-      height: 48,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.lg,
-          vertical: Space.sm,
-        ),
-        children: [
-          for (final category in SearchCategory.values)
-            Padding(
-              padding: const EdgeInsets.only(right: Space.sm),
-              child: _CategoryChip(
-                label: _labels[category]!,
-                isSelected: selected == category,
-                onTap: () => notifier.select(category),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _CategoryChip extends StatelessWidget {
-  const _CategoryChip({
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
     final t = context.tokens;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(Radii.full),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-          horizontal: Space.lg,
-          vertical: Space.sm,
+    final remote = ref.watch(remoteSearchProvider);
+    return AnimatedSize(
+      duration: context.motion(Motion.fast),
+      alignment: Alignment.topCenter,
+      child: remote.when(
+        loading: () => Semantics(
+          label: 'Sunucuda aranıyor',
+          child: const LinearProgressIndicator(minHeight: 2),
         ),
-        decoration: BoxDecoration(
-          color: isSelected ? t.accentFill : t.surfaceElevated,
-          borderRadius: BorderRadius.circular(Radii.full),
-        ),
-        child: Text(
-          label,
-          style: AppText.labelMedium.copyWith(
-            color: isSelected ? t.onAccentFill : t.textSecondary,
-            fontWeight: FontWeight.w600,
+        error: (_, _) => Container(
+          width: double.infinity,
+          color: t.surfaceElevated,
+          padding: const EdgeInsets.symmetric(
+            horizontal: Space.lg,
+            vertical: Space.sm,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                LucideIcons.cloudOff,
+                size: IconSize.sm,
+                color: t.textTertiary,
+              ),
+              const SizedBox(width: Space.sm),
+              Expanded(
+                child: Text(
+                  'Sunucuda aranamadı; yalnızca cihazdaki iletiler gösteriliyor.',
+                  style: AppText.labelSmall.copyWith(color: t.textSecondary),
+                ),
+              ),
+            ],
           ),
         ),
+        data: (_) => const Divider(height: 1),
       ),
     );
   }
@@ -351,233 +381,125 @@ class _SearchIdleView extends ConsumerWidget {
 
 // ------------------------------------------------------------- sonuçlar
 
-/// Filtreler (bkz. [SearchFiltersScreen]) posta kaynaklı sonuçlara uygulanır:
-/// posta, dosyalar ve ikisini de içeren Tümü. Kişiler filtrelenmez, bu
-/// sekmede "Filtrele" düğmesi de gösterilmez.
-bool _filtersApplyTo(SearchCategory category) =>
-    category == SearchCategory.all ||
-    category == SearchCategory.mail ||
-    category == SearchCategory.files;
-
-/// Sonuçların üstündeki, sağa dayalı "Filtrele" düğmesi (Outlook'taki gibi).
-/// Etkin filtre varsa vurgulanır ve sayısını gösterir.
-///
-/// Sonuç listesinin İLK ÖĞESİ olarak yerleştirilir (bkz. [_SearchResultsView]):
-/// kullanıcı aşağı kaydırdıkça listeyle birlikte yukarı çıkar, ekrana yapışık
-/// kalmaz.
-class _FilterBar extends ConsumerWidget {
-  const _FilterBar();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final t = context.tokens;
-    final count = ref.watch(searchFiltersProvider.select((f) => f.activeCount));
-    final isActive = count > 0;
-
-    // Açık temada `surfaceElevated` zeminle aynı beyazdır; dolgu tek başına
-    // düğmeyi zeminden ayırmaz ve yalnızca yazı kalır. Koyu tema zeminden
-    // ayrışan bir tona sahip olduğu için olduğu gibi bırakılır; açık temada
-    // daha koyu bir dolgu ve ince bir çerçeve düğmeye şeklini verir.
-    final restingFill = t.isDark ? t.surfaceElevated : t.surfaceDeep;
-    final outline = t.isDark
-        ? BorderSide.none
-        : BorderSide(color: isActive ? t.accent : t.border);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        Space.lg,
-        Space.sm,
-        Space.lg,
-        Space.xs,
-      ),
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: Material(
-          color: isActive ? t.accentSubtle : restingFill,
-          shape: StadiumBorder(side: outline),
-          child: InkWell(
-            customBorder: const StadiumBorder(),
-            onTap: () {
-              // Klavye açık kalırsa sayfa kapanınca arama kutusu odağı geri alıp
-              // klavyeyi yeniden açar.
-              FocusScope.of(context).unfocus();
-              context.pushScreen(
-                const SearchFiltersScreen(),
-                fullscreenDialog: true,
-              );
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Space.lg,
-                vertical: Space.sm,
-              ),
-              child: Text(
-                isActive ? 'Filtrele · $count' : 'Filtrele',
-                style: AppText.labelMedium.copyWith(
-                  color: isActive ? t.accent : t.textSecondary,
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _SearchResultsView extends ConsumerWidget {
   const _SearchResultsView();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final category = ref.watch(searchCategoryProvider);
+    final filters = ref.watch(searchFiltersProvider);
+    final query = ref.watch(searchQueryProvider);
 
-    // "Filtrele" çubuğu (yalnızca posta kaynaklı sekmelerde) sonuç
-    // listelerinde listenin ilk öğesidir ve içerikle birlikte kayar. Yükleniyor
-    // ve boş durumlarında kaydırılacak bir şey yoktur; çubuk içeriğin üstünde
-    // durur — sonuç boşken de filtreler değiştirilebilmeli.
-    final filterBar = _filtersApplyTo(category) ? const _FilterBar() : null;
-    Widget stateView(Widget content) => Column(
-      children: [
-        ?filterBar,
-        Expanded(child: content),
-      ],
-    );
+    // "Dosyalar" çipi açıkken ileti yerine ekler listelenir.
+    if (filters.filesOnly) return _FilesResults(filters: filters, query: query);
 
     final mail = ref.watch(mailSearchResultsProvider);
-    final contacts = ref.watch(contactSearchResultsProvider);
-    final attachments = ref.watch(attachmentSearchResultsProvider);
+    // Kişiler filtrelenmez; bir filtre etkinken ilgisiz görünmesinler diye
+    // yalnızca düz metin aramasında gösterilir.
+    final showContacts = query.trim().isNotEmpty && !filters.isActive;
+    final contacts = showContacts
+        ? ref.watch(contactSearchResultsProvider)
+        : const AsyncData<List<ContactRow>>(<ContactRow>[]);
 
-    final loading = switch (category) {
-      SearchCategory.mail => mail.isLoading,
-      SearchCategory.contacts => contacts.isLoading,
-      SearchCategory.files => attachments.isLoading,
-      SearchCategory.all =>
-        mail.isLoading || contacts.isLoading || attachments.isLoading,
-    };
-    if (loading) {
-      return stateView(const Center(child: CircularProgressIndicator()));
+    if (mail.isLoading || contacts.isLoading) {
+      return const Center(child: CircularProgressIndicator());
     }
 
     final mailRows = mail.value ?? const <MessageRow>[];
     final contactRows = contacts.value ?? const <ContactRow>[];
-    final attachmentRows =
-        attachments.value ?? const <AttachmentSearchResult>[];
     final mailboxes =
         ref.watch(searchResultMailboxesProvider).value ??
         const <int, MailboxRow>{};
 
-    final totalCount = switch (category) {
-      SearchCategory.mail => mailRows.length,
-      SearchCategory.contacts => contactRows.length,
-      SearchCategory.files => attachmentRows.length,
-      SearchCategory.all =>
-        mailRows.length + contactRows.length + attachmentRows.length,
-    };
-    if (totalCount == 0) {
-      // Boşluğun nedeni filtreler olabilir: bunu söyle ve tek dokunuşla temizlet.
-      final filtered =
-          _filtersApplyTo(category) &&
-          ref.watch(searchFiltersProvider).isActive;
-      // Dosyalar gözat modundaysa (sorgu boş) "farklı bir arama dene" yanlış
-      // izlenim verir — henüz hiçbir şey aranmadı, ek senkronize edilmemiş.
-      final browsingEmptyFiles =
-          category == SearchCategory.files &&
-          ref.watch(searchQueryProvider).trim().isEmpty;
-      return stateView(
-        EmptyState(
-          icon: LucideIcons.searchX,
-          title: browsingEmptyFiles ? 'Ek yok' : 'Sonuç bulunamadı',
-          description: filtered
-              ? 'Seçili filtrelerle eşleşen sonuç yok.'
-              : browsingEmptyFiles
-              ? 'Bu hesapta senkronize edilmiş bir ek bulunmuyor.'
-              : 'Farklı bir arama deneyin.',
-          action: filtered
-              ? TextButton(
-                  onPressed: ref.read(searchFiltersProvider.notifier).clear,
-                  child: const Text('Filtreleri temizle'),
-                )
-              : null,
-        ),
+    if (mailRows.isEmpty && contactRows.isEmpty) {
+      return EmptyState(
+        icon: LucideIcons.searchX,
+        title: 'Sonuç bulunamadı',
+        description: filters.isActive
+            ? 'Seçili filtrelerle eşleşen sonuç yok.'
+            : 'Farklı bir arama deneyin.',
+        action: filters.isActive
+            ? TextButton(
+                onPressed: ref.read(searchFiltersProvider.notifier).clear,
+                child: const Text('Filtreleri temizle'),
+              )
+            : null,
       );
     }
 
-    List<Widget> mailTiles(List<MessageRow> rows) => [
-      for (final message in rows)
-        MailResultRow(
-          message: message,
-          mailbox: mailboxes[message.mailboxId],
-          onTap: () => _openMessageResult(context, ref, message),
-        ),
-    ];
-    List<Widget> contactTiles(List<ContactRow> rows) => [
-      for (final contact in rows)
-        ContactResultRow(
-          contact: contact,
-          onTap: () => _openContactResult(context, ref, contact),
-        ),
-    ];
-    List<Widget> attachmentTiles(List<AttachmentSearchResult> rows) => [
-      for (final result in rows)
-        AttachmentResultRow(
-          result: result,
-          onTap: () => _openMessageResult(context, ref, result.message),
-        ),
-    ];
-
-    if (category == SearchCategory.mail) {
-      return ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        children: [
-          ?filterBar,
-          SectionHeader('TÜM SONUÇLAR (${mailRows.length})'),
-          ...mailTiles(mailRows),
-        ],
-      );
-    }
-    if (category == SearchCategory.contacts) {
-      return ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        children: [
-          SectionHeader('TÜM SONUÇLAR (${contactRows.length})'),
-          ...contactTiles(contactRows),
-        ],
-      );
-    }
-    if (category == SearchCategory.files) {
-      return ListView(
-        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-        children: [
-          ?filterBar,
-          SectionHeader('TÜM SONUÇLAR (${attachmentRows.length})'),
-          ...attachmentTiles(attachmentRows),
-        ],
-      );
-    }
-
-    // Tümü: posta sonuçları tarihe göre yeniden eskiye tek bir listede
-    // (Outlook'taki gibi — alaka sırasıyla bir "en iyi sonuçlar" bölümü
-    // ayrılmaz, aksi hâlde liste tarih sırasını bozardı); ardından kişiler
-    // ve dosyalar kendi başlıklarıyla. Her başlığın yanında o bölümün sonuç
-    // sayısı gösterilir (ör. "TÜM SONUÇLAR (10)") — kullanıcı kaç eşleşme
-    // olduğunu saymadan görsün.
+    // Posta sonuçları tarihe göre yeniden eskiye tek bir listede (Outlook'taki
+    // gibi — alaka sırasıyla bir "en iyi sonuçlar" bölümü ayrılmaz, aksi
+    // hâlde liste tarih sırasını bozardı); ardından kişiler. Her başlığın
+    // yanında o bölümün sonuç sayısı gösterilir (ör. "TÜM SONUÇLAR (10)").
     return ListView(
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
       children: [
-        ?filterBar,
         if (mailRows.isNotEmpty) ...[
           SectionHeader('TÜM SONUÇLAR (${mailRows.length})'),
-          ...mailTiles(mailRows),
+          for (final message in mailRows)
+            MailResultRow(
+              message: message,
+              mailbox: mailboxes[message.mailboxId],
+              onTap: () => _openMessageResult(context, ref, message),
+            ),
         ],
         if (contactRows.isNotEmpty) ...[
           SectionHeader('KİŞİLER (${contactRows.length})'),
-          ...contactTiles(contactRows),
+          for (final contact in contactRows)
+            ContactResultRow(
+              contact: contact,
+              onTap: () => _openContactResult(context, ref, contact),
+            ),
         ],
-        if (attachmentRows.isNotEmpty) ...[
-          SectionHeader('DOSYALAR (${attachmentRows.length})'),
-          ...attachmentTiles(attachmentRows),
-        ],
+      ],
+    );
+  }
+}
+
+/// "Dosyalar" çipi açıkken sonuçlar: ekler (bkz. [AttachmentResultRow]).
+class _FilesResults extends ConsumerWidget {
+  const _FilesResults({required this.filters, required this.query});
+
+  final SearchFilters filters;
+  final String query;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final attachments = ref.watch(attachmentSearchResultsProvider);
+    if (attachments.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final rows = attachments.value ?? const <AttachmentSearchResult>[];
+
+    if (rows.isEmpty) {
+      // Dosyalar gözat modundaysa (sorgu boş, başka filtre yok) "farklı bir
+      // arama dene" yanlış izlenim verir — henüz hiçbir şey aranmadı, ek
+      // senkronize edilmemiş.
+      final browsingEmpty =
+          query.trim().isEmpty && filters.activeCount == 1; // yalnız Dosyalar
+      return EmptyState(
+        icon: LucideIcons.searchX,
+        title: browsingEmpty ? 'Ek yok' : 'Sonuç bulunamadı',
+        description: browsingEmpty
+            ? 'Bu hesapta senkronize edilmiş bir ek bulunmuyor.'
+            : 'Seçili filtrelerle eşleşen sonuç yok.',
+        action: browsingEmpty
+            ? null
+            : TextButton(
+                onPressed: ref.read(searchFiltersProvider.notifier).clear,
+                child: const Text('Filtreleri temizle'),
+              ),
+      );
+    }
+
+    return ListView(
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      children: [
+        SectionHeader('TÜM SONUÇLAR (${rows.length})'),
+        for (final result in rows)
+          AttachmentResultRow(
+            result: result,
+            onTap: () => _openMessageResult(context, ref, result.message),
+          ),
       ],
     );
   }
@@ -619,9 +541,5 @@ Future<void> _openContactResult(
   ContactRow contact,
 ) {
   FocusScope.of(context).unfocus();
-  return openCompose(
-    context,
-    ref,
-    initialTo: contact.email,
-  );
+  return openCompose(context, ref, initialTo: contact.email);
 }

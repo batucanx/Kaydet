@@ -87,7 +87,7 @@ void main() {
     await db.close();
   });
 
-  testWidgets('SMTP kabulü: "Sunucu kabul etti"; başarı/doğrulandı iması yok', (
+  testWidgets('SMTP kabulü: "Gönderildi"; başarı/doğrulandı iması yok', (
     tester,
   ) async {
     await createBase(tester);
@@ -100,7 +100,7 @@ void main() {
         sentVerifiedAt: Value(DateTime.utc(2026, 9, 14, 10, 32)),
       ),
     );
-    expect(find.text('Sunucu kabul etti'), findsOneWidget);
+    expect(find.text('Gönderildi'), findsOneWidget);
     expect(find.textContaining('doğrula'), findsNothing);
     expect(_planeColor(tester), KaydetTokens.light.textTertiary);
   });
@@ -124,7 +124,7 @@ void main() {
       find.text('Teslim edilemedi: yok@firma.com: Alıcı adresi bulunamadı'),
       findsOneWidget,
     );
-    expect(find.text('Sunucu kabul etti'), findsNothing);
+    expect(find.text('Gönderildi'), findsNothing);
     final text = tester.widget<Text>(find.textContaining('Teslim edilemedi'));
     expect(text.style?.color, KaydetTokens.light.danger);
   });
@@ -137,7 +137,7 @@ void main() {
       tester,
       message: base.copyWith(outboxState: OutboxState.sent),
     );
-    expect(find.text('Sunucu kabul etti'), findsNothing);
+    expect(find.text('Gönderildi'), findsNothing);
     expect(find.textContaining('Teslim edilemedi'), findsNothing);
   });
 
@@ -151,7 +151,7 @@ void main() {
         smtpAcceptedAt: Value(DateTime.utc(2026, 9, 14, 10, 31)),
       ),
     );
-    expect(find.text('Sunucu kabul etti'), findsNothing);
+    expect(find.text('Gönderildi'), findsNothing);
   });
 }
 

@@ -5,13 +5,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  test('Gruplandırma tercihi varsayılan olarak açık ve kalıcıdır', () async {
+  test('Gruplandırma tercihi varsayılan olarak kapalı ve kalıcıdır', () async {
     final store = await AppSettingsStore.create();
 
-    expect(store.read().groupMessages, isTrue);
-
-    await store.write(const AppSettings(groupMessages: false));
-
     expect(store.read().groupMessages, isFalse);
+
+    await store.write(const AppSettings(groupMessages: true));
+
+    expect(store.read().groupMessages, isTrue);
   });
 }

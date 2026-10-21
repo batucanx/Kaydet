@@ -936,21 +936,18 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
   final groupMessages = ref.watch(
     settingsProvider.select((settings) => settings.groupMessages),
   );
-  // Bu klasör DAHA ÖNCE HİÇ eşitlenmedi (bkz. `SyncEngine.syncMailbox`
-  // içindeki `neverSynced = mailbox.uidNext == null` — ilk indirme
-  // tamamlanana kadar `uidNext` yerelde yazılmaz) VE tam da şu an bir
-  // eşitleme sürüyor mu? Klasöre ilk kez girildiğinde (ör. daha önce hiç
-  // açılmamış bir Çöp Kutusu) yerel veritabanında GERÇEKTEN sıfır satır
-  // vardır — `visible.isEmpty` burada YALAN söylemiyor, henüz IMAP'tan
-  // hiçbir şey inmedi. Bu yüzden `rowsMatchFolder` (yukarıdaki, farklı
-  // klasörün BAYAT verisini yakalayan kontrol) bunu YAKALAMAZ: `messages`
-  // zaten kendi (doğru, boş) klasörü için `AsyncData([])`e ulaşmıştır.
-  // Sonuç: kullanıcı IMAP indirmesi bitene kadar (birkaç yüz ms - birkaç
-  // saniye) "Bu klasör boş" görür, sonra gerçek iletiler görünür. Bu kontrol
-  // olmadan o an için `AsyncData` doğru ama YANILTICI. `uidNext == null` +
-  // `isSyncing` ikisi birden doğruyken bu "boş" henüz KESİNLEŞMEMİŞ sayılır
-  // ve iskelet gösterilir; eşitleme bitince (mesaj bulunsa da bulunmasa da)
-  // iskelet kalkar.
+  // Bu klasörün ilk indirmesi henüz TAMAMLANMADI mı (bkz. `SyncEngine.
+  // _syncMailbox` içindeki `neverSynced = mailbox.uidNext == null` — ilk
+  // indirme tamamlanana kadar `uidNext` yerelde yazılmaz)? Klasöre ilk kez
+  // girildiğinde (ör. daha önce hiç açılmamış bir Çöp Kutusu) yerel
+  // veritabanında GERÇEKTEN sıfır satır vardır — `visible.isEmpty` burada
+  // YALAN söylemiyor, henüz IMAP'tan hiçbir şey inmedi. Bu yüzden
+  // `rowsMatchFolder` (aşağıdaki, farklı klasörün BAYAT verisini yakalayan
+  // kontrol) bunu YAKALAMAZ: `messages` zaten kendi (doğru, boş) klasörü için
+  // `AsyncData([])`e ulaşmıştır. Bu kontrol olmadan kullanıcı IMAP indirmesi
+  // bitene kadar "Bu klasör boş" görür, sonra gerçek iletiler görünürdü.
+  // `uidNext == null` iken bu "boş" henüz KESİNLEŞMEMİŞ sayılır ve iskelet
+  // gösterilir; indirme bitince (ileti bulunsa da bulunmasa da) kalkar.
   final unifiedUse = folder?.unifiedUse;
   final unifiedMailboxIds = unifiedUse == null
       ? const <int>{}
@@ -967,14 +964,36 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
       : null;
   final syncError = folderError ?? syncState.lastError;
 
+  // "İlk indirme tamamlandı" işareti `uidNext != null`dır: `SyncEngine`
+  // bunu yalnızca indirme BİTİNCE yazar. `lastSyncAt` BU İŞ İÇİN KULLANILMAZ:
+  // motor onu eşitlemenin en BAŞINDA (SELECT'ten hemen sonra, indirmeden
+  // önce) yazar; yani indirme sürerken `lastSyncAt != null` olur ve klasör
+  // "eşitlenmiş" görünüp boş durum çıkardı. Ayrıca tek klasörde `isSyncing`'e
+  // BAĞLANMAZ: klasöre geçişte eşitleme bir sonraki mikro görevde başlar
+  // (bkz. `SyncController.build`) ve başka bir tur sürüyorsa kuyruğa girer;
+  // o aralıkta `isSyncing == false` olduğundan boş durum yine görünürdü.
+  // İskelet, ancak kesin bir sonuç (hata / çevrimdışı / ulaşılamıyor / indirme
+  // bitti) belli olunca kalkar.
   final isUnified = folder?.isUnified == true;
-  final neverSyncedFolder = isUnified
-      ? ref
-            .watch(unifiedMailboxesProvider(folder!.unifiedUse!))
-            .every((m) => m.lastSyncAt == null)
-      : (mailbox != null && mailbox.lastSyncAt == null);
+  final unreachable =
+      accountId != null && syncState.unreachableAccounts.containsKey(accountId);
+  final bool awaitingFirstDownload;
+  if (isUnified) {
+    final boxes = ref.watch(unifiedMailboxesProvider(folder!.unifiedUse!));
+    // Hesaplar sırayla eşitlendiğinden bir kısmı bitmiş olabilir: hiçbiri
+    // bitmediyse her zaman, bir kısmı bitmediyse yalnızca tur sürerken bekle.
+    awaitingFirstDownload =
+        boxes.isNotEmpty &&
+        (boxes.every((m) => m.uidNext == null) ||
+            (syncInFlight && boxes.any((m) => m.uidNext == null)));
+  } else {
+    awaitingFirstDownload = mailbox != null && mailbox.uidNext == null;
+  }
   final isFolderLoading =
-      neverSyncedFolder && syncInFlight && !isOffline && syncError == null;
+      awaitingFirstDownload &&
+      !isOffline &&
+      !unreachable &&
+      syncError == null;
 
   List<MailListItem> buildItems(List<MessageRow> rows) {
     final showPinned =

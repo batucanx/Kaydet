@@ -520,7 +520,7 @@ class MailRow extends StatelessWidget {
       ),
       // SMTP kabulü teslim garantisi DEĞİLDİR; "başarı" rengi/ifadesi kullanılmaz.
       // `null` simge: kâğıt uçağı (`SentPlaneIcon`).
-      _ => (null, 'Sunucu kabul etti', t.textTertiary),
+      _ => (null, 'Gönderildi', t.textTertiary),
     };
 
     return Row(

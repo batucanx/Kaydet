@@ -644,6 +644,32 @@
   // gösterimden SONRA değişirse kullanıcı "küçülüp yeniden çizilme" görür.
   var enhanced = false;
 
+  // Gösterim anında henüz inmemiş görseller, inince birden belirip metni
+  // aşağı itmesin diye gizli tutulur ve inince solarak gösterilir. İnmeyen
+  // (engelli, tembel yüklenen) görsel 4 sn sonra yine de gösterilir.
+  function holdLateImages() {
+    var imgs = doc.images;
+    for (var i = 0; i < imgs.length; i++) {
+      (function (img) {
+        if (img.complete || img.__kdHeld) return;
+        img.__kdHeld = true;
+        var prevOpacity = img.style.opacity, prevTransition = img.style.transition;
+        img.style.opacity = '0';
+        var shown = false;
+        function show() {
+          if (shown) return;
+          shown = true;
+          img.style.transition = 'opacity .25s ease-out';
+          img.style.opacity = prevOpacity;
+          setTimeout(function () { img.style.transition = prevTransition; }, 300);
+        }
+        img.addEventListener('load', show, { once: true });
+        img.addEventListener('error', show, { once: true });
+        setTimeout(show, 4000);
+      })(imgs[i]);
+    }
+  }
+
   function settle() {
     var t0 = performance.now();
     clearTimeout(revealTimer);
@@ -657,6 +683,10 @@
       // Ölçek yokken ek yerleşim okuması yapılmaz (büyük bültenlerde pahalı).
       if (shrinkScale !== 1) guarded(applyShrinkToFit);
     }
+    guarded(holdLateImages);
+    // Yumuşak belirme: içerik (CSS'te `opacity:0` başlar) düzen oturunca tarayıcı
+    // kompozitöründe solarak gelir; Flutter'dan bağımsız, kare düşürmez.
+    root.classList.add('kd-in');
     root.setAttribute('data-kd-settle-ms', String(Math.round(performance.now() - t0)));
     revealed = true;
     guarded(report);

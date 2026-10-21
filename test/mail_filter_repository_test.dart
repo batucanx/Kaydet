@@ -53,7 +53,7 @@ void main() {
   tearDown(() => db.close());
 
   test('şema 20: tablo oluşur, varsayılan filtre yoktur', () async {
-    expect(db.schemaVersion, 22);
+    expect(db.schemaVersion, 23);
     expect(await repo.list(accountId), isEmpty);
     expect(await repo.count(accountId), 0);
   });
@@ -196,6 +196,7 @@ void main() {
           'sent_verified_at',
           'delivery_failed_at',
           'delivery_failure_reason',
+          'is_search_hit', // v23'te eklendi
         ]) {
           await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
         }
@@ -215,7 +216,7 @@ void main() {
   );
 
   test(
-    'göç 20 → 22: gönderim onayı ve teslim hatası kolonları eklenir, veri korunur',
+    'göç 20 → 23: gönderim onayı, teslim hatası ve arama sonucu kolonları eklenir, veri korunur',
     () async {
       final dir = Directory.systemTemp.createTempSync('kaydet_mig21');
       final file = File('${dir.path}/k.sqlite');
@@ -235,6 +236,7 @@ void main() {
           'sent_verified_at',
           'delivery_failed_at',
           'delivery_failure_reason',
+          'is_search_hit', // v23'te eklendi
         ]) {
           await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
         }
@@ -245,7 +247,8 @@ void main() {
         final rows = await old
             .customSelect(
               'SELECT smtp_accepted_at, smtp_reply, sent_verified_at, '
-              'delivery_failed_at, delivery_failure_reason FROM messages',
+              'delivery_failed_at, delivery_failure_reason, is_search_hit '
+              'FROM messages',
             )
             .get();
         expect(rows, isEmpty);

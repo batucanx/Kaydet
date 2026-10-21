@@ -1,16 +1,15 @@
+import 'dart:ui' show ImageFilter;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../../app/providers.dart';
-import '../../../app/remote_push_controller.dart';
 import '../../../core/result.dart';
 import '../../../data/repositories/account_repository.dart';
 import '../../../domain/models/mail_models.dart';
-import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
-import '../settings/data_usage_notice.dart';
 
 /// Giriş ekranı.
 ///
@@ -59,15 +58,24 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   );
   late final Animation<double> _logoScale = TweenSequence<double>([
     TweenSequenceItem(
-      tween: Tween(begin: 0.75, end: 0.92).chain(CurveTween(curve: Curves.easeOut)),
+      tween: Tween(
+        begin: 0.75,
+        end: 0.92,
+      ).chain(CurveTween(curve: Curves.easeOut)),
       weight: 35,
     ),
     TweenSequenceItem(
-      tween: Tween(begin: 0.92, end: 1.02).chain(CurveTween(curve: Curves.easeInOut)),
+      tween: Tween(
+        begin: 0.92,
+        end: 1.02,
+      ).chain(CurveTween(curve: Curves.easeInOut)),
       weight: 25,
     ),
     TweenSequenceItem(
-      tween: Tween(begin: 1.02, end: 1.0).chain(CurveTween(curve: Curves.easeOut)),
+      tween: Tween(
+        begin: 1.02,
+        end: 1.0,
+      ).chain(CurveTween(curve: Curves.easeOut)),
       weight: 15,
     ),
     TweenSequenceItem(tween: ConstantTween(1.0), weight: 25),
@@ -181,279 +189,358 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
     return Scaffold(
       // Kök gezinme olarak (hesap yokken) geri düğmesi anlamsız; yalnızca
       // "hesap ekle" akışında, mevcut hesaba dönmek için gösterilir.
+      extendBodyBehindAppBar: true,
       appBar: widget.isAddingAccount
-          ? AppBar(title: const Text('Hesap ekle'))
+          ? AppBar(
+              title: const Text('Hesap ekle'),
+              backgroundColor: Colors.transparent,
+              scrolledUnderElevation: 0,
+            )
           : null,
-      body: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final compact = constraints.maxHeight < 700;
-            final verticalPadding = compact ? Space.lg : Space.xxxl;
-            return SingleChildScrollView(
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: EdgeInsets.symmetric(
-                horizontal: constraints.maxWidth < 400 ? Space.lg : Space.xxl,
-                vertical: verticalPadding,
-              ),
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  minHeight: (constraints.maxHeight - verticalPadding * 2)
-                      .clamp(0, double.infinity),
-                ),
-                child: Center(
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.asset(
+            'assets/images/login-background.png',
+            fit: BoxFit.cover,
+            alignment: Alignment.center,
+            excludeFromSemantics: true,
+          ),
+          if (t.isDark) ColoredBox(color: Colors.black.withValues(alpha: 0.55)),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxHeight < 700;
+                final verticalPadding = compact ? Space.lg : Space.xxxl;
+                return SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.symmetric(
+                    horizontal: constraints.maxWidth < 400
+                        ? Space.lg
+                        : Space.xxl,
+                    vertical: verticalPadding,
+                  ),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 460),
-                    child: Column(
-                        children: [
-                          if (widget.isAddingAccount)
-                            const SizedBox(height: Space.sm),
-                          _IntroLogo(
-                            fade: _logoFade,
-                            scale: _logoScale,
-                            lift: _logoLift,
-                            child: ClipRRect(
-                            borderRadius: BorderRadius.circular(Radii.lg),
-                            child: Image.asset(
-                              'assets/icon/app_logo.png',
-                              width: compact ? 60 : 68,
-                              height: compact ? 60 : 68,
-                              fit: BoxFit.cover,
-                              semanticLabel: 'Kaydet e-posta uygulaması logosu',
-                            ),
-                          ),
-                          ),
-                          const SizedBox(height: Space.lg),
-                          _IntroReveal(
-                            animation: _formReveal,
-                            child: Text(
-                            'Mail Hesabınıza Giriş Yapın',
-                            textAlign: TextAlign.center,
-                            style: text.titleLarge?.copyWith(
-                              fontSize: 28 * AppText.scale,
-                              letterSpacing: -0.7,
-                              fontWeight: FontWeight.w600,
-                              fontVariations: AppText.semibold,
-                            ),
-                          ),
-                          ),
-                          SizedBox(height: compact ? Space.xl : Space.xxxl),
-                          _IntroReveal(
-                            animation: _formReveal,
-                            child: Form(
-                            key: _formKey,
-                            child: Container(
-                              padding: const EdgeInsets.all(Space.xl),
-                              decoration: BoxDecoration(
-                                color: t.surfaceElevated,
-                                borderRadius: BorderRadius.circular(Radii.lg),
-                                border: Border.all(color: t.border),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _Field(
-                                    controller: _email,
-                                    label: 'E-posta adresi',
-                                    hint: 'ornek@sirket.com',
-                                    keyboardType: TextInputType.emailAddress,
-                                    autofillHints: const [AutofillHints.email],
-                                    validator: (value) {
-                                      final v = (value ?? '').trim();
-                                      if (v.isEmpty) {
-                                        return 'E-posta adresi gerekli';
-                                      }
-                                      if (!EmailAddress.isValidEmail(v)) {
-                                        return 'Geçerli bir e-posta adresi girin';
-                                      }
-                                      return null;
-                                    },
-                                  ),
-                                  const SizedBox(height: Space.lg),
-                                  _Field(
-                                    controller: _password,
-                                    label: 'Şifre',
-                                    hint: '••••••••',
-                                    obscure: _obscure,
-                                    autofillHints: const [
-                                      AutofillHints.password,
-                                    ],
-                                    validator: (value) => (value ?? '').isEmpty
-                                        ? 'Şifre gerekli'
-                                        : null,
-                                    suffix: IconButton(
-                                      icon: Icon(
-                                        _obscure
-                                            ? LucideIcons.eye
-                                            : LucideIcons.eyeOff,
-                                        size: IconSize.md,
-                                      ),
-                                      tooltip: _obscure
-                                          ? 'Şifreyi göster'
-                                          : 'Şifreyi gizle',
-                                      onPressed: _loading
-                                          ? null
-                                          : () => setState(
-                                              () => _obscure = !_obscure,
-                                            ),
+                    constraints: BoxConstraints(
+                      minHeight: (constraints.maxHeight - verticalPadding * 2)
+                          .clamp(0, double.infinity),
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 460),
+                        child: Column(
+                          children: [
+                            if (widget.isAddingAccount)
+                              const SizedBox(height: Space.sm),
+                            _IntroReveal(
+                              animation: _formReveal,
+                              child: Form(
+                                key: _formKey,
+                                child: Container(
+                                  clipBehavior: Clip.antiAlias,
+                                  decoration: BoxDecoration(
+                                    color: t.surfaceElevated.withValues(
+                                      alpha: t.isDark ? 0.82 : 0.78,
                                     ),
-                                  ),
-                                  const SizedBox(height: Space.md),
-                                  Align(
-                                    alignment: Alignment.centerLeft,
-                                    child: TextButton.icon(
-                                      onPressed: _loading
-                                          ? null
-                                          : () => setState(
-                                              () => _showAdvanced =
-                                                  !_showAdvanced,
-                                            ),
-                                      icon: Icon(
-                                        _showAdvanced
-                                            ? LucideIcons.chevronDown
-                                            : LucideIcons.chevronRight,
-                                        size: IconSize.sm,
-                                      ),
-                                      label: const Text('Sunucu ayarları'),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: t.textSecondary,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: Space.sm,
+                                    borderRadius: BorderRadius.circular(
+                                      Radii.xl,
+                                    ),
+                                    border: Border.all(color: t.border),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: t.isDark ? 0.35 : 0.08,
                                         ),
+                                        blurRadius: 32,
+                                        offset: const Offset(0, 12),
                                       ),
+                                    ],
+                                  ),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(
+                                      sigmaX: 18,
+                                      sigmaY: 18,
                                     ),
-                                  ),
-                                  AnimatedSize(
-                                    duration: reduceMotion
-                                        ? Motion.instant
-                                        : Motion.base,
-                                    curve: Motion.standard,
-                                    alignment: Alignment.topCenter,
-                                    child: _showAdvanced
-                                        ? Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: Space.sm,
-                                            ),
-                                            child: Column(
-                                              children: [
-                                                _ServerBlock(
-                                                  title: 'Gelen sunucu · IMAP',
-                                                  host: _imapHost,
-                                                  port: _imapPort,
-                                                  security: _imapSecurity,
-                                                  onSecurityChanged: (value) =>
-                                                      setState(() {
-                                                        _imapSecurity = value;
-                                                        _imapPort.text =
-                                                            switch (value) {
-                                                              SocketSecurity
-                                                                  .ssl =>
-                                                                '993',
-                                                              SocketSecurity
-                                                                  .startTls =>
-                                                                '143',
-                                                              SocketSecurity
-                                                                  .none =>
-                                                                '143',
-                                                            };
-                                                      }),
-                                                  onHostEdited: () =>
-                                                      _hostsTouched = true,
-                                                ),
-                                                const SizedBox(
-                                                  height: Space.md,
-                                                ),
-                                                _ServerBlock(
-                                                  title: 'Giden sunucu · SMTP',
-                                                  host: _smtpHost,
-                                                  port: _smtpPort,
-                                                  security: _smtpSecurity,
-                                                  onSecurityChanged: (value) =>
-                                                      setState(() {
-                                                        _smtpSecurity = value;
-                                                        _smtpPort.text =
-                                                            switch (value) {
-                                                              SocketSecurity
-                                                                  .ssl =>
-                                                                '465',
-                                                              SocketSecurity
-                                                                  .startTls =>
-                                                                '587',
-                                                              SocketSecurity
-                                                                  .none =>
-                                                                '25',
-                                                            };
-                                                      }),
-                                                  onHostEdited: () =>
-                                                      _hostsTouched = true,
-                                                ),
-                                              ],
-                                            ),
-                                          )
-                                        : const SizedBox.shrink(),
-                                  ),
-                                  AnimatedSize(
-                                    duration: reduceMotion
-                                        ? Motion.instant
-                                        : Motion.base,
-                                    curve: Motion.standard,
-                                    alignment: Alignment.topCenter,
-                                    child: _failure == null
-                                        ? const SizedBox.shrink()
-                                        : Padding(
-                                            padding: const EdgeInsets.only(
-                                              top: Space.md,
-                                            ),
-                                            child: _ErrorBox(
-                                              failure: _failure!,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(Space.xl),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Center(
+                                            child: _IntroLogo(
+                                              fade: _logoFade,
+                                              scale: _logoScale,
+                                              lift: _logoLift,
+                                              // Şirket yazı logosu (217×60, saydam
+                                              // zemin, koyu gri). Koyu temada
+                                              // kart da koyu olduğundan yazı
+                                              // tema metin rengine boyanır;
+                                              // aksi hâlde kaybolurdu.
+                                              child: Image.asset(
+                                                'assets/images/kaydet-wordmark.png',
+                                                width: compact ? 120 : 144,
+                                                fit: BoxFit.contain,
+                                                filterQuality:
+                                                    FilterQuality.high,
+                                                color: t.isDark
+                                                    ? t.textPrimary
+                                                    : null,
+                                                colorBlendMode: BlendMode.srcIn,
+                                                semanticLabel:
+                                                    'Kaydet e-posta uygulaması logosu',
+                                              ),
                                             ),
                                           ),
-                                  ),
-                                  const SizedBox(height: Space.lg),
-                                  DataUsageNote(
-                                    pushServerActive: ref.watch(
-                                      serverPushInUseProvider,
-                                    ),
-                                  ),
-                                  const SizedBox(height: Space.lg),
-                                  SizedBox(
-                                    height: Dimens.controlHeight + 4,
-                                    child: FilledButton(
-                                      onPressed: _loading ? null : _submit,
-                                      child: AnimatedSwitcher(
-                                        duration: Motion.fast,
-                                        child: _loading
-                                            ? SizedBox(
-                                                key: const ValueKey('loading'),
-                                                width: 20,
-                                                height: 20,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: t.onAccentFill,
-                                                    ),
-                                              )
-                                            : const Text(
-                                                'Giriş yap',
-                                                key: ValueKey('idle'),
+                                          const SizedBox(height: Space.md),
+                                          Text(
+                                            'E-postalarınıza erişmek için oturum açın',
+                                            textAlign: TextAlign.center,
+                                            style: text.bodyMedium?.copyWith(
+                                              color: t.textSecondary,
+                                            ),
+                                          ),
+                                          const SizedBox(height: Space.xl),
+                                          _Field(
+                                            controller: _email,
+                                            label: 'E-posta adresi',
+                                            hint: 'ornek@sirket.com',
+                                            keyboardType:
+                                                TextInputType.emailAddress,
+                                            autofillHints: const [
+                                              AutofillHints.email,
+                                            ],
+                                            validator: (value) {
+                                              final v = (value ?? '').trim();
+                                              if (v.isEmpty) {
+                                                return 'E-posta adresi gerekli';
+                                              }
+                                              if (!EmailAddress.isValidEmail(
+                                                v,
+                                              )) {
+                                                return 'Geçerli bir e-posta adresi girin';
+                                              }
+                                              return null;
+                                            },
+                                          ),
+                                          const SizedBox(height: Space.lg),
+                                          _Field(
+                                            controller: _password,
+                                            label: 'Şifre',
+                                            hint: '••••••••',
+                                            obscure: _obscure,
+                                            autofillHints: const [
+                                              AutofillHints.password,
+                                            ],
+                                            validator: (value) =>
+                                                (value ?? '').isEmpty
+                                                ? 'Şifre gerekli'
+                                                : null,
+                                            suffix: IconButton(
+                                              icon: Icon(
+                                                _obscure
+                                                    ? LucideIcons.eye
+                                                    : LucideIcons.eyeOff,
+                                                size: IconSize.md,
                                               ),
+                                              tooltip: _obscure
+                                                  ? 'Şifreyi göster'
+                                                  : 'Şifreyi gizle',
+                                              onPressed: _loading
+                                                  ? null
+                                                  : () => setState(
+                                                      () =>
+                                                          _obscure = !_obscure,
+                                                    ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: Space.md),
+                                          Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: TextButton.icon(
+                                              onPressed: _loading
+                                                  ? null
+                                                  : () => setState(
+                                                      () => _showAdvanced =
+                                                          !_showAdvanced,
+                                                    ),
+                                              icon: Icon(
+                                                _showAdvanced
+                                                    ? LucideIcons.chevronDown
+                                                    : LucideIcons.chevronRight,
+                                                size: IconSize.sm,
+                                              ),
+                                              label: const Text(
+                                                'Sunucu ayarları',
+                                              ),
+                                              style: TextButton.styleFrom(
+                                                foregroundColor:
+                                                    t.textSecondary,
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: Space.sm,
+                                                    ),
+                                              ),
+                                            ),
+                                          ),
+                                          AnimatedSize(
+                                            duration: reduceMotion
+                                                ? Motion.instant
+                                                : Motion.base,
+                                            curve: Motion.standard,
+                                            alignment: Alignment.topCenter,
+                                            child: _showAdvanced
+                                                ? Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          top: Space.sm,
+                                                        ),
+                                                    child: Column(
+                                                      children: [
+                                                        _ServerBlock(
+                                                          title:
+                                                              'Gelen sunucu · IMAP',
+                                                          host: _imapHost,
+                                                          port: _imapPort,
+                                                          security:
+                                                              _imapSecurity,
+                                                          onSecurityChanged:
+                                                              (
+                                                                value,
+                                                              ) => setState(() {
+                                                                _imapSecurity =
+                                                                    value;
+                                                                _imapPort
+                                                                    .text = switch (value) {
+                                                                  SocketSecurity
+                                                                      .ssl =>
+                                                                    '993',
+                                                                  SocketSecurity
+                                                                      .startTls =>
+                                                                    '143',
+                                                                  SocketSecurity
+                                                                      .none =>
+                                                                    '143',
+                                                                };
+                                                              }),
+                                                          onHostEdited: () =>
+                                                              _hostsTouched =
+                                                                  true,
+                                                        ),
+                                                        const SizedBox(
+                                                          height: Space.md,
+                                                        ),
+                                                        _ServerBlock(
+                                                          title:
+                                                              'Giden sunucu · SMTP',
+                                                          host: _smtpHost,
+                                                          port: _smtpPort,
+                                                          security:
+                                                              _smtpSecurity,
+                                                          onSecurityChanged:
+                                                              (
+                                                                value,
+                                                              ) => setState(() {
+                                                                _smtpSecurity =
+                                                                    value;
+                                                                _smtpPort
+                                                                    .text = switch (value) {
+                                                                  SocketSecurity
+                                                                      .ssl =>
+                                                                    '465',
+                                                                  SocketSecurity
+                                                                      .startTls =>
+                                                                    '587',
+                                                                  SocketSecurity
+                                                                      .none =>
+                                                                    '25',
+                                                                };
+                                                              }),
+                                                          onHostEdited: () =>
+                                                              _hostsTouched =
+                                                                  true,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  )
+                                                : const SizedBox.shrink(),
+                                          ),
+                                          AnimatedSize(
+                                            duration: reduceMotion
+                                                ? Motion.instant
+                                                : Motion.base,
+                                            curve: Motion.standard,
+                                            alignment: Alignment.topCenter,
+                                            child: _failure == null
+                                                ? const SizedBox.shrink()
+                                                : Padding(
+                                                    padding:
+                                                        const EdgeInsets.only(
+                                                          top: Space.md,
+                                                        ),
+                                                    child: _ErrorBox(
+                                                      failure: _failure!,
+                                                    ),
+                                                  ),
+                                          ),
+                                          const SizedBox(height: Space.lg),
+                                          SizedBox(
+                                            height: Dimens.controlHeight + 4,
+                                            child: FilledButton(
+                                              onPressed: _loading
+                                                  ? null
+                                                  : _submit,
+                                              child: AnimatedSwitcher(
+                                                duration: Motion.fast,
+                                                child: _loading
+                                                    ? SizedBox(
+                                                        key: const ValueKey(
+                                                          'loading',
+                                                        ),
+                                                        width: 20,
+                                                        height: 20,
+                                                        child:
+                                                            CircularProgressIndicator(
+                                                              strokeWidth: 2,
+                                                              color: t
+                                                                  .onAccentFill,
+                                                            ),
+                                                      )
+                                                    : const Text(
+                                                        'Giriş yap',
+                                                        key: ValueKey('idle'),
+                                                      ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(height: Space.lg),
+                                          Text(
+                                            'Kaydet ile e-postalarınız her zaman sizinle.',
+                                            textAlign: TextAlign.center,
+                                            style: text.labelSmall?.copyWith(
+                                              color: t.textTertiary,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
-                                ],
+                                ),
                               ),
                             ),
-                          ),
-                          ),
-                          if (widget.isAddingAccount)
-                            const SizedBox(height: Space.lg),
-                        ],
+                            if (widget.isAddingAccount)
+                              const SizedBox(height: Space.lg),
+                          ],
+                        ),
                       ),
+                    ),
                   ),
-                ),
-              ),
-            );
-          },
-        ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -676,7 +763,11 @@ class _ServerBlock extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(LucideIcons.triangleAlert, size: IconSize.sm, color: t.danger),
+                Icon(
+                  LucideIcons.triangleAlert,
+                  size: IconSize.sm,
+                  color: t.danger,
+                ),
                 const SizedBox(width: Space.sm),
                 Expanded(
                   child: Text(

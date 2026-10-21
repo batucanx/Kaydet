@@ -2,6 +2,8 @@ import 'dart:math';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'secure_store.dart';
+
 /// Bu uygulama kurulumuna özel kimlik: `id` kamuya açık bir takma ad,
 /// `secret` yalnızca sunucuya gönderilen gizli anahtardır.
 class InstallCredentials {
@@ -45,6 +47,7 @@ class SecureInstallCredentials implements InstallCredentialsSource {
   }
 
   Future<InstallCredentials> _loadOrCreate() async {
+    await ensureSecureStorageReady();
     final id = await _storage.read(key: idKey);
     final secret = await _storage.read(key: secretKey);
     if (id != null &&

@@ -38,7 +38,7 @@ import 'widgets/compose_image_embed_builder.dart';
 import 'widgets/quoted_fold_widget.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
-import '../../core/widgets/attachment_icon.dart';
+import '../../core/widgets/attachment_summary.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../attachment_preview/attachment_preview_screen.dart';
@@ -447,22 +447,29 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
   /// imza birebir aynı Delta/HTML hattını kullanır.
   void _initNewMessageBody() {
     final shared = widget.initialBody?.trim() ?? '';
-    if (shared.isNotEmpty) {
+    final sigDelta = _defaultSignatureRow == null
+        ? Delta()
+        : SignatureFormatter.toDelta(_defaultSignatureRow!);
+    if (sigDelta.isEmpty) {
       _setPlainBody(shared);
-      _quill.updateSelection(
-        TextSelection.collapsed(
-          offset: math.max(0, _quill.document.length - 1),
-        ),
-        ChangeSource.local,
-      );
     } else {
-      _setPlainBody('');
+      // Yazma satırı ile imza arasında en az 2 boş satır bırakılır
+      // (bkz. [_signatureGapLines]); imleç yazma satırında kalır.
+      final doc = Delta()..insert('$shared${'\n' * (_signatureGapLines + 1)}');
+      for (final op in sigDelta.toList()) {
+        doc.push(op);
+      }
+      _quill.document = Document.fromDelta(doc);
     }
-    final defaultSig = _defaultSignatureRow;
-    if (defaultSig != null) {
-      _insertSignature(defaultSig);
-    }
+    _quill.updateSelection(
+      TextSelection.collapsed(offset: shared.length),
+      ChangeSource.local,
+    );
   }
+
+  /// Yazma alanı ile imza arasındaki boş satır sayısı. Kurumsal yazışmalarda
+  /// yaygın pratik 1–2 satırdır; 2 satır imzayı gövdeden net ayırır.
+  static const _signatureGapLines = 2;
 
   /// Kaydedilmiş gövdeyi düzenleyiciye yükler.
   ///
@@ -538,8 +545,8 @@ class ComposeScreenState extends ConsumerState<ComposeScreen> {
       final docDelta = Delta();
       docDelta.insert('\n');
       if (sigDelta.isNotEmpty) {
-        // Yazma satırı ile imza arasında 1 boş satır bırakılır.
-        docDelta.insert('\n');
+        // Yazma satırı ile imza arasında en az 2 boş satır bırakılır.
+        docDelta.insert('\n' * _signatureGapLines);
         for (final op in sigDelta.toList()) {
           docDelta.push(op);
         }
@@ -3013,10 +3020,10 @@ AttachmentRow _localAttachmentRow(String path) {
   );
 }
 
-/// Eklenen dosyaların düzenli kart ızgarası — dosya sayısı/ad uzunluğu ne
-/// olursa olsun tutarlı kart boyutu/dolgusu (bkz. `_AttachmentCardShell`) ve
-/// ekran genişliğine göre kendiliğinden satır kıran `Wrap` (taşma yok, dış
-/// yazma ekranı kaydırmasını bozmaz — burada kendi iç kaydırması YOK).
+/// Eklenen dosyaların kompakt özeti: ilk [kAttachmentInlineLimit] ek küçük
+/// çipler olarak, kalanı "+N ek" çipinde (dokununca liste sayfası) — çok ekli
+/// iletiler (ör. 10 görselli bir iletme) gövdeyi ekran dışına itmez. Bu
+/// widget'ın kendi iç kaydırması YOK: dış yazma ekranı kaydırmasını bozmaz.
 class _AttachmentList extends StatelessWidget {
   const _AttachmentList({
     required this.paths,
@@ -3032,9 +3039,10 @@ class _AttachmentList extends StatelessWidget {
   final ValueChanged<String> onRemove;
   final ValueChanged<_PendingAttachment>? onRemovePending;
 
-  /// Dokunulan karttan başlayarak TÜM hazır ekler arasında kaydırılabilir
+  /// Dokunulan ekten başlayarak TÜM hazır ekler arasında kaydırılabilir
   /// galeriyi açar (bkz. `AttachmentPreviewScreen`, mail detay ekranındaki
   /// aynı mantık) — `localPathOf` verildiği için indirme adımı atlanır.
+  /// [context], çağrının yapıldığı yerin (çip ya da liste sayfası) bağlamıdır.
   void _openPreview(BuildContext context, int index) {
     context.pushScreen(
       AttachmentPreviewScreen(
@@ -3043,6 +3051,28 @@ class _AttachmentList extends StatelessWidget {
         localPathOf: (attachment) => attachment.localPath,
       ),
       transitionStyle: KaydetTransitionStyle.horizontalPush,
+    );
+  }
+
+  AttachmentEntry _entryFor(int index) {
+    final path = paths[index];
+    final fileName = AttachmentFiles.cleanPickedName(
+      path.split(RegExp(r'[\/]')).last,
+      sourcePath: path,
+    );
+    int size;
+    try {
+      size = File(path).lengthSync();
+    } on FileSystemException {
+      size = 0;
+    }
+    return AttachmentEntry(
+      name: fileName,
+      sizeBytes: size,
+      localPath: path,
+      uploaded: justUploaded.contains(path),
+      onOpen: (context) => _openPreview(context, index),
+      onRemove: () => onRemove(path),
     );
   }
 
@@ -3076,218 +3106,19 @@ class _AttachmentList extends StatelessWidget {
             ),
             const SizedBox(height: Space.sm),
           ],
-          Wrap(
-            spacing: Space.sm,
-            runSpacing: Space.sm,
-            children: [
+          AttachmentSummary(
+            entries: [
               for (final item in pending)
-                _PendingAttachmentCard(
+                AttachmentEntry(
                   name: item.name,
-                  sizeBytes: item.sizeBytes,
+                  sizeBytes: item.sizeBytes ?? 0,
+                  pending: true,
                   onRemove: onRemovePending != null
                       ? () => onRemovePending!(item)
                       : null,
                 ),
-              for (var i = 0; i < paths.length; i++)
-                _AttachmentCard(
-                  path: paths[i],
-                  justUploaded: justUploaded.contains(paths[i]),
-                  onTap: () => _openPreview(context, i),
-                  onRemove: () => onRemove(paths[i]),
-                ),
+              for (var i = 0; i < paths.length; i++) _entryFor(i),
             ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Tüm ek kartlarının ortak kabuğu — dolgu, kenar yuvarlaklığı, kenarlık ve
-/// minimum yükseklik TEK yerden gelir, böylece yükleniyor/hazır durumları
-/// arasında görünüm asla kaymaz. `maxWidth`, uzun dosya adının kartı
-/// şişirmesini engeller (bkz. `_AttachmentCard`daki `Flexible`+ellipsis) ve
-/// `Wrap` ile birlikte ekran genişliğine göre kendiliğinden 1/2/3 sütuna
-/// bölünmesini sağlar.
-class _AttachmentCardShell extends StatelessWidget {
-  const _AttachmentCardShell({required this.child, this.onTap});
-
-  final Widget child;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final content = Container(
-      constraints: const BoxConstraints(maxWidth: 260, minHeight: 44),
-      padding: const EdgeInsetsDirectional.only(
-        start: Space.md,
-        top: Space.sm,
-        bottom: Space.sm,
-        end: Space.xs,
-      ),
-      decoration: BoxDecoration(
-        color: t.surface,
-        borderRadius: BorderRadius.circular(Radii.sm),
-        border: Border.all(color: t.divider),
-      ),
-      child: child,
-    );
-    if (onTap == null) return content;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(Radii.sm),
-      child: content,
-    );
-  }
-}
-
-class _PendingAttachmentCard extends StatelessWidget {
-  const _PendingAttachmentCard({
-    required this.name,
-    this.sizeBytes,
-    this.onRemove,
-  });
-
-  final String name;
-  final int? sizeBytes;
-  final VoidCallback? onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final subtitle = (sizeBytes != null && sizeBytes! > 0)
-        ? '${AttachmentType.label(name)} · ${formatBytes(sizeBytes!)} · Hazırlanıyor…'
-        : 'Hazırlanıyor…';
-
-    return _AttachmentCardShell(
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: IconSize.lg,
-            height: IconSize.lg,
-            child: Center(
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: t.textSecondary,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: Space.sm),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-                Text(
-                  subtitle,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                ),
-              ],
-            ),
-          ),
-          if (onRemove != null)
-            IconButton(
-              icon: const Icon(LucideIcons.x, size: IconSize.sm),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              visualDensity: VisualDensity.compact,
-              tooltip: 'Kaldır',
-              onPressed: onRemove,
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Hazır (kalıcı depoya kopyalanmış) bir ekin kartı — tamamı tıklanabilir
-/// (önizlemeyi açar), sağdaki "x" ile kaldırılır. Uzantı + boyut altyazısı
-/// (bkz. `AttachmentType.label`/`formatBytes`) mail detay ekranındaki
-/// `_AttachmentChip` ile aynı bilgiyi verir.
-class _AttachmentCard extends StatelessWidget {
-  const _AttachmentCard({
-    required this.path,
-    required this.justUploaded,
-    required this.onTap,
-    required this.onRemove,
-  });
-
-  final String path;
-  final bool justUploaded;
-  final VoidCallback onTap;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final fileName = AttachmentFiles.cleanPickedName(
-      path.split(RegExp(r'[\\/]')).last,
-      sourcePath: path,
-    );
-    int size;
-    try {
-      size = File(path).lengthSync();
-    } on FileSystemException {
-      size = 0;
-    }
-    return _AttachmentCardShell(
-      onTap: onTap,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          justUploaded
-              ? Icon(
-                  LucideIcons.checkCircle,
-                  size: IconSize.lg,
-                  color: t.success,
-                )
-              : AttachmentTypeIcon(fileName: fileName, size: IconSize.lg),
-          const SizedBox(width: Space.sm),
-          Flexible(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  fileName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.labelMedium,
-                ),
-                Text(
-                  '${AttachmentType.label(fileName)} · ${formatBytes(size)}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                ),
-              ],
-            ),
-          ),
-          IconButton(
-            icon: const Icon(LucideIcons.x, size: IconSize.sm),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            visualDensity: VisualDensity.compact,
-            tooltip: 'Kaldır',
-            onPressed: onRemove,
           ),
         ],
       ),

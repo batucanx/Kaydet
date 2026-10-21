@@ -27,7 +27,7 @@ import '../../core/actions/message_actions.dart';
 import '../../core/navigation/kaydet_route.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/theme/tokens.dart';
-import '../../core/widgets/attachment_icon.dart';
+import '../../core/widgets/attachment_summary.dart';
 import '../../core/widgets/kaydet_notice.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import '../attachment_preview/attachment_preview_screen.dart';
@@ -35,6 +35,7 @@ import '../compose/compose_launcher.dart';
 import '../compose/compose_screen.dart' show ComposeMode, ComposeSendQueued;
 import '../compose/recipient_details_sheet.dart';
 import 'mail_html_document.dart';
+import 'save_attachments_sheet.dart';
 import 'translate_bar.dart';
 import 'webview_pool.dart';
 
@@ -140,6 +141,12 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   /// bir-iki kare gecikirse WebView ağaçtan sökülüp yeniden yaratılmasın diye
   /// (pahalı) yükleme sürerken de canlı tutulur (bkz. `_BodyView.keepHtml`).
   String? _lastHtml;
+
+  /// Önceki karede gövde yerinde tam ekran iskelet (indirme beklenirken)
+  /// gösteriliyor muydu. Gövde gelip WebView devralınca onun örtüsündeki
+  /// iskelet gecikmesiz başlasın diye (bkz. `_HtmlWebView.immediateSkeleton`):
+  /// aksi hâlde çubuklar bir an kaybolup yeniden belirirdi.
+  bool _wasFetchSkeleton = false;
 
   Timer? _prefetchTimer;
 
@@ -267,6 +274,13 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     if (shownBody?.html case final html? when html.trim().isNotEmpty) {
       _lastHtml = html;
     }
+    final fetchSkeletonNow =
+        shownBody == null &&
+        _lastHtml == null &&
+        !bodyFetch.hasValue &&
+        !bodyFetch.hasError;
+    final skeletonHandoff = _wasFetchSkeleton;
+    _wasFetchSkeleton = fetchSkeletonNow;
 
     return _nativeScaffold(
       t: t,
@@ -276,6 +290,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       body: body,
       shownBody: shownBody,
       bodyFetch: bodyFetch,
+      skeletonHandoff: skeletonHandoff,
       rowCount: rowCount,
       index: index,
     );
@@ -292,6 +307,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     required MessageBodyRow? body,
     required MessageBodyRow? shownBody,
     required AsyncValue<MessageBodyRow?> bodyFetch,
+    required bool skeletonHandoff,
     required int rowCount,
     required int index,
   }) {
@@ -328,6 +344,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
               fetchStatus: bodyFetch,
               topInset: _headerHeight,
               keepHtml: _lastHtml,
+              skeletonHandoff: skeletonHandoff,
               // Başlık tamamen çıktıktan sonra değer değişmez: `ValueNotifier`
               // aynı değeri yeniden bildirmediği için kaydırırken yeniden çizim yok.
               onScrollY: (y) =>
@@ -491,17 +508,9 @@ class _DeliveryInfoState extends State<_DeliveryInfo> {
     final accepted = message.smtpAcceptedAt;
     final failedAt = message.deliveryFailedAt;
     if (accepted == null && failedAt == null) return const SizedBox.shrink();
-    final verified = message.sentVerifiedAt;
-    final reply = message.smtpReply;
     final failed = failedAt != null;
 
-    final recipients = [
-      ...EmailAddress.decodeList(message.toAddrJson),
-      ...EmailAddress.decodeList(message.ccJson),
-      ...EmailAddress.decodeList(message.bccJson),
-    ].map((a) => a.email).toList();
-
-    final summary = failed ? 'Teslim edilemedi' : 'Sunucu kabul etti';
+    final summary = failed ? 'Teslim edilemedi' : 'Gönderildi';
     final color = failed ? t.danger : t.textTertiary;
 
     Widget line(String label, String value) => Padding(
@@ -527,7 +536,7 @@ class _DeliveryInfoState extends State<_DeliveryInfo> {
       expanded: _expanded,
       label: 'Gönderim bilgisi: $summary',
       child: InkWell(
-        onTap: () => setState(() => _expanded = !_expanded),
+        onTap: failed ? () => setState(() => _expanded = !_expanded) : null,
         borderRadius: BorderRadius.circular(Radii.sm),
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: Space.xs),
@@ -545,53 +554,23 @@ class _DeliveryInfoState extends State<_DeliveryInfo> {
                     summary,
                     style: AppText.labelSmall.copyWith(color: color),
                   ),
-                  const SizedBox(width: Space.xs),
-                  Icon(
-                    _expanded
-                        ? LucideIcons.chevronUp
-                        : LucideIcons.chevronDown,
-                    size: 12,
-                    color: t.textTertiary,
-                  ),
-                ],
-              ),
-              if (_expanded) ...[
-                if (failed)
-                  line(
-                    'Neden:',
-                    message.deliveryFailureReason ?? 'İade iletisi alındı',
-                  ),
-                if (accepted != null)
-                  line(
-                    'Posta sunucusu kabul etti:',
-                    formatDetailDate(accepted),
-                  ),
-                if (recipients.isNotEmpty)
-                  line('Alıcılar:', recipients.join(', ')),
-                if (reply != null && reply.isNotEmpty)
-                  line('Sunucu yanıtı:', reply),
-                line(
-                  'Gönderilenler klasöründe:',
-                  verified != null
-                      ? 'kayıtlı, ${formatDetailDate(verified)}'
-                      : 'kayıt bekleniyor',
-                ),
-                Padding(
-                  padding: const EdgeInsets.only(top: Space.xs),
-                  child: Text(
-                    failed
-                        ? 'Sunucu bu iletiyi alıcıya teslim edemedi ve '
-                              'size bir iade iletisi gönderdi.'
-                        : 'Sunucunun iletiyi kabul etmesi, alıcıya '
-                              'ulaştığının garantisi değildir. Teslim '
-                              'edilemezse sunucu size bir iade iletisi '
-                              'gönderir ve burada gösterilir.',
-                    style: AppText.labelSmall.copyWith(
+                  if (failed) ...[
+                    const SizedBox(width: Space.xs),
+                    Icon(
+                      _expanded
+                          ? LucideIcons.chevronUp
+                          : LucideIcons.chevronDown,
+                      size: 12,
                       color: t.textTertiary,
                     ),
-                  ),
+                  ],
+                ],
+              ),
+              if (_expanded && failed)
+                line(
+                  'Neden:',
+                  message.deliveryFailureReason ?? 'İade iletisi alındı',
                 ),
-              ],
             ],
           ),
         ),
@@ -1144,6 +1123,14 @@ class _RecipientInfoChip extends StatelessWidget {
   }
 }
 
+/// Okuma ekranındaki ek özeti: "N ek" başlığı (dokununca tüm eklerin listesi),
+/// çok ekte "Ekleri kaydet" ve ilk [kAttachmentInlineLimit] ek için kompakt
+/// çipler; kalanı "+N ek" çipinde (bkz. [AttachmentSummary]). Çok ekli bir
+/// ileti (ör. 10 görsel) artık okuma alanını itmez.
+///
+/// Çipe dokunmak, şeritteki TÜM eklerin kaydırılabildiği önizlemeyi açar; her
+/// ekin "⋮" menüsü (başka uygulamada aç, kaydet, paylaş…) liste sayfasındadır
+/// ve ayrıca önizleme ekranının üst çubuğunda da bulunur.
 class _AttachmentStrip extends ConsumerWidget {
   const _AttachmentStrip({required this.attachments});
 
@@ -1155,131 +1142,102 @@ class _AttachmentStrip extends ConsumerWidget {
     final visible = attachments.where((a) => !a.isInline).toList();
     if (visible.isEmpty) return const SizedBox.shrink();
 
+    final entries = [
+      for (var i = 0; i < visible.length; i++)
+        AttachmentEntry(
+          name: visible[i].fileName,
+          mimeType: visible[i].mimeType,
+          sizeBytes: visible[i].sizeBytes,
+          localPath: visible[i].localPath,
+          onOpen: (context) => context.pushScreen(
+            AttachmentPreviewScreen(attachments: visible, initialIndex: i),
+            transitionStyle: KaydetTransitionStyle.horizontalPush,
+          ),
+          sheetTrailing: (_) => _AttachmentOverflowButton(
+            attachment: visible[i],
+            kind: AttachmentType.resolve(
+              mimeType: visible[i].mimeType,
+              fileName: visible[i].fileName,
+            ),
+          ),
+        ),
+    ];
+
+    List<Widget> sheetActions(BuildContext sheetContext) => [
+      if (visible.length > 1)
+        TextButton.icon(
+          onPressed: () {
+            Navigator.of(sheetContext).pop();
+            showSaveAttachmentsSheet(context, attachments: visible);
+          },
+          icon: const Icon(LucideIcons.download, size: IconSize.sm),
+          label: const Text('Kaydet'),
+        ),
+    ];
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '${visible.length} ek',
-          style: Theme.of(
-            context,
-          ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+        Row(
+          children: [
+            InkWell(
+              onTap: () => showAttachmentListSheet(
+                context,
+                entries: ValueNotifier(entries),
+                actionsBuilder: sheetActions,
+              ),
+              borderRadius: BorderRadius.circular(Radii.xs),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: Space.xs),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '${visible.length} ek',
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      LucideIcons.chevronRight,
+                      size: IconSize.sm,
+                      color: t.textTertiary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // Tek eki zaten kendi menüsünden kaydediyor; toplu kaydetme
+            // yalnızca birden çok ek olduğunda anlamlı. Yazısız, yalnızca
+            // simge: "N ek" göstergesinin hemen sağında.
+            if (visible.length > 1)
+              IconButton(
+                onPressed: () =>
+                    showSaveAttachmentsSheet(context, attachments: visible),
+                icon: Icon(
+                  LucideIcons.download,
+                  size: IconSize.md,
+                  color: t.accent,
+                ),
+                tooltip: 'Ekleri kaydet',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 40, minHeight: 36),
+              ),
+          ],
         ),
-        const SizedBox(height: Space.sm),
-        // Yatay kaydırma: kaç ek olursa olsun bu şerit tek satır
-        // yüksekliğinde kalır, gövdeyi aşağı itmez.
-        SizedBox(
-          height: 52,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: visible.length,
-            separatorBuilder: (context, index) =>
-                const SizedBox(width: Space.sm),
-            itemBuilder: (context, index) =>
-                _AttachmentChip(attachments: visible, index: index),
-          ),
+        const SizedBox(height: Space.xs),
+        AttachmentSummary(
+          entries: entries,
+          sheetActionsBuilder: sheetActions,
         ),
       ],
     );
   }
 }
 
-class _AttachmentChip extends ConsumerStatefulWidget {
-  const _AttachmentChip({required this.attachments, required this.index});
-
-  final List<AttachmentRow> attachments;
-  final int index;
-
-  AttachmentRow get attachment => attachments[index];
-
-  @override
-  ConsumerState<_AttachmentChip> createState() => _AttachmentChipState();
-}
-
-class _AttachmentChipState extends ConsumerState<_AttachmentChip> {
-  /// Ekin varsayılan davranışı artık İNDİR değil ÖNİZLE: dokunma doğrudan
-  /// `AttachmentPreviewScreen`i açar; ekran kendi içinde önbellek/indirme
-  /// durumunu ele alır (bkz. o ekranın belgesi). Ekran, dokunulan ekten
-  /// başlayarak şerideki TÜM eklerin sırayla kaydırılabildiği bir galeridir.
-  void _openPreview() {
-    context.pushScreen(
-      AttachmentPreviewScreen(
-        attachments: widget.attachments,
-        initialIndex: widget.index,
-      ),
-      transitionStyle: KaydetTransitionStyle.horizontalPush,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final t = context.tokens;
-    final kind = AttachmentType.resolve(
-      mimeType: widget.attachment.mimeType,
-      fileName: widget.attachment.fileName,
-    );
-    return InkWell(
-      onTap: _openPreview,
-      borderRadius: BorderRadius.circular(Radii.sm),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 280, minHeight: 44),
-        padding: const EdgeInsetsDirectional.only(
-          start: Space.md,
-          top: Space.sm,
-          bottom: Space.sm,
-          end: Space.xs,
-        ),
-        decoration: BoxDecoration(
-          color: t.surface,
-          borderRadius: BorderRadius.circular(Radii.sm),
-          border: Border.all(color: t.divider),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AttachmentTypeIcon(
-              kind: kind,
-              fileName: widget.attachment.fileName,
-              mimeType: widget.attachment.mimeType,
-              size: IconSize.lg,
-            ),
-            const SizedBox(width: Space.sm),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    kind == AttachmentKind.email
-                        ? widget.attachment.fileName.replaceAll(RegExp(r'\.eml$', caseSensitive: false), '')
-                        : widget.attachment.fileName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
-                  Text(
-                    kind == AttachmentKind.email
-                        ? formatBytes(widget.attachment.sizeBytes)
-                        : '${AttachmentType.label(widget.attachment.fileName)} · '
-                          '${formatBytes(widget.attachment.sizeBytes)}',
-                    style: Theme.of(
-                      context,
-                    ).textTheme.labelSmall?.copyWith(color: t.textTertiary),
-                  ),
-                ],
-              ),
-            ),
-            _AttachmentOverflowButton(
-              attachment: widget.attachment,
-              kind: kind,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Ek şeridindeki "⋮" düğmesi — bkz. bellek: kısa seçim listeleri anchored
+/// Ek liste sayfasındaki satır sonu "⋮" düğmesi — bkz. bellek: kısa seçim listeleri anchored
 /// bir popup'ta ([MenuAnchor]), tam ekran bir alttan panelde değil.
 ///
 /// Menü öğeleri yerel dosya yolunu gerektirir (bkz. `attachmentMenuItems`);
@@ -1440,9 +1398,14 @@ class _BodyView extends StatelessWidget {
     required this.onMailto,
     this.topInset = 0,
     this.keepHtml,
+    this.skeletonHandoff = false,
     this.onScrollY,
     this.scrollBridge,
   });
+
+  /// İndirme iskeleti az önce ekrandaydı; WebView örtüsündeki iskelet
+  /// gecikmesiz başlar (bkz. `_HtmlWebView.immediateSkeleton`).
+  final bool skeletonHandoff;
 
   /// Yeni gövde henüz gelmediği kısa aralıkta WebView'ı ağaçtan sökmemek için
   /// son gösterilen HTML (bkz. `_MailDetailScreenState._lastHtml`). WebView
@@ -1529,6 +1492,7 @@ class _BodyView extends StatelessWidget {
       // WebView alanı doldurur ve kendi içinde kaydırır (bkz. `_HtmlWebView`).
       return _HtmlWebView(
         html: html,
+        immediateSkeleton: skeletonHandoff,
         onMailto: onMailto,
         topInset: topInset,
         onScrollY: onScrollY,
@@ -1541,6 +1505,7 @@ class _BodyView extends StatelessWidget {
       // seçim HTML iletilerle birebir aynı olsun.
       return _HtmlWebView(
         html: MailHtmlDocument.fromPlainText(plain),
+        immediateSkeleton: skeletonHandoff,
         onMailto: onMailto,
         topInset: topInset,
         onScrollY: onScrollY,
@@ -1672,12 +1637,18 @@ class _HtmlWebView extends StatefulWidget {
     required this.html,
     required this.onMailto,
     this.loading = false,
+    this.immediateSkeleton = false,
     this.topInset = 0,
     this.onScrollY,
     this.bridge,
   });
 
   final String html;
+
+  /// Örtüdeki iskelet çubukları gecikmesiz görünsün (bkz. `_DelayedSkeleton`).
+  /// Varsayılan olarak kısa bir gecikmeyle gelir: içerik hızlı yerleşirse
+  /// iskelet hiç görünmez, yalnızca boş zeminden içeriğe yumuşak geçiş olur.
+  final bool immediateSkeleton;
 
   /// Yeni içerik bekleniyor: WebView canlı kalır ama üstünde iskelet durur.
   final bool loading;
@@ -1736,6 +1707,9 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
 
   /// İçerik yerleşti mi: `false` iken WebView'ın üstünde yükleme iskeleti durur.
   bool _ready = false;
+
+  /// İskelet çubuklarının görünmeden önce beklediği süre (bkz. `_DelayedSkeleton`).
+  static const Duration _skeletonDelay = Duration(milliseconds: 150);
 
   @override
   void initState() {
@@ -1940,11 +1914,12 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
     _readyFallback?.cancel();
     if (_ready || !mounted || _revealScheduled) return;
     // JS "yerleşti" der demez WebView'ın yerel yüzeyi henüz yeni belgeyi
-    // ekrana çizmemiş olabilir; iskelet hemen kalkarsa altındaki boş (koyu
-    // temada beyaz) yüzey bir an görünür. İlk karenin çizilmesi için kısa bir
-    // pay bırakılır.
+    // ekrana çizmemiş olabilir (önceki/sonraki iletide altta eski belge
+    // kalmış olabilir). Belge içeriği zaten `opacity:0` başlayıp kendi solar
+    // (bkz. `MailHtmlDocument`), bu yüzden yalnızca kısa bir pay yeter;
+    // görünür yumuşaklığı belgenin kendi geçişi sağlar.
     _revealScheduled = true;
-    _revealTimer = Timer(const Duration(milliseconds: 120), () {
+    _revealTimer = Timer(const Duration(milliseconds: 60), () {
       _revealScheduled = false;
       if (mounted && !_ready) setState(() => _ready = true);
     });
@@ -2040,8 +2015,13 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
         // shimmer animasyonu görünmezken boşuna dönmez. İskelet başlığın
         // altından başlar.
         AnimatedSwitcher(
-          duration: Motion.instant,
+          // Örtü yumuşakça girer (önceki/sonraki iletide eski içerik bir
+          // karede iskelete sıçramasın) ve yumuşakça söner. Başlangıçta zaten
+          // ağaçta olan örtü animasyonsuz, opak görünür.
+          duration: Motion.fast,
           reverseDuration: Motion.base,
+          switchInCurve: Curves.easeOut,
+          switchOutCurve: Curves.easeOut,
           layoutBuilder: (current, previous) =>
               Stack(fit: StackFit.expand, children: [...previous, ?current]),
           child: _ready && !widget.loading
@@ -2051,12 +2031,66 @@ class _HtmlWebViewState extends State<_HtmlWebView> {
                   child: ClipRect(
                     child: Padding(
                       padding: EdgeInsets.only(top: widget.topInset),
-                      child: const _BodyShimmer(),
+                      child: _DelayedSkeleton(
+                        delay: widget.immediateSkeleton
+                            ? Duration.zero
+                            : _skeletonDelay,
+                      ),
                     ),
                   ),
                 ),
         ),
       ],
+    );
+  }
+}
+
+/// Gövde iskeletini [delay] sonra yumuşakça belirten sarmalayıcı.
+///
+/// Örtünün zemini hemen opaktır; yalnızca çubuklar gecikir. İçerik gecikme
+/// dolmadan yerleşirse iskelet hiç kurulmaz (shimmer animasyonu da başlamaz),
+/// böylece hızlı açılan iletilerde iskeletin 100-200 ms'lik titremesi olmaz.
+class _DelayedSkeleton extends StatefulWidget {
+  const _DelayedSkeleton({required this.delay});
+
+  final Duration delay;
+
+  @override
+  State<_DelayedSkeleton> createState() => _DelayedSkeletonState();
+}
+
+class _DelayedSkeletonState extends State<_DelayedSkeleton> {
+  Timer? _timer;
+  late bool _visible = widget.delay == Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_visible) {
+      _timer = Timer(widget.delay, () {
+        if (mounted) setState(() => _visible = true);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_visible) return const SizedBox.expand();
+    // Gecikmesiz kipte (indirme iskeletinden devralma) çubuklar zaten
+    // ekrandadır; soldurma yeniden belirme gibi görünürdü.
+    if (widget.delay == Duration.zero) return const _BodyShimmer();
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Motion.fast,
+      curve: Curves.easeOut,
+      builder: (context, value, child) => Opacity(opacity: value, child: child),
+      child: const _BodyShimmer(),
     );
   }
 }

@@ -141,3 +141,15 @@ String formatRelative(DateTime dateUtc, {DateTime? now}) {
   if (diff.inDays < 30) return '${diff.inDays} gün önce';
   return formatListDate(dateUtc, now: reference);
 }
+
+/// Takvim günü, boşluklu kısa biçimde: bu yıl → `14 Eyl`, başka yıl →
+/// `14 Eyl 2024` (arama ekranının "Tarih" çipi).
+String formatShortDay(DateTime day, {DateTime? now}) {
+  final reference = now ?? DateTime.now();
+  final year = day.year == reference.year ? '' : ' ${day.year}';
+  return '${day.day} ${_monthsShort[day.month - 1]}$year';
+}
+
+/// Takvim günü `13.10.2026` biçiminde (gün, ay, yıl).
+String formatDayNumeric(DateTime day) =>
+    '${_two(day.day)}.${_two(day.month)}.${day.year}';

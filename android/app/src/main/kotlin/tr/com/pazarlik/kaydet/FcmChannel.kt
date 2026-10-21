@@ -39,15 +39,37 @@ class FcmChannel(
         var appInForeground: Boolean = false
 
         /**
+         * Arayüzde şu an açık (aktif) hesap; Dart `setActiveAccount` ile bildirir.
+         * Ana isolate'in IMAP bağlantısı yalnızca bu hesabı eşitler.
+         */
+        @Volatile
+        var activeAccountId: Int? = null
+
+        /**
          * Ana isolate canlı ve kullanıcı uygulamaya bakıyorsa push'u ona
-         * iletir ve `true` döner. Böylece liste aynı isolate'te güncellenir
-         * (bkz. iOS'taki `onRemotePush` ile aynı gerekçe).
+         * iletir. Push'un TAMAMEN ön planda karşılandığı durumda `true` döner;
+         * `false` dönerse çağıran [FcmSyncWorker]'ı da sıraya alır.
+         *
+         * Ana isolate yalnızca aktif hesabı eşitler. Başka bir hesabın (ya da
+         * aktif hesap henüz bilinmiyorsa herhangi bir hesabın) push'u ön plana
+         * VERİLMEZ, işçiye bırakılır; aksi hâlde o hesaba geçilene dek ne
+         * eşitleme ne bildirim olurdu. Hesap kimliği olmayan push hem ön
+         * plana iletilir hem de işçiyle tüm hesaplar eşitlenir.
          */
         fun deliverPushToForeground(accountId: Int?): Boolean {
             val channel = active ?: return false
             if (!appInForeground) return false
+            if (accountId != null && accountId != activeAccountId) return false
             channel.postToDart("onPush", mapOf("accountId" to accountId))
-            return true
+            return accountId != null
+        }
+
+        /**
+         * İşçi bir eşitlemeyi bitirdi: ana isolate Drift akışlarını (okunmamış
+         * sayacı vb.) başka isolate'in yazdığı verilere göre tazelemeli.
+         */
+        fun notifySynced() {
+            active?.postToDart("onSynced", null)
         }
 
         fun deliverTokenRefresh(token: String) {
@@ -75,6 +97,10 @@ class FcmChannel(
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
             "getToken" -> fetchToken(result)
+            "setActiveAccount" -> {
+                activeAccountId = (call.arguments as? Number)?.toInt()
+                result.success(null)
+            }
             else -> result.notImplemented()
         }
     }
@@ -112,6 +138,9 @@ class FcmChannel(
     fun dispose() {
         disposed.set(true)
         channel.setMethodCallHandler(null)
-        if (active === this) active = null
+        if (active === this) {
+            active = null
+            activeAccountId = null
+        }
     }
 }

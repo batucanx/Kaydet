@@ -187,18 +187,17 @@ void main() {
   Finder composeTitle() => find.text('Yeni ileti');
   Finder chip(String name) => find.text(name);
 
+  /// Ek çiplerinin TAM adları. Çip metni dar genişlikte ortadan kısalabilir
+  /// (bkz. `AttachmentNameText`); tam ad her çipin ipucunda (Tooltip) durur.
   Iterable<String> chipNames(WidgetTester tester) {
     final wrap = find.byType(Wrap);
     if (wrap.evaluate().isEmpty) return const [];
     return tester
-        .widgetList<Text>(
-          find.descendant(of: wrap, matching: find.byType(Text)),
+        .widgetList<Tooltip>(
+          find.descendant(of: wrap, matching: find.byType(Tooltip)),
         )
-        .map((t) => t.data ?? '')
-        .where(
-          (text) =>
-              text.isNotEmpty && !text.contains('•') && !text.endsWith('B'),
-        );
+        .map((t) => t.message ?? '')
+        .where((name) => name.isNotEmpty && name != 'Kaldır');
   }
 
   int callCount(String method) => calls.where((c) => c.method == method).length;

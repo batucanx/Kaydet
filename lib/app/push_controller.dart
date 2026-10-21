@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/services/app_settings.dart';
+import '../data/services/push_token_source.dart';
 import 'providers.dart';
 import 'push_protocol.dart';
 import 'remote_push_controller.dart';
@@ -64,6 +65,23 @@ class PushController extends Notifier<void> {
         }
       }
     });
+
+    // Android: aktif hesabı native tarafa bildir. Başka hesabın FCM push'u
+    // uygulama öndeyken bile arka plan işçisiyle eşitlenip bildirilir; ana
+    // bağlantı yalnızca aktif hesabı eşitler. iOS'ta etkisizdir.
+    if (Platform.isAndroid) {
+      ref.listen(
+        accountIdProvider,
+        (_, next) => unawaited(AndroidPushChannel.instance.setActiveAccount(next)),
+        fireImmediately: true,
+      );
+      final syncSubscription = AndroidPushChannel.instance.backgroundSyncs
+          .listen((_) {
+            final db = ref.read(databaseProvider);
+            db.markTablesUpdated([db.messages, db.mailboxes]);
+          });
+      ref.onDispose(syncSubscription.cancel);
+    }
 
     // İlk hesap hazır olduğunda (ya da izin soran sürüme geçen mevcut
     // kullanıcıda ilk açılışta) bildirim izni bir kez istenir.

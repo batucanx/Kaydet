@@ -2316,6 +2316,21 @@ class $MessagesTable extends Messages
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _isSearchHitMeta = const VerificationMeta(
+    'isSearchHit',
+  );
+  @override
+  late final GeneratedColumn<bool> isSearchHit = GeneratedColumn<bool>(
+    'is_search_hit',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_search_hit" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _hasAttachmentsMeta = const VerificationMeta(
     'hasAttachments',
   );
@@ -2497,6 +2512,7 @@ class $MessagesTable extends Messages
     isDraft,
     isDeleted,
     isForwarded,
+    isSearchHit,
     hasAttachments,
     sizeBytes,
     bodyFetchedAt,
@@ -2676,6 +2692,15 @@ class $MessagesTable extends Messages
         isForwarded.isAcceptableOrUnknown(
           data['is_forwarded']!,
           _isForwardedMeta,
+        ),
+      );
+    }
+    if (data.containsKey('is_search_hit')) {
+      context.handle(
+        _isSearchHitMeta,
+        isSearchHit.isAcceptableOrUnknown(
+          data['is_search_hit']!,
+          _isSearchHitMeta,
         ),
       );
     }
@@ -2879,6 +2904,10 @@ class $MessagesTable extends Messages
         DriftSqlType.bool,
         data['${effectivePrefix}is_forwarded'],
       )!,
+      isSearchHit: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_search_hit'],
+      )!,
       hasAttachments: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}has_attachments'],
@@ -2978,6 +3007,15 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   /// anahtar kelimedir (RFC 5788). `\Answered`'ın aksine sunucu desteği
   /// garanti değildir; bkz. `MailRepository._markSourceMessage`.
   final bool isForwarded;
+
+  /// Yalnızca sunucu aramasıyla bulunup yerele indirilmiş (klasörün eşitleme
+  /// penceresinin DIŞINDAKİ) ileti. Aranır, listelenir ve açılır; ama klasör
+  /// listelerine, sayaçlara ve eşitleme sınırlarına (en düşük/yüksek UID)
+  /// KATILMAZ — aksi hâlde çok eski bir sonuç "daha eski iletileri yükle"
+  /// sınırını bozar, yeni bir sonuç artımlı eşitlemeyi atlatırdı. Normal
+  /// eşitleme aynı iletiyi getirirse bayrak kalkar (bkz.
+  /// `AppDatabase.upsertServerMessages`).
+  final bool isSearchHit;
   final bool hasAttachments;
   final int sizeBytes;
   final DateTime? bodyFetchedAt;
@@ -3026,6 +3064,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     required this.isDraft,
     required this.isDeleted,
     required this.isForwarded,
+    required this.isSearchHit,
     required this.hasAttachments,
     required this.sizeBytes,
     this.bodyFetchedAt,
@@ -3074,6 +3113,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     map['is_draft'] = Variable<bool>(isDraft);
     map['is_deleted'] = Variable<bool>(isDeleted);
     map['is_forwarded'] = Variable<bool>(isForwarded);
+    map['is_search_hit'] = Variable<bool>(isSearchHit);
     map['has_attachments'] = Variable<bool>(hasAttachments);
     map['size_bytes'] = Variable<int>(sizeBytes);
     if (!nullToAbsent || bodyFetchedAt != null) {
@@ -3141,6 +3181,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       isDraft: Value(isDraft),
       isDeleted: Value(isDeleted),
       isForwarded: Value(isForwarded),
+      isSearchHit: Value(isSearchHit),
       hasAttachments: Value(hasAttachments),
       sizeBytes: Value(sizeBytes),
       bodyFetchedAt: bodyFetchedAt == null && nullToAbsent
@@ -3202,6 +3243,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       isDraft: serializer.fromJson<bool>(json['isDraft']),
       isDeleted: serializer.fromJson<bool>(json['isDeleted']),
       isForwarded: serializer.fromJson<bool>(json['isForwarded']),
+      isSearchHit: serializer.fromJson<bool>(json['isSearchHit']),
       hasAttachments: serializer.fromJson<bool>(json['hasAttachments']),
       sizeBytes: serializer.fromJson<int>(json['sizeBytes']),
       bodyFetchedAt: serializer.fromJson<DateTime?>(json['bodyFetchedAt']),
@@ -3250,6 +3292,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'isDraft': serializer.toJson<bool>(isDraft),
       'isDeleted': serializer.toJson<bool>(isDeleted),
       'isForwarded': serializer.toJson<bool>(isForwarded),
+      'isSearchHit': serializer.toJson<bool>(isSearchHit),
       'hasAttachments': serializer.toJson<bool>(hasAttachments),
       'sizeBytes': serializer.toJson<int>(sizeBytes),
       'bodyFetchedAt': serializer.toJson<DateTime?>(bodyFetchedAt),
@@ -3294,6 +3337,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     bool? isDraft,
     bool? isDeleted,
     bool? isForwarded,
+    bool? isSearchHit,
     bool? hasAttachments,
     int? sizeBytes,
     Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -3335,6 +3379,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isDraft: isDraft ?? this.isDraft,
     isDeleted: isDeleted ?? this.isDeleted,
     isForwarded: isForwarded ?? this.isForwarded,
+    isSearchHit: isSearchHit ?? this.isSearchHit,
     hasAttachments: hasAttachments ?? this.hasAttachments,
     sizeBytes: sizeBytes ?? this.sizeBytes,
     bodyFetchedAt: bodyFetchedAt.present
@@ -3398,6 +3443,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       isForwarded: data.isForwarded.present
           ? data.isForwarded.value
           : this.isForwarded,
+      isSearchHit: data.isSearchHit.present
+          ? data.isSearchHit.value
+          : this.isSearchHit,
       hasAttachments: data.hasAttachments.present
           ? data.hasAttachments.value
           : this.hasAttachments,
@@ -3462,6 +3510,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('isDraft: $isDraft, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('isForwarded: $isForwarded, ')
+          ..write('isSearchHit: $isSearchHit, ')
           ..write('hasAttachments: $hasAttachments, ')
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
@@ -3504,6 +3553,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     isDraft,
     isDeleted,
     isForwarded,
+    isSearchHit,
     hasAttachments,
     sizeBytes,
     bodyFetchedAt,
@@ -3545,6 +3595,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.isDraft == this.isDraft &&
           other.isDeleted == this.isDeleted &&
           other.isForwarded == this.isForwarded &&
+          other.isSearchHit == this.isSearchHit &&
           other.hasAttachments == this.hasAttachments &&
           other.sizeBytes == this.sizeBytes &&
           other.bodyFetchedAt == this.bodyFetchedAt &&
@@ -3584,6 +3635,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<bool> isDraft;
   final Value<bool> isDeleted;
   final Value<bool> isForwarded;
+  final Value<bool> isSearchHit;
   final Value<bool> hasAttachments;
   final Value<int> sizeBytes;
   final Value<DateTime?> bodyFetchedAt;
@@ -3621,6 +3673,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isDraft = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.isForwarded = const Value.absent(),
+    this.isSearchHit = const Value.absent(),
     this.hasAttachments = const Value.absent(),
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
@@ -3659,6 +3712,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.isDraft = const Value.absent(),
     this.isDeleted = const Value.absent(),
     this.isForwarded = const Value.absent(),
+    this.isSearchHit = const Value.absent(),
     this.hasAttachments = const Value.absent(),
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
@@ -3699,6 +3753,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<bool>? isDraft,
     Expression<bool>? isDeleted,
     Expression<bool>? isForwarded,
+    Expression<bool>? isSearchHit,
     Expression<bool>? hasAttachments,
     Expression<int>? sizeBytes,
     Expression<DateTime>? bodyFetchedAt,
@@ -3737,6 +3792,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (isDraft != null) 'is_draft': isDraft,
       if (isDeleted != null) 'is_deleted': isDeleted,
       if (isForwarded != null) 'is_forwarded': isForwarded,
+      if (isSearchHit != null) 'is_search_hit': isSearchHit,
       if (hasAttachments != null) 'has_attachments': hasAttachments,
       if (sizeBytes != null) 'size_bytes': sizeBytes,
       if (bodyFetchedAt != null) 'body_fetched_at': bodyFetchedAt,
@@ -3778,6 +3834,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<bool>? isDraft,
     Value<bool>? isDeleted,
     Value<bool>? isForwarded,
+    Value<bool>? isSearchHit,
     Value<bool>? hasAttachments,
     Value<int>? sizeBytes,
     Value<DateTime?>? bodyFetchedAt,
@@ -3816,6 +3873,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       isDraft: isDraft ?? this.isDraft,
       isDeleted: isDeleted ?? this.isDeleted,
       isForwarded: isForwarded ?? this.isForwarded,
+      isSearchHit: isSearchHit ?? this.isSearchHit,
       hasAttachments: hasAttachments ?? this.hasAttachments,
       sizeBytes: sizeBytes ?? this.sizeBytes,
       bodyFetchedAt: bodyFetchedAt ?? this.bodyFetchedAt,
@@ -3905,6 +3963,9 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (isForwarded.present) {
       map['is_forwarded'] = Variable<bool>(isForwarded.value);
     }
+    if (isSearchHit.present) {
+      map['is_search_hit'] = Variable<bool>(isSearchHit.value);
+    }
     if (hasAttachments.present) {
       map['has_attachments'] = Variable<bool>(hasAttachments.value);
     }
@@ -3977,6 +4038,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('isDraft: $isDraft, ')
           ..write('isDeleted: $isDeleted, ')
           ..write('isForwarded: $isForwarded, ')
+          ..write('isSearchHit: $isSearchHit, ')
           ..write('hasAttachments: $hasAttachments, ')
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
@@ -10718,6 +10780,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<bool> isDraft,
       Value<bool> isDeleted,
       Value<bool> isForwarded,
+      Value<bool> isSearchHit,
       Value<bool> hasAttachments,
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
@@ -10757,6 +10820,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<bool> isDraft,
       Value<bool> isDeleted,
       Value<bool> isForwarded,
+      Value<bool> isSearchHit,
       Value<bool> hasAttachments,
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
@@ -11003,6 +11067,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<bool> get isForwarded => $composableBuilder(
     column: $table.isForwarded,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isSearchHit => $composableBuilder(
+    column: $table.isSearchHit,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11333,6 +11402,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isSearchHit => $composableBuilder(
+    column: $table.isSearchHit,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get hasAttachments => $composableBuilder(
     column: $table.hasAttachments,
     builder: (column) => ColumnOrderings(column),
@@ -11526,6 +11600,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<bool> get isForwarded => $composableBuilder(
     column: $table.isForwarded,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<bool> get isSearchHit => $composableBuilder(
+    column: $table.isSearchHit,
     builder: (column) => column,
   );
 
@@ -11797,6 +11876,7 @@ class $$MessagesTableTableManager
                 Value<bool> isDraft = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
                 Value<bool> isForwarded = const Value.absent(),
+                Value<bool> isSearchHit = const Value.absent(),
                 Value<bool> hasAttachments = const Value.absent(),
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -11834,6 +11914,7 @@ class $$MessagesTableTableManager
                 isDraft: isDraft,
                 isDeleted: isDeleted,
                 isForwarded: isForwarded,
+                isSearchHit: isSearchHit,
                 hasAttachments: hasAttachments,
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,
@@ -11873,6 +11954,7 @@ class $$MessagesTableTableManager
                 Value<bool> isDraft = const Value.absent(),
                 Value<bool> isDeleted = const Value.absent(),
                 Value<bool> isForwarded = const Value.absent(),
+                Value<bool> isSearchHit = const Value.absent(),
                 Value<bool> hasAttachments = const Value.absent(),
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
@@ -11910,6 +11992,7 @@ class $$MessagesTableTableManager
                 isDraft: isDraft,
                 isDeleted: isDeleted,
                 isForwarded: isForwarded,
+                isSearchHit: isSearchHit,
                 hasAttachments: hasAttachments,
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,

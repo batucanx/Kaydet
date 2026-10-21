@@ -104,6 +104,7 @@ class FcmSyncWorker(
                         if (!finished.compareAndSet(false, true)) return@runEngine
                         mainHandler.removeCallbacksAndMessages(null)
                         destroyEngine()
+                        if (success) FcmChannel.notifySynced()
                         completer.set(resultFor(success))
                     }
                 } catch (t: Throwable) {

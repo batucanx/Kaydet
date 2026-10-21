@@ -19,6 +19,7 @@ import io.flutter.embedding.engine.FlutterEngine
 class MainActivity : FlutterActivity() {
     private var shareChannel: ShareChannel? = null
     private var fcmChannel: FcmChannel? = null
+    private var downloadsChannel: DownloadsChannel? = null
 
     // `super.onCreate` içinde, `onCreate`in kalanından ÖNCE çağrılır; bu yüzden
     // kanal aşağıdaki `handleIntent`ten önce hazırdır.
@@ -26,6 +27,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         shareChannel = ShareChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         fcmChannel = FcmChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
+        downloadsChannel = DownloadsChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -55,6 +57,8 @@ class MainActivity : FlutterActivity() {
         shareChannel = null
         fcmChannel?.dispose()
         fcmChannel = null
+        downloadsChannel?.dispose()
+        downloadsChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
     }
 }

@@ -44,6 +44,8 @@ class QuickTemplatesSheet extends ConsumerStatefulWidget {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      // Sheet kendi tutamacını çizer; tema tutamacı ikinci kez görünmesin.
+      showDragHandle: false,
       backgroundColor: Colors.transparent,
       builder: (_) => QuickTemplatesSheet(onSelect: onSelect),
     );

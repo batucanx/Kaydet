@@ -160,62 +160,93 @@ void main() {
       expect(await db.uidsOf(inbox.id), [2]);
     });
 
-    test('ilk indirmede UID SEARCH ALL çağrılmaz, sequence range ile çekilir',
-        () async {
-      final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
-      imap.seedInbox(list);
-      imap.commandLog.clear();
+    test(
+      'ilk indirmede UID SEARCH ALL çağrılmaz, sequence range ile çekilir',
+      () async {
+        final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
+        imap.seedInbox(list);
+        imap.commandLog.clear();
 
-      final outcome = await syncInbox();
+        final outcome = await syncInbox();
 
-      expect(outcome.initialDownload, isTrue);
-      expect(outcome.newMessageIds, hasLength(50));
-      expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
-      expect(imap.commandLog.any((c) => c == 'fetchSeq:51:100'), isTrue);
-    });
+        expect(outcome.initialDownload, isTrue);
+        expect(outcome.newMessageIds, hasLength(50));
+        expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
+        expect(imap.commandLog.any((c) => c == 'fetchSeq:51:100'), isTrue);
+      },
+    );
 
-    test('loadOlder tüm UIDleri çekmeden sequence range ile sayfalama yapar',
-        () async {
-      final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
-      imap.seedInbox(list);
-      await syncInbox();
-      imap.commandLog.clear();
+    test(
+      'loadOlder tüm UIDleri çekmeden UID penceresiyle sayfalama yapar',
+      () async {
+        final list = [for (var i = 1; i <= 100; i++) envelope(uid: i)];
+        imap.seedInbox(list);
+        await syncInbox();
+        imap.commandLog.clear();
 
-      final loaded = await sync.loadOlder(
-        accountId: accountId,
-        mailbox: await freshInbox(),
-        count: 50,
-      );
+        final loaded = await sync.loadOlder(
+          accountId: accountId,
+          mailbox: await freshInbox(),
+          count: 50,
+        );
 
-      expect(loaded.isOk, isTrue);
-      expect(loaded.valueOrNull, 50);
-      expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
-      expect(imap.commandLog.any((c) => c == 'fetchSeq:1:50'), isTrue);
-    });
+        expect(loaded.isOk, isTrue);
+        expect(loaded.valueOrNull, 50);
+        expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
+        expect(await db.uidsOf(inbox.id), hasLength(100));
+        expect((await freshInbox()).hasMoreOnServer, isFalse);
+      },
+    );
+
+    test(
+      'loadOlder seyrek UIDlerde boş pencereyi aşıp eskilere iner',
+      () async {
+        final list = [
+          for (var i = 1; i <= 60; i++) envelope(uid: i),
+          for (var i = 5000; i < 5060; i++) envelope(uid: i),
+        ];
+        imap.seedInbox(list);
+        await syncInbox();
+        // İlk indirme en yeni 50'yi (5010..5059) aldı; geri kalan aşağıdadır.
+        var guard = 0;
+        while ((await freshInbox()).hasMoreOnServer && guard++ < 10) {
+          final r = await sync.loadOlder(
+            accountId: accountId,
+            mailbox: await freshInbox(),
+            count: 50,
+          );
+          expect(r.isOk, isTrue);
+        }
+        expect(await db.uidsOf(inbox.id), hasLength(120));
+        expect((await freshInbox()).hasMoreOnServer, isFalse);
+      },
+    );
   });
 
   group('geçici hata', () {
-    test('bayraklar alınamazsa sunucu durumu ilerletilmez, sonraki tur dener',
-        () async {
-      imap.seedInbox([envelope(uid: 1)]);
-      await syncInbox();
-      expect((await freshInbox()).uidNext, 2);
+    test(
+      'bayraklar alınamazsa sunucu durumu ilerletilmez, sonraki tur dener',
+      () async {
+        imap.seedInbox([envelope(uid: 1)]);
+        await syncInbox();
+        expect((await freshInbox()).uidNext, 2);
 
-      imap.seedInbox([envelope(uid: 2)]);
-      imap.failFlags = const ServerFailure(detail: 'zaman aşımı');
-      final failed = await syncInbox();
+        imap.seedInbox([envelope(uid: 2)]);
+        imap.failFlags = const ServerFailure(detail: 'zaman aşımı');
+        final failed = await syncInbox();
 
-      // Yeni ileti yine de indirildi, ama uzlaşma tamamlanmadığı için kayıt
-      // ilerlemedi: CONDSTORE'da bu, kaçan bayrak değişikliğinin kalıcı olarak
-      // kaybolması demekti.
-      expect(failed.newMessageIds, hasLength(1));
-      expect(await db.uidsOf(inbox.id), unorderedEquals([1, 2]));
-      expect((await freshInbox()).uidNext, 2);
+        // Yeni ileti yine de indirildi, ama uzlaşma tamamlanmadığı için kayıt
+        // ilerlemedi: CONDSTORE'da bu, kaçan bayrak değişikliğinin kalıcı olarak
+        // kaybolması demekti.
+        expect(failed.newMessageIds, hasLength(1));
+        expect(await db.uidsOf(inbox.id), unorderedEquals([1, 2]));
+        expect((await freshInbox()).uidNext, 2);
 
-      imap.failFlags = null;
-      await syncInbox();
-      expect((await freshInbox()).uidNext, 3);
-    });
+        imap.failFlags = null;
+        await syncInbox();
+        expect((await freshInbox()).uidNext, 3);
+      },
+    );
   });
 
   group('gövde ön-yükleme', () {
@@ -264,26 +295,28 @@ void main() {
   });
 
   group('ensureBody', () {
-    test('gövde satırı silinmişse (eski önbellek temizleme) yeniden indirir',
-        () async {
-      imap.seedInbox([envelope(uid: 1)]);
-      imap.seedBody('INBOX', 1, const FetchedBody(plainText: 'gerçek gövde'));
-      await syncInbox();
-      final message = (await db.messageByUid(inbox.id, 1))!;
+    test(
+      'gövde satırı silinmişse (eski önbellek temizleme) yeniden indirir',
+      () async {
+        imap.seedInbox([envelope(uid: 1)]);
+        imap.seedBody('INBOX', 1, const FetchedBody(plainText: 'gerçek gövde'));
+        await syncInbox();
+        final message = (await db.messageByUid(inbox.id, 1))!;
 
-      // Eski sürüm: gövde satırı silinir, `bodyFetchedAt` dolu kalırdı.
-      await db.upsertBody(messageId: message.id, plainText: 'geçici');
-      await (db.delete(
-        db.messageBodies,
-      )..where((b) => b.messageId.equals(message.id))).go();
-      expect((await db.messageById(message.id))!.bodyFetchedAt, isNotNull);
-      expect(await db.bodyOf(message.id), isNull);
+        // Eski sürüm: gövde satırı silinir, `bodyFetchedAt` dolu kalırdı.
+        await db.upsertBody(messageId: message.id, plainText: 'geçici');
+        await (db.delete(
+          db.messageBodies,
+        )..where((b) => b.messageId.equals(message.id))).go();
+        expect((await db.messageById(message.id))!.bodyFetchedAt, isNotNull);
+        expect(await db.bodyOf(message.id), isNull);
 
-      final result = await repository.ensureBody(message.id);
+        final result = await repository.ensureBody(message.id);
 
-      expect(result.isOk, isTrue);
-      expect((await db.bodyOf(message.id))!.plainText, 'gerçek gövde');
-    });
+        expect(result.isOk, isTrue);
+        expect((await db.bodyOf(message.id))!.plainText, 'gerçek gövde');
+      },
+    );
 
     test('gövde zaten yerelde varsa sunucuya gidilmez', () async {
       imap.seedInbox([envelope(uid: 1)]);
@@ -302,15 +335,11 @@ void main() {
       imap.seedInbox([envelope(uid: 1)]);
       imap.seedBody('INBOX', 1, const FetchedBody(plainText: 'gelen kutusu'));
       imap.store['INBOX.Archive'] = {2: envelope(uid: 2)};
-      imap.seedBody(
-        'INBOX.Archive',
-        2,
-        const FetchedBody(plainText: 'arşiv'),
-      );
+      imap.seedBody('INBOX.Archive', 2, const FetchedBody(plainText: 'arşiv'));
       await syncInbox();
-      final archive = (await db.mailboxesOf(accountId)).firstWhere(
-        (m) => m.specialUse == SpecialUse.archive,
-      );
+      final archive = (await db.mailboxesOf(
+        accountId,
+      )).firstWhere((m) => m.specialUse == SpecialUse.archive);
       await sync.syncMailbox(accountId: accountId, mailbox: archive);
 
       final inboxMessage = (await db.messageByUid(inbox.id, 1))!;

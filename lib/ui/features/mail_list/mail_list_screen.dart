@@ -253,6 +253,24 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
     }
   }
 
+  /// Yerelde olup gösterim sınırı ([pageLimitProvider]) yüzünden henüz
+  /// listelenmeyen ileti olabilir mi? Sunucudaki her şey inmiş olsa bile
+  /// (`hasMoreOnServer == false`) liste sınır kadar satır gösterir; sınıra
+  /// ulaşıldıysa devamı yereldedir ve "daha fazla yükle" sunulmalıdır.
+  bool _hasLocalHidden({bool watch = false}) {
+    final shown =
+        (watch
+                ? ref.watch(messageListProvider)
+                : ref.read(messageListProvider))
+            .value
+            ?.length ??
+        0;
+    final limit = watch
+        ? ref.watch(pageLimitProvider)
+        : ref.read(pageLimitProvider);
+    return shown > 0 && shown >= limit;
+  }
+
   void _triggerAutoLoadMore() {
     final now = DateTime.now();
     if (_lastAutoLoadAttempt != null &&
@@ -261,7 +279,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
       return;
     }
     final syncState = ref.read(syncControllerProvider);
-    if (syncState.isLoadingMore || !syncState.hasMore) return;
+    if (syncState.isLoadingMore || !(syncState.hasMore || _hasLocalHidden())) {
+      return;
+    }
     _lastAutoLoadAttempt = now;
     ref.read(syncControllerProvider.notifier).loadMore();
   }
@@ -629,7 +649,9 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
                       labels: labels,
                       isSentLike: isSentLike,
                       isLoadingMore: isLoadingMore,
-                      hasMore: hasMoreLocal && hasMoreOnServer,
+                      hasMore:
+                          (hasMoreLocal && hasMoreOnServer) ||
+                          _hasLocalHidden(watch: true),
                       showAccount: unifiedUse != null,
                     ),
                   ),
@@ -2261,6 +2283,9 @@ class _ListSkeleton extends StatelessWidget {
               .clamp(1, 64)
               .toInt();
           return ListView.builder(
+            // Bir kaydırılabilirin içinde (FolderLoadingItem) yükseklik
+            // sınırsızdır; o zaman içeriğe göre ölçülür.
+            shrinkWrap: !constraints.hasBoundedHeight,
             physics: const NeverScrollableScrollPhysics(),
             itemCount: itemCount,
             itemBuilder: (context, index) => const _ListSkeletonRow(),

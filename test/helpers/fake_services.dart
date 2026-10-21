@@ -265,6 +265,18 @@ class FakeImapService implements ImapService {
     ]);
   }
 
+  /// `searchUids`un döneceği UID'ler ve aldığı ölçütler (sunucu araması).
+  List<int> searchUidsResult = const [];
+  final List<String> searchCriteriaLog = [];
+
+  @override
+  Future<Result<List<int>>> searchUids(String criteria) async {
+    commandLog.add('searchUids');
+    searchCriteriaLog.add(criteria);
+    final box = _box(selectedPath ?? 'INBOX');
+    return Ok(searchUidsResult.where(box.containsKey).toList());
+  }
+
   @override
   Future<Result<List<int>>> searchUidsInSet(List<int> uids) async {
     commandLog.add('search');

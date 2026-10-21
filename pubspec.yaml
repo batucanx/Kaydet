@@ -100,6 +100,7 @@ flutter:
     - assets/icon/app_logo.png
     - assets/web/mail_render.js
     - assets/icons/
+    - assets/images/
   fonts:
     # Geist (SIL OFL) — 400/500/600/700 dört ayrı statik dosyadan gelir; motor
     # (Skia/Impeller) her platformda aynı glifi seçer, ağırlık tahmini yok.

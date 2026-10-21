@@ -136,5 +136,15 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:mimeType="*/*"/>
         </intent>
+        <!-- "İndirme tamamlandı" bildirimi: İndirilenler/Kaydet klasörünü ya da
+             sistemin İndirilenler ekranını açabilecek uygulamayı bulmak için
+             (bkz. SavedFilesNotifier). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:mimeType="vnd.android.document/directory"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW_DOWNLOADS"/>
+        </intent>
     </queries>
 </manifest>

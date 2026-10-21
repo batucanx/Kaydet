@@ -47,22 +47,27 @@ void main() {
     bool deleted = false,
     int? mailbox,
     DateTime? date,
-  }) =>
-      MessagesCompanion.insert(
-        accountId: accountId,
-        mailboxId: mailbox ?? inboxId,
-        dateUtc: date ?? DateTime.utc(2026, 9, 14, 10, 30),
-        uid: Value(uid),
-        subject: Value(subject),
-        fromName: Value(fromName),
-        fromEmail: Value(fromEmail),
-        preview: Value(preview),
-        isSeen: Value(seen),
-        isFlagged: Value(flagged),
-        hasAttachments: Value(hasAttachments),
-        isDraft: Value(draft),
-        isDeleted: Value(deleted),
-      );
+    String toJson = '[]',
+    String ccJson = '[]',
+    String bccJson = '[]',
+  }) => MessagesCompanion.insert(
+    accountId: accountId,
+    mailboxId: mailbox ?? inboxId,
+    dateUtc: date ?? DateTime.utc(2026, 9, 14, 10, 30),
+    uid: Value(uid),
+    subject: Value(subject),
+    fromName: Value(fromName),
+    fromEmail: Value(fromEmail),
+    preview: Value(preview),
+    isSeen: Value(seen),
+    isFlagged: Value(flagged),
+    hasAttachments: Value(hasAttachments),
+    isDraft: Value(draft),
+    isDeleted: Value(deleted),
+    toAddrJson: Value(toJson),
+    ccJson: Value(ccJson),
+    bccJson: Value(bccJson),
+  );
 
   group('şema', () {
     test('hesap ve klasör yazılır', () async {
@@ -525,6 +530,215 @@ void main() {
           const SearchFilters(folder: SearchFolder.standard(SpecialUse.trash)),
         ),
         1,
+      );
+    });
+
+    test('metin yazılmadan tek başına bir filtre tam bir aramadır', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Ekli rapor', hasAttachments: true),
+        message(uid: 2, subject: 'Ekli olmayan'),
+      ]);
+
+      // Metin de filtre de yok: sonuç yok.
+      expect(
+        await db.searchMessageIds(accountId: accountId, query: ''),
+        isEmpty,
+      );
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: '  ',
+        filters: const SearchFilters(withAttachmentsOnly: true),
+      );
+
+      expect(await subjectsOf(ids), ['Ekli rapor']);
+    });
+
+    test('tarih filtresi yerel günleri, uçlar dahil, kapsar', () async {
+      DateTime localNoon(int month, int day) => DateTime(2026, month, day, 12);
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Plan ekim 9', date: localNoon(10, 9)),
+        message(uid: 2, subject: 'Plan ekim 10', date: localNoon(10, 10)),
+        message(uid: 3, subject: 'Plan ekim 11', date: localNoon(10, 11)),
+        message(uid: 4, subject: 'Plan ekim 12', date: localNoon(10, 12)),
+      ]);
+
+      Future<List<String>> run(SearchFilters filters) async => subjectsOf(
+        await db.searchMessageIds(
+          accountId: accountId,
+          query: 'plan',
+          filters: filters,
+        ),
+      );
+
+      // İki uç dahil.
+      expect(
+        await run(
+          SearchFilters(
+            dateFrom: DateTime(2026, 10, 10),
+            dateTo: DateTime(2026, 10, 11),
+          ),
+        ),
+        ['Plan ekim 11', 'Plan ekim 10'],
+      );
+      // Yalnızca başlangıç: o gün ve sonrası.
+      expect(await run(SearchFilters(dateFrom: DateTime(2026, 10, 11))), [
+        'Plan ekim 12',
+        'Plan ekim 11',
+      ]);
+      // Yalnızca bitiş: o gün ve öncesi.
+      expect(await run(SearchFilters(dateTo: DateTime(2026, 10, 9))), [
+        'Plan ekim 9',
+      ]);
+      // Tek gün.
+      expect(
+        await run(
+          SearchFilters(
+            dateFrom: DateTime(2026, 10, 12),
+            dateTo: DateTime(2026, 10, 12),
+          ),
+        ),
+        ['Plan ekim 12'],
+      );
+      // Ters uçlu pencere hiçbir şeyle eşleşmez.
+      expect(
+        await run(
+          SearchFilters(
+            dateFrom: DateTime(2026, 10, 12),
+            dateTo: DateTime(2026, 10, 10),
+          ),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('yalnızca tarih penceresi metinsiz tam bir aramadır', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Eski', date: DateTime(2026, 1, 5, 9)),
+        message(uid: 2, subject: 'Yeni', date: DateTime(2026, 6, 5, 9)),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: '',
+        filters: SearchFilters(dateFrom: DateTime(2026, 6, 1)),
+      );
+
+      expect(await subjectsOf(ids), ['Yeni']);
+    });
+
+    test('gönderen filtresi adresi büyük/küçük harfe bakmadan eşler', () async {
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Teklif Ali', fromEmail: 'Ali@Firma.com'),
+        message(uid: 2, subject: 'Teklif Veli', fromEmail: 'veli@firma.com'),
+      ]);
+
+      final ids = await db.searchMessageIds(
+        accountId: accountId,
+        query: 'teklif',
+        filters: const SearchFilters(sender: 'ali@firma.com'),
+      );
+
+      expect(await subjectsOf(ids), ['Teklif Ali']);
+      // Yarım adres eşleşmez: tam adres aranır.
+      expect(
+        await db.searchMessageIds(
+          accountId: accountId,
+          query: 'teklif',
+          filters: const SearchFilters(sender: 'ali@firma'),
+        ),
+        isEmpty,
+      );
+    });
+
+    test('alıcı filtresi Kime, Bilgi ve Gizli alanlarına bakar', () async {
+      String json(String email) =>
+          EmailAddress.encodeList([EmailAddress(email: email, name: 'Kişi')]);
+      await db.upsertServerMessages([
+        message(uid: 1, subject: 'Rapor kime', toJson: json('Ece@firma.com')),
+        message(uid: 2, subject: 'Rapor bilgi', ccJson: json('ece@firma.com')),
+        message(uid: 3, subject: 'Rapor gizli', bccJson: json('ece@firma.com')),
+        message(
+          uid: 4,
+          subject: 'Rapor başkası',
+          toJson: json('can@firma.com'),
+        ),
+        // `_` ve `%` joker olarak yorumlanmamalı.
+        message(uid: 5, subject: 'Rapor joker', toJson: json('ecex@firma.com')),
+      ]);
+
+      Future<List<String>> run(String recipient) async => subjectsOf(
+        await db.searchMessageIds(
+          accountId: accountId,
+          query: 'rapor',
+          filters: SearchFilters(recipient: recipient),
+        ),
+      );
+
+      expect(
+        await run('ece@firma.com'),
+        unorderedEquals(['Rapor kime', 'Rapor bilgi', 'Rapor gizli']),
+      );
+      expect(await run('ec_@firma.com'), isEmpty);
+      expect(await run('%@firma.com'), isEmpty);
+    });
+
+    test('dosya araması tarih, gönderen ve alıcı filtrelerine uyar', () async {
+      final ids = await db.upsertServerMessages([
+        message(
+          uid: 1,
+          subject: 'Ek yeni',
+          hasAttachments: true,
+          fromEmail: 'ali@firma.com',
+          date: DateTime(2026, 10, 10, 12),
+          toJson: EmailAddress.encodeList([
+            const EmailAddress(email: 'ece@firma.com'),
+          ]),
+        ),
+        message(
+          uid: 2,
+          subject: 'Ek eski',
+          hasAttachments: true,
+          fromEmail: 'veli@firma.com',
+          date: DateTime(2026, 1, 10, 12),
+        ),
+      ]);
+      for (final id in ids) {
+        await db.addAttachment(
+          AttachmentsCompanion.insert(
+            messageId: id,
+            fileName: const Value('sozlesme.pdf'),
+          ),
+        );
+      }
+
+      Future<List<String>> run(SearchFilters filters) async => [
+        for (final r in await db.searchAttachments(
+          accountId: accountId,
+          query: '',
+          filters: filters,
+        ))
+          r.message.subject,
+      ];
+
+      expect(await run(const SearchFilters()), hasLength(2));
+      expect(await run(SearchFilters(dateFrom: DateTime(2026, 6, 1))), [
+        'Ek yeni',
+      ]);
+      expect(await run(const SearchFilters(sender: 'veli@firma.com')), [
+        'Ek eski',
+      ]);
+      expect(await run(const SearchFilters(recipient: 'ece@firma.com')), [
+        'Ek yeni',
+      ]);
+      expect(
+        await run(
+          SearchFilters(
+            dateFrom: DateTime(2026, 10, 1),
+            dateTo: DateTime(2026, 1, 1),
+          ),
+        ),
+        isEmpty,
       );
     });
 

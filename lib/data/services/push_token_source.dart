@@ -44,6 +44,22 @@ class AndroidPushChannel implements PushTokenSource {
   );
 
   final StreamController<String> _tokens = StreamController<String>.broadcast();
+  final StreamController<void> _syncs = StreamController<void>.broadcast();
+
+  /// Arka plan işçisi bir eşitlemeyi bitirdiğinde yayın yapar (başka isolate
+  /// veritabanına yazdı; Drift akışları bunu kendiliğinden görmez).
+  Stream<void> get backgroundSyncs => _syncs.stream;
+
+  /// Ön plandaki (aktif) hesabı native tarafa bildirir. Ana isolate yalnızca
+  /// bu hesabı eşitler; başka hesabın push'u native tarafta arka plan
+  /// işçisine yönlendirilir (bkz. `FcmChannel.deliverPushToForeground`).
+  Future<void> setActiveAccount(int? accountId) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('setActiveAccount', accountId);
+    } on PlatformException catch (_) {
+    } on MissingPluginException catch (_) {}
+  }
 
   bool _installed = false;
 
@@ -56,6 +72,8 @@ class AndroidPushChannel implements PushTokenSource {
         case 'onToken':
           final token = call.arguments;
           if (token is String && token.isNotEmpty) _tokens.add(token);
+        case 'onSynced':
+          _syncs.add(null);
         case 'onPush':
           // Uygulama önde: eşitleme ana isolate'te yapılır ki Drift akışları
           // listeyi anında güncellesin (iOS'taki `onRemotePush` ile aynı).

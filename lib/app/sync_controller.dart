@@ -987,18 +987,31 @@ class SyncController extends Notifier<SyncState> {
     if (_disposed || _paused || !_isCurrent(accountId)) return;
     final db = ref.read(databaseProvider);
     final engine = ref.read(syncEngineProvider);
-    // Üst sınır: bozuk bir sunucu yanıtı sonsuz döngü yaratmasın.
-    for (var page = 0; page < 40; page++) {
-      if (_disposed || !_isCurrent(accountId)) return;
+    // Sunucuyla birebir eşitlik: klasörün tamamı (`hasMoreOnServer` bitene
+    // kadar) indirilir. İlerleme her sayfada kalıcı yazıldığı için uygulama
+    // kapanırsa bir sonraki eşitlemede (`_startBackfill`) kaldığı yerden
+    // sürer. Sonsuz döngüye karşı: her sayfa yerelde en küçük UID'yi
+    // düşürmezse çıkılır.
+    var lastLowest = -1;
+    while (true) {
+      if (_disposed || _paused || !_isCurrent(accountId)) return;
       final box = await db.mailboxById(mailboxId);
       if (box == null || !box.hasMoreOnServer || !box.isSelectable) return;
-      if (await db.countMessages(mailboxId) >= box.retentionLimit) return;
+      // Yerel önbellek tavanı geri doldurmayı durdurmasın ve `trimMailbox`
+      // indirilen eski iletileri geri silmesin.
+      if (await db.countMessages(mailboxId) + SyncEngine.backfillPageSize >=
+          box.retentionLimit) {
+        await db.raiseRetentionLimit(mailboxId);
+      }
       final result = await engine.loadOlder(
         accountId: accountId,
         mailbox: box,
         count: SyncEngine.backfillPageSize,
       );
-      if (result is! Ok<int> || result.value == 0) return;
+      if (result is! Ok<int>) return;
+      final lowest = (await db.lowestUids(mailboxId, limit: 1)).firstOrNull;
+      if (lowest == null || lowest == lastLowest) return;
+      lastLowest = lowest;
     }
   }
 

@@ -80,7 +80,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 22;
+  int get schemaVersion => 23;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -262,6 +262,10 @@ class AppDatabase extends _$AppDatabase {
       if (from < 22) {
         await m.addColumn(messages, messages.deliveryFailedAt);
         await m.addColumn(messages, messages.deliveryFailureReason);
+      }
+      // v22 → v23: Sunucu aramasıyla indirilen iletiler (bkz. `isSearchHit`).
+      if (from < 23) {
+        await m.addColumn(messages, messages.isSearchHit);
       }
     },
     beforeOpen: (details) async {
@@ -768,7 +772,8 @@ class AppDatabase extends _$AppDatabase {
       final anchors =
           'SELECT id, thread_id FROM messages '
           'WHERE account_id = $accountId AND mailbox_id = $mailboxId '
-          'AND is_deleted = 0$draftSql ORDER BY $orderSql LIMIT $limit';
+          'AND is_deleted = 0 AND is_search_hit = 0$draftSql '
+          'ORDER BY $orderSql LIMIT $limit';
       final threadBoxes = hasSent
           ? 'mailbox_id IN ($mailboxId, $sentMailboxId)'
           : 'mailbox_id = $mailboxId';
@@ -776,6 +781,7 @@ class AppDatabase extends _$AppDatabase {
         (m) =>
             m.accountId.equals(accountId) &
             m.isDeleted.equals(false) &
+            m.isSearchHit.equals(false) &
             (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)) &
             CustomExpression<bool>('''
               (id IN (SELECT id FROM ($anchors))
@@ -789,6 +795,7 @@ class AppDatabase extends _$AppDatabase {
             m.accountId.equals(accountId) &
             m.mailboxId.equals(mailboxId) &
             m.isDeleted.equals(false) &
+            m.isSearchHit.equals(false) &
             (excludeDrafts ? m.isDraft.equals(false) : const Constant(true)),
       );
     }
@@ -816,6 +823,7 @@ class AppDatabase extends _$AppDatabase {
               (m) =>
                   m.mailboxId.isIn(mailboxIds) &
                   m.isDeleted.equals(false) &
+                  m.isSearchHit.equals(false) &
                   (excludeDrafts
                       ? m.isDraft.equals(false)
                       : const Constant(true)),
@@ -837,6 +845,7 @@ class AppDatabase extends _$AppDatabase {
               (m) =>
                   m.accountId.equals(accountId) &
                   m.isFlagged.equals(true) &
+                  m.isSearchHit.equals(false) &
                   m.isDeleted.equals(false),
             )
             ..orderBy([
@@ -857,6 +866,7 @@ class AppDatabase extends _$AppDatabase {
               (m) =>
                   m.accountId.isIn(accountIds) &
                   m.isFlagged.equals(true) &
+                  m.isSearchHit.equals(false) &
                   m.isDeleted.equals(false),
             )
             ..orderBy([
@@ -938,7 +948,12 @@ class AppDatabase extends _$AppDatabase {
   Future<int?> lowestUid(int mailboxId) async {
     final row =
         await (select(messages)
-              ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isNotNull())
+              ..where(
+                (m) =>
+                    m.mailboxId.equals(mailboxId) &
+                    m.uid.isNotNull() &
+                    m.isSearchHit.equals(false),
+              )
               ..orderBy([(m) => OrderingTerm(expression: m.uid)])
               ..limit(1))
             .getSingleOrNull();
@@ -948,7 +963,12 @@ class AppDatabase extends _$AppDatabase {
   Future<List<int>> lowestUids(int mailboxId, {int limit = 5}) async {
     final rows =
         await (select(messages)
-              ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isNotNull())
+              ..where(
+                (m) =>
+                    m.mailboxId.equals(mailboxId) &
+                    m.uid.isNotNull() &
+                    m.isSearchHit.equals(false),
+              )
               ..orderBy([(m) => OrderingTerm(expression: m.uid)])
               ..limit(limit))
             .get();
@@ -958,7 +978,12 @@ class AppDatabase extends _$AppDatabase {
   Future<int?> highestUid(int mailboxId) async {
     final row =
         await (select(messages)
-              ..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isNotNull())
+              ..where(
+                (m) =>
+                    m.mailboxId.equals(mailboxId) &
+                    m.uid.isNotNull() &
+                    m.isSearchHit.equals(false),
+              )
               ..orderBy([
                 (m) => OrderingTerm(expression: m.uid, mode: OrderingMode.desc),
               ])
@@ -972,7 +997,10 @@ class AppDatabase extends _$AppDatabase {
     final row =
         await (selectOnly(messages)
               ..addColumns([count])
-              ..where(messages.mailboxId.equals(mailboxId)))
+              ..where(
+                messages.mailboxId.equals(mailboxId) &
+                    messages.isSearchHit.equals(false),
+              ))
             .getSingle();
     return row.read(count) ?? 0;
   }
@@ -985,6 +1013,7 @@ class AppDatabase extends _$AppDatabase {
               ..where(
                 messages.mailboxId.equals(mailboxId) &
                     messages.isSeen.equals(false) &
+                messages.isSearchHit.equals(false) &
                     messages.isDraft.equals(false) &
                     messages.isDeleted.equals(false),
               ))
@@ -1004,6 +1033,7 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.mailboxId.equals(mailboxId) &
                 messages.isSeen.equals(false) &
+                messages.isSearchHit.equals(false) &
                 messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
@@ -1019,6 +1049,7 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.mailboxId.isIn(mailboxIds) &
                 messages.isSeen.equals(false) &
+                messages.isSearchHit.equals(false) &
                 messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
@@ -1034,6 +1065,7 @@ class AppDatabase extends _$AppDatabase {
           ..addColumns([count])
           ..where(
             messages.mailboxId.isIn(mailboxIds) &
+                messages.isSearchHit.equals(false) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
@@ -1049,6 +1081,7 @@ class AppDatabase extends _$AppDatabase {
           ..addColumns([count])
           ..where(
             messages.isSeen.equals(false) &
+                messages.isSearchHit.equals(false) &
                 messages.isDraft.equals(false) &
                 messages.isDeleted.equals(false),
           ))
@@ -1064,6 +1097,7 @@ class AppDatabase extends _$AppDatabase {
               ..where(
                 messages.accountId.equals(accountId) &
                     messages.isFlagged.equals(true) &
+                    messages.isSearchHit.equals(false) &
                     messages.isDeleted.equals(false),
               ))
             .getSingle();
@@ -1080,6 +1114,7 @@ class AppDatabase extends _$AppDatabase {
           ..where(
             messages.accountId.equals(accountId) &
                 messages.isFlagged.equals(true) &
+                messages.isSearchHit.equals(false) &
                 messages.isDeleted.equals(false),
           ))
         .map((row) => row.read(count) ?? 0)
@@ -1141,8 +1176,15 @@ class AppDatabase extends _$AppDatabase {
               ),
             );
           } else {
+            // Normal eşitleme bir arama sonucunu da getirebilir: artık klasörün
+            // olağan bir iletisidir.
             await (update(messages)..where((m) => m.id.equals(existing!.id)))
-                .write(row.copyWith(id: const Value.absent()));
+                .write(
+                  row.copyWith(
+                    id: const Value.absent(),
+                    isSearchHit: const Value(false),
+                  ),
+                );
             // Zarf yenilenirken dizindeki gövde ve önizleme metni KAYBOLMAMALI.
             final body = await bodyOf(existing.id);
             await _writeFts(
@@ -1157,6 +1199,81 @@ class AppDatabase extends _$AppDatabase {
     });
 
     return inserted;
+  }
+
+  /// Sunucu aramasıyla bulunan iletileri "arama sonucu" olarak yazar
+  /// (bkz. [Messages.isSearchHit]). Yerelde zaten olan (aynı klasör+UID) ileti
+  /// ATLANIR — olağan bir satır arama sonucuna dönüştürülmez. Dönüş: yeni
+  /// yazılan sayısı.
+  ///
+  /// [matchedText]: sunucunun bu iletide bulduğu sözcükler. Gövde indirilmediği
+  /// için yerel dizinde yoktur; sunucu "bu iletide geçiyor" dediğinden dizine
+  /// eklenir — yoksa gövdede eşleşen bir sonuç, yerel aramada görünmezdi.
+  Future<int> upsertSearchHits(
+    List<MessagesCompanion> rows, {
+    String matchedText = '',
+  }) async {
+    if (rows.isEmpty) return 0;
+    var stored = 0;
+    await transaction(() async {
+      for (final row in rows) {
+        final uid = row.uid.value;
+        if (uid != null && await messageByUid(row.mailboxId.value, uid) != null) {
+          continue;
+        }
+        final id = await into(messages).insert(
+          row.copyWith(isSearchHit: const Value(true)),
+        );
+        await _writeFts(id, row, body: matchedText);
+        stored++;
+      }
+    });
+    return stored;
+  }
+
+  /// [accountId] hesabının arama sonuçlarından en yeni [keep] tanesi dışındaki
+  /// eskileri siler (yerel önbellek sınırsız şişmesin).
+  Future<void> pruneSearchHits(int accountId, {int keep = 1000}) async {
+    final rows =
+        await (selectOnly(messages)
+              ..addColumns([messages.id])
+              ..where(
+                messages.accountId.equals(accountId) &
+                    messages.isSearchHit.equals(true),
+              )
+              ..orderBy([
+                OrderingTerm(
+                  expression: messages.dateUtc,
+                  mode: OrderingMode.desc,
+                ),
+              ]))
+            .get();
+    if (rows.length <= keep) return;
+    await deleteMessages([
+      for (final row in rows.skip(keep)) row.read(messages.id)!,
+    ]);
+  }
+
+  /// [uids] içinden [mailboxId] klasöründe YEREL olarak bulunmayanlar.
+  Future<List<int>> unknownUids(int mailboxId, List<int> uids) async {
+    if (uids.isEmpty) return const [];
+    final known = <int>{};
+    for (var i = 0; i < uids.length; i += _sqlChunk) {
+      final chunk = uids.sublist(i, min(i + _sqlChunk, uids.length));
+      final rows =
+          await (selectOnly(messages)
+                ..addColumns([messages.uid])
+                ..where(
+                  messages.mailboxId.equals(mailboxId) &
+                      messages.uid.isIn(chunk),
+                ))
+              .get();
+      known.addAll(rows.map((r) => r.read(messages.uid)!));
+    }
+    return [
+      for (final uid in uids)
+        if (!known.contains(uid)) uid,
+    ];
   }
 
   Future<int> insertLocalMessage(MessagesCompanion row) async {
@@ -1289,6 +1406,9 @@ class AppDatabase extends _$AppDatabase {
             ..where(
               (m) =>
                   m.mailboxId.equals(mailboxId) &
+                  // Arama sonuçları kendi sınırıyla budanır (`pruneSearchHits`):
+                  // klasörün kotasını yemez, kotayla da hemen silinmez.
+                  m.isSearchHit.equals(false) &
                   m.isFlagged.equals(false) &
                   m.isDraft.equals(false) &
                   m.outboxState.isIn([
@@ -2294,6 +2414,12 @@ class AppDatabase extends _$AppDatabase {
   /// [accountId] `null` ise tüm hesaplarda arar (arama ekranının "Tüm
   /// Hesaplar" kapsamı) — hepsi zaten aynı yerel veritabanında. [filters]
   /// sonuçları daraltır (bkz. [SearchFilters]).
+  ///
+  /// [query] aranabilir sözcük içermiyorsa ve [filters] tek başına seçim
+  /// yapmıyorsa (bkz. [SearchFilters.selectsOnItsOwn]) sonuç boştur; filtre
+  /// varsa metin olmadan da filtreye uyan en yeni iletiler döner ("Ekli",
+  /// bir tarih penceresi, bir kişi ya da bir klasör tek başına tam bir
+  /// aramadır — web'deki `isRunnableSearch` ile aynı kural).
   Future<List<int>> searchMessageIds({
     int? accountId,
     required String query,
@@ -2301,17 +2427,22 @@ class AppDatabase extends _$AppDatabase {
     int limit = 200,
   }) async {
     final match = buildFtsQuery(query);
-    if (match == null) return const [];
+    if (match == null && !filters.selectsOnItsOwn) return const [];
     final accountClause = accountId == null ? '' : 'AND m.account_id = ? ';
     final filter = _messageFilterSql(filters);
     final rows = await customSelect(
-      'SELECT f.rowid AS mid FROM messages_fts f '
-      'JOIN messages m ON m.id = f.rowid '
-      'JOIN mailboxes mb ON mb.id = m.mailbox_id '
-      'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
-      'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?',
+      match == null
+          ? 'SELECT m.id AS mid FROM messages m '
+                'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+                'WHERE 1 = 1 $accountClause${filter.sql} '
+                'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?'
+          : 'SELECT f.rowid AS mid FROM messages_fts f '
+                'JOIN messages m ON m.id = f.rowid '
+                'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+                'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
+                'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?',
       variables: [
-        Variable<String>(match),
+        if (match != null) Variable<String>(match),
         if (accountId != null) Variable<int>(accountId),
         ...filter.variables,
         Variable<int>(limit),
@@ -2352,7 +2483,61 @@ class AppDatabase extends _$AppDatabase {
         variables.add(Variable<String>(name));
       }
     }
+
+    final range = filters.dateRange;
+    if (filters.hasDate && range == null) {
+      // Uçları ters bir pencere hiçbir iletiyle eşleşmez.
+      clauses.add('AND 0');
+    } else if (range != null) {
+      final after = range.after;
+      final before = range.before;
+      if (after != null) {
+        clauses.add('AND m.date_utc >= ?');
+        variables.add(Variable<DateTime>(after));
+      }
+      if (before != null) {
+        clauses.add('AND m.date_utc < ?');
+        variables.add(Variable<DateTime>(before));
+      }
+    }
+
+    final sender = filters.sender;
+    if (sender != null) {
+      clauses.add('AND lower(m.from_email) = ?');
+      variables.add(Variable<String>(sender.toLowerCase()));
+    }
+
+    final recipient = filters.recipient;
+    if (recipient != null) {
+      final pattern = _recipientLikePattern(recipient);
+      clauses.add(
+        "AND (lower(m.to_addr_json) LIKE ? ESCAPE '$_likeEscape' "
+        "OR lower(m.cc_json) LIKE ? ESCAPE '$_likeEscape' "
+        "OR lower(m.bcc_json) LIKE ? ESCAPE '$_likeEscape')",
+      );
+      variables.addAll([
+        Variable<String>(pattern),
+        Variable<String>(pattern),
+        Variable<String>(pattern),
+      ]);
+    }
     return (sql: clauses.join(' '), variables: variables);
+  }
+
+  /// `LIKE` kaçış karakteri (ters eğik çizgi, SQL/Dart kaçışlarıyla
+  /// karışmasın diye `#`).
+  static const String _likeEscape = '#';
+
+  /// Alıcı sütunları JSON olarak saklanır (`[{"e":"adres","n":"Ad"}]`): adres,
+  /// tam eşleşme için `"e":"…"` kalıbıyla aranır; `%`, `_` ve kaçış karakteri
+  /// adresin içinde geçse bile düz metin sayılır.
+  static String _recipientLikePattern(String recipient) {
+    final escaped = recipient
+        .toLowerCase()
+        .replaceAll(_likeEscape, '$_likeEscape$_likeEscape')
+        .replaceAll('%', '$_likeEscape%')
+        .replaceAll('_', '${_likeEscape}_');
+    return '%"e":"$escaped"%';
   }
 
   /// Ad veya e-postada geçen kişileri arar (Türkçe-duyarlı, bkz.
@@ -2449,6 +2634,33 @@ class AppDatabase extends _$AppDatabase {
       q.where(mailboxes.specialUse.equalsValue(folder.use));
       final name = folder.customName;
       if (name != null) q.where(mailboxes.name.equals(name));
+    }
+    if (filters.hasDate && filters.dateRange == null) {
+      q.where(const Constant(false)); // uçları ters pencere: eşleşen yok
+    }
+    final range = filters.dateRange;
+    if (range != null) {
+      final after = range.after;
+      final before = range.before;
+      if (after != null) {
+        q.where(messages.dateUtc.isBiggerOrEqualValue(after));
+      }
+      if (before != null) {
+        q.where(messages.dateUtc.isSmallerThanValue(before));
+      }
+    }
+    final sender = filters.sender;
+    if (sender != null) {
+      q.where(messages.fromEmail.lower().equals(sender.toLowerCase()));
+    }
+    final recipient = filters.recipient;
+    if (recipient != null) {
+      final pattern = _recipientLikePattern(recipient);
+      q.where(
+        messages.toAddrJson.lower().like(pattern, escapeChar: _likeEscape) |
+            messages.ccJson.lower().like(pattern, escapeChar: _likeEscape) |
+            messages.bccJson.lower().like(pattern, escapeChar: _likeEscape),
+      );
     }
     // Gözat modunda hiçbir alan süzülmeyeceği için `limit` doğrudan SQL'de
     // uygulanır — aksi hâlde hesaptaki tüm ekler belleğe okunurdu.

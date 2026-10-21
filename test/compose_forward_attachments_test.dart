@@ -63,30 +63,36 @@ void main() {
     );
     await secureStore.writePassword(accountId, 'sifre');
 
-    inboxId = await db.into(db.mailboxes).insert(
-      MailboxesCompanion.insert(
-        accountId: accountId,
-        path: 'INBOX',
-        name: 'Gelen Kutusu',
-        specialUse: const Value(SpecialUse.inbox),
-      ),
-    );
-    await db.into(db.mailboxes).insert(
-      MailboxesCompanion.insert(
-        accountId: accountId,
-        path: 'Sent',
-        name: 'Gönderilenler',
-        specialUse: const Value(SpecialUse.sent),
-      ),
-    );
-    await db.into(db.mailboxes).insert(
-      MailboxesCompanion.insert(
-        accountId: accountId,
-        path: 'Drafts',
-        name: 'Taslaklar',
-        specialUse: const Value(SpecialUse.drafts),
-      ),
-    );
+    inboxId = await db
+        .into(db.mailboxes)
+        .insert(
+          MailboxesCompanion.insert(
+            accountId: accountId,
+            path: 'INBOX',
+            name: 'Gelen Kutusu',
+            specialUse: const Value(SpecialUse.inbox),
+          ),
+        );
+    await db
+        .into(db.mailboxes)
+        .insert(
+          MailboxesCompanion.insert(
+            accountId: accountId,
+            path: 'Sent',
+            name: 'Gönderilenler',
+            specialUse: const Value(SpecialUse.sent),
+          ),
+        );
+    await db
+        .into(db.mailboxes)
+        .insert(
+          MailboxesCompanion.insert(
+            accountId: accountId,
+            path: 'Drafts',
+            name: 'Taslaklar',
+            specialUse: const Value(SpecialUse.drafts),
+          ),
+        );
   });
 
   tearDown(() async {
@@ -126,12 +132,14 @@ void main() {
       ),
     ]);
     final msg = (await db.messageByUid(inboxId, 101))!;
-    await db.into(db.messageBodies).insert(
-      MessageBodiesCompanion.insert(
-        messageId: Value(msg.id),
-        plainText: const Value('Orijinal ileti metni'),
-      ),
-    );
+    await db
+        .into(db.messageBodies)
+        .insert(
+          MessageBodiesCompanion.insert(
+            messageId: Value(msg.id),
+            plainText: const Value('Orijinal ileti metni'),
+          ),
+        );
     return msg.id;
   }
 
@@ -158,10 +166,7 @@ void main() {
           quickTemplatesStoreProvider.overrideWithValue(quickTemplatesStore),
         ],
         child: MaterialApp(
-          home: ComposeScreen(
-            replyToId: replyToId,
-            mode: ComposeMode.forward,
-          ),
+          home: ComposeScreen(replyToId: replyToId, mode: ComposeMode.forward),
         ),
       ),
     );
@@ -171,58 +176,65 @@ void main() {
   }
 
   group('İletirken ekleri doldurma (Forward with attachments)', () {
-    appTest('Yerelde kayıtlı ekler iletme ekranına anında otomatik iliştirilir ve CC bilgisi eklenir', (tester) async {
-      final msgId = await createOriginalMessage(
-        subject: 'Sözleşme ve Ekler',
-        fromEmail: 'avukat@hukuk.com',
-        toEmail: 'info@pazarlik.com.tr',
-        ccEmail: 'muhasebe@pazarlik.com.tr',
-        hasAttachments: true,
-      );
+    appTest(
+      'Yerelde kayıtlı ekler iletme ekranına anında otomatik iliştirilir ve CC bilgisi eklenir',
+      (tester) async {
+        final msgId = await createOriginalMessage(
+          subject: 'Sözleşme ve Ekler',
+          fromEmail: 'avukat@hukuk.com',
+          toEmail: 'info@pazarlik.com.tr',
+          ccEmail: 'muhasebe@pazarlik.com.tr',
+          hasAttachments: true,
+        );
 
-      final testFile = File('${tempDir.path}/sozlesme.pdf');
-      testFile.writeAsStringSync('PDF içeriği');
+        final testFile = File('${tempDir.path}/sozlesme.pdf');
+        testFile.writeAsStringSync('PDF içeriği');
 
-      await db.addAttachment(
-        AttachmentsCompanion.insert(
-          messageId: msgId,
-          fileName: const Value('sozlesme.pdf'),
-          mimeType: const Value('application/pdf'),
-          sizeBytes: const Value(1024),
-          localPath: Value(testFile.path),
-          isInline: const Value(false),
-        ),
-      );
+        await db.addAttachment(
+          AttachmentsCompanion.insert(
+            messageId: msgId,
+            fileName: const Value('sozlesme.pdf'),
+            mimeType: const Value('application/pdf'),
+            sizeBytes: const Value(1024),
+            localPath: Value(testFile.path),
+            isInline: const Value(false),
+          ),
+        );
 
-      await pumpForwardCompose(tester, replyToId: msgId);
+        await pumpForwardCompose(tester, replyToId: msgId);
 
-      // Ekler listesinde sozlesme.pdf hazır olarak bulunmalı
-      expect(find.text('sozlesme.pdf'), findsOneWidget);
+        // Ekler listesinde sozlesme.pdf hazır olarak bulunmalı
+        expect(find.byTooltip('sozlesme.pdf'), findsOneWidget);
 
-      // Alıntı katlanmış durumdadır; açılınca başlıkta Bilgi (CC) satırı görünür
-      expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
-      await tester.tap(find.byTooltip('Alıntılanan metni göster'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+        // Alıntı katlanmış durumdadır; açılınca başlıkta Bilgi (CC) satırı görünür
+        expect(find.byTooltip('Alıntılanan metni göster'), findsOneWidget);
+        await tester.tap(find.byTooltip('Alıntılanan metni göster'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
 
-      // İletilen ileti başlığında Bilgi (CC) satırı bulunmalı
-      expect(
-        find.byWidgetPredicate(
-          (w) =>
-              w is RichText &&
-              w.text.toPlainText().contains('---------- İletilen ileti ----------'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.byWidgetPredicate(
-          (w) =>
-              w is RichText &&
-              w.text.toPlainText().contains('Bilgi: muhasebe@pazarlik.com.tr'),
-        ),
-        findsOneWidget,
-      );
-    });
+        // İletilen ileti başlığında Bilgi (CC) satırı bulunmalı
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is RichText &&
+                w.text.toPlainText().contains(
+                  '---------- İletilen ileti ----------',
+                ),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is RichText &&
+                w.text.toPlainText().contains(
+                  'Bilgi: muhasebe@pazarlik.com.tr',
+                ),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
 
     appTest('İletme ekranında ek kaldırılabilir (onRemove)', (tester) async {
       final msgId = await createOriginalMessage(
@@ -246,7 +258,7 @@ void main() {
 
       await pumpForwardCompose(tester, replyToId: msgId);
 
-      expect(find.text('teklif.pdf'), findsOneWidget);
+      expect(find.byTooltip('teklif.pdf'), findsOneWidget);
 
       // Ekin 'Kaldır' butonuna bas
       expect(find.byTooltip('Kaldır'), findsOneWidget);
@@ -254,54 +266,69 @@ void main() {
       await tester.pumpAndSettle();
 
       // Ek artık görünmemeli
-      expect(find.text('teklif.pdf'), findsNothing);
+      expect(find.byTooltip('teklif.pdf'), findsNothing);
     });
 
-    appTest('Henüz indirilmemiş ek için yükleme kartı gösterilir ve gönderilmeye çalışılırsa engellenir', (tester) async {
-      final msgId = await createOriginalMessage(
-        subject: 'Büyük Dosya',
-        hasAttachments: true,
-      );
+    appTest(
+      'Henüz indirilmemiş ek için yükleme kartı gösterilir ve gönderilmeye çalışılırsa engellenir',
+      (tester) async {
+        final msgId = await createOriginalMessage(
+          subject: 'Büyük Dosya',
+          hasAttachments: true,
+        );
 
-      // Yerelde olmayan (localPath null) ek ekle
-      await db.addAttachment(
-        AttachmentsCompanion.insert(
-          messageId: msgId,
-          fileName: const Value('dokuman.docx'),
-          mimeType: const Value('application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
-          sizeBytes: const Value(5000000),
-          localPath: const Value(null),
-          isInline: const Value(false),
-        ),
-      );
+        // Yerelde olmayan (localPath null) ek ekle
+        await db.addAttachment(
+          AttachmentsCompanion.insert(
+            messageId: msgId,
+            fileName: const Value('dokuman.docx'),
+            mimeType: const Value(
+              'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            ),
+            sizeBytes: const Value(5000000),
+            localPath: const Value(null),
+            isInline: const Value(false),
+          ),
+        );
 
-      // imap.bodyDelay ile indirmeyi geciktirerek pending durumunu test et
-      imap.bodyDelay = const Duration(seconds: 10);
+        // imap.bodyDelay ile indirmeyi geciktirerek pending durumunu test et
+        imap.bodyDelay = const Duration(seconds: 10);
 
-      await pumpForwardCompose(tester, replyToId: msgId);
+        await pumpForwardCompose(tester, replyToId: msgId);
 
-      // Pending kartında dosya adı ve Hazırlanıyor yazısı görünmeli
-      expect(find.text('dokuman.docx'), findsOneWidget);
-      expect(find.textContaining('Hazırlanıyor…'), findsOneWidget);
+        // Pending çipinde dosya adı ve yükleniyor göstergesi görünmeli
+        // ("Hazırlanıyor…" metni artık yalnızca liste sayfasındaki satırda).
+        expect(find.byTooltip('dokuman.docx'), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byTooltip('dokuman.docx'),
+            matching: find.byType(CircularProgressIndicator),
+          ),
+          findsOneWidget,
+        );
 
-      // Alıcı gir ve Gönder'e bas
-      final textFields = find.byType(TextField);
-      await tester.enterText(textFields.first, 'alici@example.com');
-      await tester.pump();
+        // Alıcı gir ve Gönder'e bas
+        final textFields = find.byType(TextField);
+        await tester.enterText(textFields.first, 'alici@example.com');
+        await tester.pump();
 
-      await tester.tap(find.byTooltip('Gönder'));
-      await tester.pump();
+        await tester.tap(find.byTooltip('Gönder'));
+        await tester.pump();
 
-      // "Ekler hazırlanıyor, lütfen bekleyin…" uyarısı çıkmalı
-      expect(find.text('Ekler hazırlanıyor, lütfen bekleyin…'), findsOneWidget);
+        // "Ekler hazırlanıyor, lütfen bekleyin…" uyarısı çıkmalı
+        expect(
+          find.text('Ekler hazırlanıyor, lütfen bekleyin…'),
+          findsOneWidget,
+        );
 
-      // İptal etmek için ekin üzerindeki 'Kaldır' (X) butonuna bas
-      expect(find.byTooltip('Kaldır'), findsOneWidget);
-      await tester.tap(find.byTooltip('Kaldır'));
-      await tester.pump();
+        // İptal etmek için ekin üzerindeki 'Kaldır' (X) butonuna bas
+        expect(find.byTooltip('Kaldır'), findsOneWidget);
+        await tester.tap(find.byTooltip('Kaldır'));
+        await tester.pump();
 
-      // Pending kartı kaldırılmış olmalı
-      expect(find.text('dokuman.docx'), findsNothing);
-    });
+        // Pending kartı kaldırılmış olmalı
+        expect(find.byTooltip('dokuman.docx'), findsNothing);
+      },
+    );
   });
 }

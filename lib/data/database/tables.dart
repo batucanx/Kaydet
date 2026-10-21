@@ -127,6 +127,15 @@ class Messages extends Table {
   /// garanti değildir; bkz. `MailRepository._markSourceMessage`.
   BoolColumn get isForwarded => boolean().withDefault(const Constant(false))();
 
+  /// Yalnızca sunucu aramasıyla bulunup yerele indirilmiş (klasörün eşitleme
+  /// penceresinin DIŞINDAKİ) ileti. Aranır, listelenir ve açılır; ama klasör
+  /// listelerine, sayaçlara ve eşitleme sınırlarına (en düşük/yüksek UID)
+  /// KATILMAZ — aksi hâlde çok eski bir sonuç "daha eski iletileri yükle"
+  /// sınırını bozar, yeni bir sonuç artımlı eşitlemeyi atlatırdı. Normal
+  /// eşitleme aynı iletiyi getirirse bayrak kalkar (bkz.
+  /// `AppDatabase.upsertServerMessages`).
+  BoolColumn get isSearchHit => boolean().withDefault(const Constant(false))();
+
   BoolColumn get hasAttachments =>
       boolean().withDefault(const Constant(false))();
   IntColumn get sizeBytes => integer().withDefault(const Constant(0))();

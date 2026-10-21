@@ -266,14 +266,32 @@ class MailConnection {
 
   /// Hesabın kimlik bilgisini güvenli depodan üretir.
   Future<Result<MailCredential>> _credentialFor(AccountRow account) async {
-    final String? password;
-    try {
-      password = await _secureStore.readPassword(account.id);
-    } on Object catch (error) {
-      // Keystore geçici olarak okunamadı (ör. yeniden başlatma sonrası).
+    String? password;
+    Object? readError;
+    // Keystore geçici olarak okunamayabilir (arka plan motoru aynı anda
+    // okuyorsa ya da yeniden başlatma sonrası anahtar hazır değilse); kısa
+    // aralıklarla birkaç kez denenir.
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        password = await _secureStore.readPassword(account.id);
+        readError = null;
+        break;
+      } on Object catch (error) {
+        readError = error;
+        if (attempt < 2) {
+          await Future<void>.delayed(Duration(milliseconds: 300 * (attempt + 1)));
+        }
+      }
+    }
+    if (readError != null) {
+      // Anahtar kalıcı bozulduysa (yarım kalan geçiş) yeniden denemek işe
+      // yaramaz: depo sıfırlanır ve kullanıcı yeniden girişe yönlendirilir.
+      if (await _secureStore.resetIfCorrupt(readError)) {
+        return const Err(AuthFailure(detail: 'güvenli depo bozuldu'));
+      }
       // Bu bir kimlik hatası DEĞİL: kullanıcıyı yeniden girişe yönlendirmez,
       // depoya da dokunmaz; bir sonraki denemede yeniden okunur.
-      return Err(StorageFailure(detail: '$error'));
+      return Err(StorageFailure(detail: '$readError'));
     }
     if (password == null || password.isEmpty) {
       return const Err(AuthFailure(detail: 'kayıtlı şifre yok'));

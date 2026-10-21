@@ -44,6 +44,11 @@ import '../../core/theme/tokens.dart';
 ///    `<kd-root>`'tan önce, yüksekliği `--kd-top` CSS değişkeninden gelen bir
 ///    boşluk öğesi (`#kd-top`) durur. Değişkeni Flutter yazar; öğe satır içi
 ///    `!important` taşıdığından e-postanın kendi CSS'i onu ezemez.
+///
+/// 6. **Yumuşak belirme** — `<kd-root>` `opacity:0` başlar; render betiği düzen
+///    oturunca `<html>`e `kd-in` sınıfını ekler ve içerik CSS geçişiyle solarak
+///    gelir (tarayıcı kompozitöründe; Flutter karelerinden bağımsız). Betik hiç
+///    çalışmazsa CSS animasyonu 1,6 sn sonra içeriği yine de gösterir.
 abstract final class MailHtmlDocument {
   static const String _scriptAsset = 'assets/web/mail_render.js';
 
@@ -155,6 +160,9 @@ video, iframe, embed, object { max-width: 100%; }
 img:not([width="1"]):not([height="1"]) { height: auto; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 kd-root { display: flow-root; }
+kd-root { opacity: 0; animation: kd-safety .2s ease-out 1.6s forwards; }
+html.kd-in kd-root { opacity: 1; animation: none; transition: opacity .3s ease-out; }
+@keyframes kd-safety { to { opacity: 1; } }
 </style>
 <script nonce="$nonce">window.__kaydet = $config;</script>
 <script nonce="$nonce">

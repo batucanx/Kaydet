@@ -1,16 +1,16 @@
 import 'dart:async';
 
+import 'package:drift/drift.dart' show TableInfo, TableUpdateQuery;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/result.dart';
 import '../core/turkish.dart';
 import '../data/database/app_database.dart';
+import '../data/repositories/sync_engine.dart';
 import '../data/services/search_history_store.dart';
 import '../domain/models/search_filters.dart';
 import '../domain/use_cases/folder_mapping.dart';
 import 'providers.dart';
-
-/// Arama ekranının filtre çipleri.
-enum SearchCategory { all, mail, contacts, files }
 
 /// Aranan metin — 250ms debounce ile yazılır (bkz. eski
 /// `SearchQueryNotifier`, aynı desen). `autoDispose`: ekran kapanınca
@@ -46,25 +46,12 @@ final searchQueryProvider =
       SearchQueryNotifier.new,
     );
 
-class SearchCategoryNotifier extends Notifier<SearchCategory> {
-  @override
-  SearchCategory build() => SearchCategory.all;
-
-  void select(SearchCategory value) => state = value;
-}
-
-final searchCategoryProvider =
-    NotifierProvider.autoDispose<SearchCategoryNotifier, SearchCategory>(
-      SearchCategoryNotifier.new,
-    );
-
 /// Arama kapsamı: hangi hesapta aranıyor. Varsayılan = o an etkin hesap;
 /// `null` = Tüm Hesaplar (kullanıcı sağ üstteki hesap menüsünden seçer).
 class SearchScopeNotifier extends Notifier<int?> {
   @override
-  int? build() => ref.read(isAllAccountsProvider)
-      ? null
-      : ref.read(accountIdProvider);
+  int? build() =>
+      ref.read(isAllAccountsProvider) ? null : ref.read(accountIdProvider);
 
   void select(int? accountId) => state = accountId;
 }
@@ -76,9 +63,10 @@ final searchScopeProvider =
 
 // --------------------------------------------------------------- filtreler
 
-/// Posta kaynaklı sonuçlara (posta, dosyalar) uygulanan filtreler —
-/// "Filtreler" sayfasında (bkz. `SearchFiltersScreen`) "Uygula" ile yazılır.
-/// Kişi sonuçları filtrelenmez.
+/// Posta kaynaklı sonuçlara (posta, dosyalar) uygulanan filtreler — arama
+/// ekranındaki çiplerle (Ekli · Tarih · Klasörler · Gönderen · Alıcı, bkz.
+/// `SearchFilterChips`) her seçimde anında yazılır. Kişi sonuçları
+/// filtrelenmez.
 class SearchFiltersNotifier extends Notifier<SearchFilters> {
   @override
   SearchFilters build() {
@@ -89,12 +77,16 @@ class SearchFiltersNotifier extends Notifier<SearchFilters> {
     ref.listen(searchScopeProvider, (_, _) {
       if (state.folder != null) state = state.copyWith(folder: () => null);
     });
-    return const SearchFilters();
+    return _initial;
   }
+
+  /// "Tüm Klasörler" araması Çöp Kutusu'nu da kapsar (web'deki gibi — çiplerde
+  /// bunun için bir anahtar yoktur, bkz. [SearchFilters.includeDeleted]).
+  static const _initial = SearchFilters(includeDeleted: true);
 
   void apply(SearchFilters filters) => state = filters;
 
-  void clear() => state = const SearchFilters();
+  void clear() => state = _initial;
 }
 
 final searchFiltersProvider =
@@ -127,30 +119,101 @@ final searchFolderOptionsProvider =
       return options;
     });
 
+// --------------------------------------------------------- sunucu araması
+
+/// Yazı yazmayı bıraktıktan sonra sunucu aramasının başlamasına kadar bekleme
+/// (her tuş vuruşunda yüzlerce klasörü taramamak için).
+const _remoteSearchDelay = Duration(milliseconds: 600);
+
+/// Sunucu araması: yerelde OLMAYAN (eski) iletiler IMAP `SEARCH` ile bulunur
+/// ve yerele "arama sonucu" olarak yazılır (bkz. `SyncEngine.searchRemote`);
+/// [mailSearchResultsProvider] tabloyu izlediğinden sonuçlar listeye kendiliğinden
+/// eklenir. Yerel sonuçlar bunu BEKLEMEZ.
+///
+/// Değer: bu aramada yerele eklenen ileti sayısı. Hata: hiçbir klasör
+/// aranamadı (ör. çevrimdışı) — ekran yerel sonuçlarla devam eder ve bunu
+/// bildirir. Sorgu/filtre değişirse (provider yeniden kurulur) sürmekte olan
+/// arama klasörler arasında durdurulur.
+final remoteSearchProvider = FutureProvider.autoDispose<int>((ref) async {
+  final query = ref.watch(searchQueryProvider);
+  final filters = ref.watch(searchFiltersProvider);
+  final scope = ref.watch(searchScopeProvider);
+  // Sunucuya gidecek bir ölçüt yoksa (yalnızca klasör/"Ekli" ya da boş ekran)
+  // bekleme ve ilerleme çubuğu da yok.
+  final hasCriteria =
+      SyncEngine.remoteSearchWords(query).isNotEmpty ||
+      filters.sender != null ||
+      filters.recipient != null ||
+      filters.hasDate;
+  if (filters.filesOnly || !hasCriteria) return 0;
+  final accounts = ref.watch(allAccountsProvider).value ?? const [];
+
+  var cancelled = false;
+  ref.onDispose(() => cancelled = true);
+  await Future<void>.delayed(_remoteSearchDelay);
+  if (cancelled) return 0;
+
+  final result = await ref
+      .read(syncEngineProvider)
+      .searchRemote(
+        accountIds: scope != null ? [scope] : [for (final a in accounts) a.id],
+        query: query,
+        filters: filters,
+        isCancelled: () => cancelled,
+      );
+  return switch (result) {
+    Ok<int>(:final value) => value,
+    Err<int>(:final failure) => throw failure,
+  };
+});
+
 // -------------------------------------------------------------- sonuçlar
 
-final mailSearchResultsProvider = FutureProvider.autoDispose<List<MessageRow>>((
+/// [run]'ı bir kez çalıştırır, ardından [tables]'ta HER değişiklikte yeniden
+/// çalıştırıp yeni sonucu yayar.
+///
+/// Arama sonuçları tek seferlik sorgulardır; ekran açıkken bir taslak
+/// silinir, bir ileti taşınır ya da senkronizasyon bir ileti getirirse liste
+/// eski kalırdı (silinen taslak sonuçta görünmeye devam ederdi).
+Stream<T> _rerunOnChange<T>(
+  AppDatabase db,
+  Set<TableInfo<dynamic, dynamic>> tables,
+  Future<T> Function() run,
+) async* {
+  yield await run();
+  await for (final _ in db.tableUpdates(TableUpdateQuery.onAllTables(tables))) {
+    yield await run();
+  }
+}
+
+final mailSearchResultsProvider = StreamProvider.autoDispose<List<MessageRow>>((
   ref,
-) async {
+) {
   final query = ref.watch(searchQueryProvider);
-  if (query.trim().isEmpty) return const [];
-  final scope = ref.watch(searchScopeProvider);
   final filters = ref.watch(searchFiltersProvider);
+  // Yazı olmadan yalnızca tek başına seçim yapan bir filtre (Ekli, tarih,
+  // kişi, klasör) tam bir aramadır — en yeni eşleşen iletiler listelenir.
+  if (filters.filesOnly || (query.trim().isEmpty && !filters.selectsOnItsOwn)) {
+    return Stream.value(const <MessageRow>[]);
+  }
+  final scope = ref.watch(searchScopeProvider);
   final db = ref.watch(databaseProvider);
-  final ids = await db.searchMessageIds(
-    accountId: scope,
-    query: query,
-    filters: filters,
-  );
-  if (ids.isEmpty) return const [];
-  final rows = await db.messagesByIds(ids);
-  // Sorgunun tarih sırasını (yeniden eskiye) koru — `messagesByIds` id
-  // sırasını korumaz.
-  final byId = {for (final row in rows) row.id: row};
-  return [
-    for (final id in ids)
-      if (byId[id] != null) byId[id]!,
-  ];
+  return _rerunOnChange(db, {db.messages, db.mailboxes}, () async {
+    final ids = await db.searchMessageIds(
+      accountId: scope,
+      query: query,
+      filters: filters,
+    );
+    if (ids.isEmpty) return const <MessageRow>[];
+    final rows = await db.messagesByIds(ids);
+    // Sorgunun tarih sırasını (yeniden eskiye) koru — `messagesByIds` id
+    // sırasını korumaz.
+    final byId = {for (final row in rows) row.id: row};
+    return [
+      for (final id in ids)
+        if (byId[id] != null) byId[id]!,
+    ];
+  });
 });
 
 /// Sonuçtaki iletilerin klasör etiketi ("Taslak", "Gelen Kutusu"…) için.
@@ -165,12 +228,14 @@ final searchResultMailboxesProvider =
     });
 
 final contactSearchResultsProvider =
-    FutureProvider.autoDispose<List<ContactRow>>((ref) async {
+    StreamProvider.autoDispose<List<ContactRow>>((ref) {
       final query = ref.watch(searchQueryProvider);
-      if (query.trim().isEmpty) return const [];
+      if (query.trim().isEmpty) return Stream.value(const <ContactRow>[]);
       final scope = ref.watch(searchScopeProvider);
       final db = ref.watch(databaseProvider);
-      return db.searchContacts(accountId: scope, query: query);
+      return _rerunOnChange(db, {
+        db.contacts,
+      }, () => db.searchContacts(accountId: scope, query: query));
     });
 
 /// [query] boşsa Outlook'un Dosyalar sekmesi gibi en son ekleri gözat
@@ -178,16 +243,37 @@ final contactSearchResultsProvider =
 /// kategori sağlayıcılarının (posta, kişiler) aksine boş sorguda erken
 /// dönmez.
 final attachmentSearchResultsProvider =
-    FutureProvider.autoDispose<List<AttachmentSearchResult>>((ref) async {
+    StreamProvider.autoDispose<List<AttachmentSearchResult>>((ref) {
       final query = ref.watch(searchQueryProvider);
       final scope = ref.watch(searchScopeProvider);
       final filters = ref.watch(searchFiltersProvider);
+      // Ekler yalnızca "Dosyalar" çipi açıkken listelenir.
+      if (!filters.filesOnly) {
+        return Stream.value(const <AttachmentSearchResult>[]);
+      }
       final db = ref.watch(databaseProvider);
-      return db.searchAttachments(
-        accountId: scope,
-        query: query,
-        filters: filters,
+      return _rerunOnChange(
+        db,
+        {db.attachments, db.messages, db.mailboxes},
+        () => db.searchAttachments(
+          accountId: scope,
+          query: query,
+          filters: filters,
+        ),
       );
+    });
+
+/// "Gönderen" / "Alıcı" seçicisinin kişileri: [text] boşsa arama kapsamının
+/// en son kullanılan kişileri, doluysa ad/e-postada geçenler (web'deki
+/// `PeoplePicker` ile aynı).
+final searchPeopleProvider = FutureProvider.autoDispose
+    .family<List<ContactRow>, String>((ref, text) async {
+      final scope = ref.watch(searchScopeProvider);
+      final db = ref.watch(databaseProvider);
+      if (text.trim().isEmpty) {
+        return db.watchRecentContacts(accountId: scope, limit: 30).first;
+      }
+      return db.searchContacts(accountId: scope, query: text);
     });
 
 /// [recentContactsProvider]'ın ham akışı — arama ekranının hesap kapsamına
