@@ -467,6 +467,11 @@ class SyncController extends Notifier<SyncState> {
     _quietUntil = DateTime.now().add(_eventQuietPeriod);
   }
 
+  /// Çöp/İstenmeyen eşitlemesi (bkz. [_syncSecondaryFolders]).
+  static const _secondaryFolderDelay = Duration(seconds: 4);
+  static const _secondaryFolderGap = Duration(minutes: 2);
+  final Map<int, DateTime> _lastSecondarySync = {};
+
   /// Hesap başına iki yoklama arasındaki en kısa süre.
   static const _unreadRefreshGap = Duration(seconds: 60);
   final Map<int, DateTime> _lastUnreadRefresh = {};
@@ -565,16 +570,6 @@ class SyncController extends Notifier<SyncState> {
         );
       }
 
-      // Çöp ve İstenmeyen'in rozeti yerel sayımla gösterilir; klasöre girilene
-      // kadar eşitlenmezse başka bir cihazdaki okundu/okunmadı değişikliği
-      // (ve silmeler) burada görünmez.
-      for (final use in const [SpecialUse.trash, SpecialUse.junk]) {
-        final box = boxes.where((m) => m.specialUse == use).firstOrNull;
-        if (box != null) {
-          _fireAndForget(engine.syncMailbox(accountId: accountId, mailbox: box));
-        }
-      }
-
       state = state.copyWith(
         lastSyncAt: DateTime.now(),
         hasMore:
@@ -609,6 +604,8 @@ class SyncController extends Notifier<SyncState> {
       _fireAndForget(
         _maybeNotify(inbox.first, (outcome as Ok<SyncOutcome>).value),
       );
+
+      _fireAndForget(_syncSecondaryFolders(accountId));
     } finally {
       _running = false;
       _markQuiet();
@@ -617,6 +614,56 @@ class SyncController extends Notifier<SyncState> {
         await _restartIdle();
         _drainPendingFolderSync();
       }
+    }
+  }
+
+  /// Çöp ve İstenmeyen'in rozeti yerel sayımla gösterilir; klasöre girilene
+  /// kadar eşitlenmezse başka bir cihazdaki okundu/okunmadı değişikliği (ve
+  /// silmeler) burada görünmez.
+  ///
+  /// Kullanıcıyı HİÇ geciktirmemesi için: ilk tur ve kullanıcı eylemleri
+  /// bittikten [_secondaryFolderDelay] sonra, klasör klasör ve yalnızca başka
+  /// bir tur sürmüyorsa çalışır; hesap başına en çok [_secondaryFolderGap]'te
+  /// bir. Tek IMAP bağlantısında son eşitlenen klasör seçili kalır (IDLE onu
+  /// izlerdi), bu yüzden sonda görüntülenen klasör geri seçilir.
+  Future<void> _syncSecondaryFolders(int accountId) async {
+    final last = _lastSecondarySync[accountId];
+    if (last != null &&
+        DateTime.now().difference(last) < _secondaryFolderGap) {
+      return;
+    }
+    _lastSecondarySync[accountId] = DateTime.now();
+
+    await Future<void>.delayed(_secondaryFolderDelay);
+
+    bool busy() =>
+        _disposed ||
+        _paused ||
+        _running ||
+        _foldersSyncing ||
+        !_isCurrent(accountId);
+
+    var synced = false;
+    try {
+      for (final use in const [SpecialUse.trash, SpecialUse.junk]) {
+        if (busy()) return;
+        // Bayat satır değil: geciktirme sırasında başka bir tur güncellemiş olabilir.
+        final box = await ref
+            .read(databaseProvider)
+            .mailboxBySpecialUse(accountId, use);
+        if (box == null || busy()) continue;
+        synced = true;
+        final result = await ref
+            .read(syncEngineProvider)
+            .syncMailbox(accountId: accountId, mailbox: box);
+        // Başarısız tur bir sonrakinde hemen yeniden denensin.
+        if (result is Err<SyncOutcome>) {
+          _lastSecondarySync.remove(accountId);
+          return;
+        }
+      }
+    } finally {
+      if (synced && !busy()) await syncCurrentFolder();
     }
   }
 
