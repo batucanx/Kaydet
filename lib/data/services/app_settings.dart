@@ -79,7 +79,6 @@ class AppSettings {
     this.groupMessages = true,
     this.syncFrequency = SyncFrequency.push,
     this.confirmBeforeDelete = true,
-    this.markSeenDelayMs = 1500,
     this.swipeRight = SwipeAction.configure,
     this.swipeLeft = SwipeAction.delete,
   });
@@ -103,12 +102,6 @@ class AppSettings {
   final SyncFrequency syncFrequency;
   final bool confirmBeforeDelete;
 
-  /// Mail açıldıktan kaç ms sonra okundu işaretlenir.
-  ///
-  /// Anında işaretlenirse, yanlış iletiye dokunup hemen geri çıkan kullanıcı
-  /// o iletiyi okunmuş bulur.
-  final int markSeenDelayMs;
-
   /// Sağa ve sola kaydırma eylemleri — birbirinden bağımsız, genel varsayılan;
   /// klasöre göre uyarlanması `SwipeActionResolver`ın işidir.
   final SwipeAction swipeRight;
@@ -122,7 +115,6 @@ class AppSettings {
     bool? groupMessages,
     SyncFrequency? syncFrequency,
     bool? confirmBeforeDelete,
-    int? markSeenDelayMs,
     SwipeAction? swipeRight,
     SwipeAction? swipeLeft,
   }) => AppSettings(
@@ -134,7 +126,6 @@ class AppSettings {
     groupMessages: groupMessages ?? this.groupMessages,
     syncFrequency: syncFrequency ?? this.syncFrequency,
     confirmBeforeDelete: confirmBeforeDelete ?? this.confirmBeforeDelete,
-    markSeenDelayMs: markSeenDelayMs ?? this.markSeenDelayMs,
     swipeRight: swipeRight ?? this.swipeRight,
     swipeLeft: swipeLeft ?? this.swipeLeft,
   );

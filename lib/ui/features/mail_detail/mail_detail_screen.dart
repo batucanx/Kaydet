@@ -71,7 +71,6 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
   /// sonra gelir; o arada ekran "bulunamadı"ya düşüp kaydırma alanını baştan
   /// kurmasın diye bu gösterilmeye devam eder.
   MessageRow? _shownMessage;
-  Timer? _seenTimer;
 
   // Başlık gövdenin ÜSTÜNDE durur ve kaydırmayla birlikte yukarı kayar.
   // Gövde başlığın altında kalmasın diye WebView'a başlık boyu kadar üst boşluk
@@ -132,8 +131,8 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
     // Gövde indirme burada ELLE tetiklenmez — `build()`'ın izlediği
     // `bodyFetchProvider(_messageId)` ilk kez izlendiği anda (bu widget
     // kurulduğunda) Riverpod tarafından otomatik çalıştırılır (bkz.
-    // `app/providers.dart`). Yalnızca okundu işaretinin zamanlayıcısı kalır.
-    _scheduleMarkSeen();
+    // `app/providers.dart`). Yalnızca okundu işareti elle konur.
+    _markSeen();
     _prefetchNeighbors();
   }
 
@@ -178,30 +177,22 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
 
   @override
   void dispose() {
-    _seenTimer?.cancel();
     _prefetchTimer?.cancel();
     _headerMeasureTimer?.cancel();
     _scrollY.dispose();
     super.dispose();
   }
 
-  void _scheduleMarkSeen() {
-    _seenTimer?.cancel();
-
-    // Okundu işareti gecikmeli konur: yanlış iletiye dokunup hemen geri
-    // çıkan kullanıcı o iletiyi okunmuş bulmamalı.
-    final delay = ref.read(settingsProvider).markSeenDelayMs;
-    _seenTimer = Timer(Duration(milliseconds: delay), () async {
-      if (!mounted) return;
-      // Beklerken başka iletiye geçilmiş olabilir: işaret, zamanlayıcının
-      // kurulduğu iletiye yazılır.
-      final id = _messageId;
-      final row = await ref.read(messageProvider(id).future);
-      if (!mounted) return;
-      if (row != null && !row.isSeen) {
-        await ref.read(mailRepositoryProvider).setSeen([id], true);
-      }
-    });
+  /// İleti açılır açılmaz okundu işaretlenir.
+  Future<void> _markSeen() async {
+    // Satır yüklenirken başka iletiye geçilmiş olabilir: işaret, çağrıldığı
+    // andaki iletiye yazılır.
+    final id = _messageId;
+    final row = await ref.read(messageProvider(id).future);
+    if (!mounted) return;
+    if (row != null && !row.isSeen) {
+      await ref.read(mailRepositoryProvider).setSeen([id], true);
+    }
   }
 
   /// Aynı listedeki önceki/sonraki iletiye geçer.
@@ -215,7 +206,7 @@ class _MailDetailScreenState extends ConsumerState<MailDetailScreen> {
       _messageId = rows[next].id;
       _scrollY.value = 0;
     });
-    _scheduleMarkSeen();
+    _markSeen();
     _prefetchNeighbors();
   }
 

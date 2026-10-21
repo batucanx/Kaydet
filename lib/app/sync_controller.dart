@@ -565,6 +565,16 @@ class SyncController extends Notifier<SyncState> {
         );
       }
 
+      // Çöp ve İstenmeyen'in rozeti yerel sayımla gösterilir; klasöre girilene
+      // kadar eşitlenmezse başka bir cihazdaki okundu/okunmadı değişikliği
+      // (ve silmeler) burada görünmez.
+      for (final use in const [SpecialUse.trash, SpecialUse.junk]) {
+        final box = boxes.where((m) => m.specialUse == use).firstOrNull;
+        if (box != null) {
+          _fireAndForget(engine.syncMailbox(accountId: accountId, mailbox: box));
+        }
+      }
+
       state = state.copyWith(
         lastSyncAt: DateTime.now(),
         hasMore:

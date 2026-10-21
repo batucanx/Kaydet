@@ -53,3 +53,6 @@ Satoshi_Complete/
 
 # Push backend gizli bilgileri (bkz. lib/app/push_backend_config.example.dart)
 lib/app/push_backend_config.dart
+
+# Firebase yapılandırması (makineye/ortama özgü)
+android/app/google-services.json

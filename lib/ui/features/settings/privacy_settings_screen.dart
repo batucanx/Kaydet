@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/providers.dart';
 import '../../../app/remote_push_controller.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_widgets.dart';
 import 'data_usage_notice.dart';
+
+/// Yayımlanmış gizlilik politikasının adresi. Mağaza (Play/App Store) bu
+/// bağlantıyı zorunlu tutar; boş bırakılırsa satır gizlenir.
+const String kPrivacyPolicyUrl = '';
 
 /// Gizlilik alt sayfası.
 class PrivacySettingsScreen extends ConsumerWidget {
@@ -61,8 +66,29 @@ class PrivacySettingsScreen extends ConsumerWidget {
           DataUsageDetails(
             pushServerActive: ref.watch(serverPushInUseProvider),
           ),
+          if (kPrivacyPolicyUrl.isNotEmpty)
+            SettingsGroup(
+              children: [
+                SettingsTile(
+                  icon: LucideIcons.externalLink,
+                  title: 'Gizlilik politikası',
+                  onTap: () => _openPolicy(),
+                ),
+              ],
+            ),
         ],
       ),
     );
+  }
+
+  Future<void> _openPolicy() async {
+    try {
+      await launchUrl(
+        Uri.parse(kPrivacyPolicyUrl),
+        mode: LaunchMode.externalApplication,
+      );
+    } on Object catch (_) {
+      // Bağlantıyı açacak bir uygulama yok; sessizce yok sayılır.
+    }
   }
 }

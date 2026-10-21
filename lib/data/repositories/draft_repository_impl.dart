@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:synchronized/synchronized.dart';
@@ -21,6 +22,13 @@ import '../services/draft_remote_data_source.dart';
 import '../services/smtp_service.dart';
 import 'mail_connection.dart';
 import 'sync_engine.dart';
+
+/// Eşitleme tanılaması yalnızca debug derlemede yazılır; release logcat'ine
+/// taslak/hesap kimlikleri ve konu sızmasın.
+void _log(String message) {
+  // ignore: avoid_print
+  if (kDebugMode) print(message);
+}
 
 class DraftRepositoryImpl implements DraftRepository {
   DraftRepositoryImpl({
@@ -180,23 +188,23 @@ class DraftRepositoryImpl implements DraftRepository {
   @override
   Future<Result<void>> syncDraftRemote(int draftId) =>
       _lockFor(draftId).synchronized(() async {
-        print('[DRAFT_SYNC] syncDraftRemote başladı. draftId: $draftId');
+        _log('[DRAFT_SYNC] syncDraftRemote başladı. draftId: $draftId');
         final row = await _db.messageById(draftId);
         if (row == null || row.isDeleted || row.outboxState == OutboxState.sent) {
-          print('[DRAFT_SYNC] Taslak bulunamadı veya silinmiş/gönderilmiş (draftId: $draftId)');
+          _log('[DRAFT_SYNC] Taslak bulunamadı veya silinmiş/gönderilmiş (draftId: $draftId)');
           return okVoid;
         }
 
         final accountId = row.accountId;
         final draftsBox = await _resolveDraftsMailbox(accountId);
         if (draftsBox == null) {
-          print('[DRAFT_SYNC] HATA: Taslaklar klasörü bulunamadı (accountId: $accountId)');
+          _log('[DRAFT_SYNC] HATA: Taslaklar klasörü bulunamadı (accountId: $accountId)');
           return const Err(MailboxNotFoundFailure());
         }
 
         final account = await _db.accountById(accountId);
         if (account == null) {
-          print('[DRAFT_SYNC] HATA: Hesap bulunamadı (accountId: $accountId)');
+          _log('[DRAFT_SYNC] HATA: Hesap bulunamadı (accountId: $accountId)');
           return const Err(UnknownFailure(detail: 'hesap yok'));
         }
 
@@ -235,13 +243,13 @@ class DraftRepositoryImpl implements DraftRepository {
           skipMissingAttachments: true,
         );
         if (built is Err<WireMessage>) {
-          print('[DRAFT_SYNC] MIME oluşturma hatası: ${built.failure}');
+          _log('[DRAFT_SYNC] MIME oluşturma hatası: ${built.failure}');
           return Err(built.failure);
         }
 
         final source = (built as Ok<WireMessage>).value.source;
 
-        print(
+        _log(
           '[DRAFT_SYNC] IMAP APPEND gönderiliyor... '
           'path: "${draftsBox.path}", encoded: "${draftsBox.encodedPath}", '
           'subject: "${row.subject}", messageId: "${row.messageIdHeader}"',
@@ -255,7 +263,7 @@ class DraftRepositoryImpl implements DraftRepository {
         );
 
         if (appendResult is Err<int?>) {
-          print(
+          _log(
             '[DRAFT_SYNC] IMAP APPEND başarısız: ${appendResult.failure}. '
             'Çevrimdışı kuyruğuna (PendingOperations) alınıyor...',
           );
@@ -268,7 +276,7 @@ class DraftRepositoryImpl implements DraftRepository {
         }
 
         var newUid = (appendResult as Ok<int?>).value;
-        print('[DRAFT_SYNC] IMAP APPEND BAŞARILI! Dönen UID: $newUid, Eski UID: $oldUid');
+        _log('[DRAFT_SYNC] IMAP APPEND BAŞARILI! Dönen UID: $newUid, Eski UID: $oldUid');
 
         // Sunucu UIDPLUS desteklemediği için APPENDUID dönmediyse UID'yi bulmayı dene
         if (newUid == null) {
@@ -280,14 +288,14 @@ class DraftRepositoryImpl implements DraftRepository {
             final state = selectRes.value;
             if (state.uidNext > 1) {
               newUid = state.uidNext - 1;
-              print('[DRAFT_SYNC] UIDPLUS yok, tahmin edilen UID: $newUid');
+              _log('[DRAFT_SYNC] UIDPLUS yok, tahmin edilen UID: $newUid');
             }
           }
         }
 
         // Eski taslak varsa sunucudan kaldır (mükerrerliği önleme)
         if (oldUid != null && newUid != null && oldUid != newUid) {
-          print('[DRAFT_SYNC] Eski taslak UID ($oldUid) IMAP sunucusundan siliniyor...');
+          _log('[DRAFT_SYNC] Eski taslak UID ($oldUid) IMAP sunucusundan siliniyor...');
           await _remoteDataSource.deleteDraftUids(
             accountId: accountId,
             targetPath: draftsBox.path,
@@ -309,7 +317,7 @@ class DraftRepositoryImpl implements DraftRepository {
 
         // Başarılı senkronizasyon sonrası kuyruğu temizle
         await _db.cancelPendingDraftOperations(draftId);
-        print('[DRAFT_SYNC] Taslak ($draftId) sunucu ile başarıyla eşitlendi (UID: $newUid).');
+        _log('[DRAFT_SYNC] Taslak ($draftId) sunucu ile başarıyla eşitlendi (UID: $newUid).');
 
         return okVoid;
       });
