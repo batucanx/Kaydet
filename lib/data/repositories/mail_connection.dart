@@ -287,14 +287,18 @@ class MailConnection {
       // Anahtar kalıcı bozulduysa (yarım kalan geçiş) yeniden denemek işe
       // yaramaz: depo sıfırlanır ve kullanıcı yeniden girişe yönlendirilir.
       if (await _secureStore.resetIfCorrupt(readError)) {
-        return const Err(AuthFailure(detail: 'güvenli depo bozuldu'));
+        return const Err(
+          AuthFailure(detail: 'güvenli depo bozuldu', storedCredentialLost: true),
+        );
       }
       // Bu bir kimlik hatası DEĞİL: kullanıcıyı yeniden girişe yönlendirmez,
       // depoya da dokunmaz; bir sonraki denemede yeniden okunur.
       return Err(StorageFailure(detail: '$readError'));
     }
     if (password == null || password.isEmpty) {
-      return const Err(AuthFailure(detail: 'kayıtlı şifre yok'));
+      return const Err(
+        AuthFailure(detail: 'kayıtlı şifre yok', storedCredentialLost: true),
+      );
     }
     return Ok(PasswordCredential(password));
   }

@@ -153,8 +153,18 @@ class AccountRepository {
       smtpPort: request.smtpPort,
       smtpSecurity: request.smtpSecurity,
       writeCredential: (accountId) =>
-          _secureStore.writePassword(accountId, request.password),
+          _storePassword(accountId, request.password),
     );
+  }
+
+  /// Şifreyi güvenli depoya yazar ve depodan (önbelleksiz) geri okuyup
+  /// doğrular. Hesap bundan SONRA etkinleşir: kayıt bozuksa kullanıcı sonradan
+  /// "şifre hatalı" uyarısıyla karşılaşmak yerine girişte hatayı görür.
+  Future<void> _storePassword(int accountId, String password) async {
+    await _secureStore.writePassword(accountId, password);
+    if (!await _secureStore.verifyPassword(accountId, password)) {
+      throw StateError('şifre depoya yazıldı ama geri okunamadı');
+    }
   }
 
   /// Hesabı oluşturur/günceller, kimlik bilgisini [writeCredential] ile
@@ -210,7 +220,17 @@ class AccountRepository {
     }
 
     try {
-      await writeCredential(accountId);
+      try {
+        await writeCredential(accountId);
+      } on Object catch (error) {
+        // Güvenli depo anahtarı kalıcı bozuksa (`Key mismatch`, `Failed to
+        // unwrap key`) yazma hep aynı hatayı verir ve kullanıcı hiç giriş
+        // yapamazdı. Giriş anında kaybedilecek geçerli bir şifre yoktur (bozuk
+        // anahtarla okunamıyor da): depo sıfırlanır ve yazma bir kez yeniden
+        // denenir.
+        if (!await _secureStore.resetIfCorrupt(error)) rethrow;
+        await writeCredential(accountId);
+      }
     } on Object catch (error) {
       // Kimlik bilgisi saklanamadıysa hesap yarım kalmaz: yeni kayıt geri
       // alınır, kullanıcı giriş ekranında kalır ve nedenini görür.
@@ -720,7 +740,14 @@ class AccountRepository {
     }
 
     try {
-      await _secureStore.writePassword(accountId, password);
+      try {
+        await _storePassword(accountId, password);
+      } on Object catch (error) {
+        // Bozuk depo bu yolu da kilitler ("şifreyi güncelle" tek çıkış
+        // yoludur): giriştekiyle aynı biçimde sıfırlanıp bir kez yeniden denenir.
+        if (!await _secureStore.resetIfCorrupt(error)) rethrow;
+        await _storePassword(accountId, password);
+      }
     } on Object catch (error) {
       return Err(StorageFailure(detail: '$error'));
     }

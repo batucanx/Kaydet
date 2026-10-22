@@ -18,10 +18,15 @@ import 'data/services/app_settings.dart';
 import 'data/services/notification_service.dart';
 import 'data/services/push_token_source.dart';
 import 'data/services/quick_templates_store.dart';
+import 'data/services/secure_store.dart';
 import 'ui/features/mail_detail/webview_pool.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Bozuk güvenli depoyu sıfırlama yetkisi yalnızca ana izolattadır; ön plan
+  // servisi ve arka plan görevi hatayı yalnızca bildirir (bkz. `allowReset`).
+  FlutterSecureStore.allowReset = true;
 
   // Avatarlar için indirilen marka logoları (bkz. `BrandAvatar`) burada
   // önbellekleniyor. Varsayılan (1000 görsel / 100MB) bu uygulama için

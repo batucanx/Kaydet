@@ -24,10 +24,17 @@ sealed class AppFailure {
 
 /// Kullanıcı adı veya şifre hatalı.
 final class AuthFailure extends AppFailure {
-  const AuthFailure({super.detail});
+  const AuthFailure({super.detail, this.storedCredentialLost = false});
+
+  /// Sunucu şifreyi reddetmedi: cihazda kayıtlı şifre yok ya da güvenli depo
+  /// okunamadı/sıfırlandı. Kullanıcıya "şifre hatalı" denmez; şifresini bir
+  /// kez daha girmesi istenir.
+  final bool storedCredentialLost;
 
   @override
-  String get userMessage => 'Kullanıcı adı veya şifre hatalı.';
+  String get userMessage => storedCredentialLost
+      ? 'Kayıtlı şifre cihazda bulunamadı. Lütfen şifrenizi bir kez daha girin.'
+      : 'Kullanıcı adı veya şifre hatalı.';
 
   @override
   bool get isActionable => true;

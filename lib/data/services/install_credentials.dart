@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'secure_storage_lock.dart';
 import 'secure_store.dart';
 
 /// Bu uygulama kurulumuna özel kimlik: `id` kamuya açık bir takma ad,
@@ -46,20 +47,24 @@ class SecureInstallCredentials implements InstallCredentialsSource {
     }
   }
 
+  // Okuma-yoksa-üret adımı izolatlar arası kilitli: ana uygulama ve arka plan
+  // aynı anda ilk kez açıldığında iki ayrı kimlik üretilip biri ezilmesin.
   Future<InstallCredentials> _loadOrCreate() async {
     await ensureSecureStorageReady();
-    final id = await _storage.read(key: idKey);
-    final secret = await _storage.read(key: secretKey);
-    if (id != null &&
-        id.length >= 32 &&
-        secret != null &&
-        secret.length >= 32) {
-      return InstallCredentials(id: id, secret: secret);
-    }
-    final created = InstallCredentials(id: _hex(32), secret: _hex(64));
-    await _storage.write(key: idKey, value: created.id);
-    await _storage.write(key: secretKey, value: created.secret);
-    return created;
+    return SecureStorageLock.run(() async {
+      final id = await _storage.read(key: idKey);
+      final secret = await _storage.read(key: secretKey);
+      if (id != null &&
+          id.length >= 32 &&
+          secret != null &&
+          secret.length >= 32) {
+        return InstallCredentials(id: id, secret: secret);
+      }
+      final created = InstallCredentials(id: _hex(32), secret: _hex(64));
+      await _storage.write(key: idKey, value: created.id);
+      await _storage.write(key: secretKey, value: created.secret);
+      return created;
+    });
   }
 
   String _hex(int length) => List.generate(

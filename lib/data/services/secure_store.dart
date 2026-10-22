@@ -1,6 +1,8 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:synchronized/synchronized.dart';
 
+import 'secure_storage_lock.dart';
+
 /// Şifrelerin saklandığı yer.
 ///
 /// Android'de Keystore destekli `EncryptedSharedPreferences`, iOS'ta
@@ -11,6 +13,12 @@ abstract class SecureStore {
   Future<String?> readPassword(int accountId);
   Future<void> writePassword(int accountId, String password);
   Future<void> deletePassword(int accountId);
+
+  /// Yazılan şifrenin depodan (önbelleğe bakmadan) aynen okunduğunu doğrular.
+  /// Giriş sırasında, hesap etkinleşmeden önce kullanılır: şifre kaydı
+  /// bozuksa kullanıcı daha sonra "şifre hatalı" diye şaşırmasın.
+  Future<bool> verifyPassword(int accountId, String password) async =>
+      await readPassword(accountId) == password;
 
   /// [error] depodaki anahtarın KALICI olarak bozulduğunu gösteriyorsa (ör.
   /// yarım kalan geçiş sonrası `Failed to unwrap key`, Keystore `-1000`) depoyu
@@ -51,10 +59,15 @@ Future<void>? _ready;
 /// kimliği) aynı anda ilk erişimi yaparsa aynı anahtar iki kez üretilir ve
 /// sarılı anahtar bozulur (`Failed to unwrap key`, Keystore `-1000`). Bu yüzden
 /// her erişim önce bu tek seferlik ve tekil (single-flight) hazırlığı bekler.
+///
+/// Tekillik yalnızca bu izolat içindir; ön plan servisi ve arka plan görevi
+/// ayrı izolatlardır — onlarla yarışı [SecureStorageLock] önler.
 Future<void> ensureSecureStorageReady() {
-  final inFlight = _ready ??= kaydetSecureStorage
-      .containsKey(key: 'kaydet_storage_probe')
-      .then((_) {});
+  final inFlight = _ready ??= SecureStorageLock.run(
+    () => kaydetSecureStorage
+        .containsKey(key: 'kaydet_storage_probe')
+        .then((_) {}),
+  );
   return inFlight.catchError((Object error) {
     if (identical(_ready, inFlight)) _ready = null;
     throw error;
@@ -80,12 +93,21 @@ class FlutterSecureStore implements SecureStore {
   static final Lock _lock = Lock();
   static final Map<int, String> _cache = {};
 
+  /// Depoyu SIFIRLAMAYA yalnızca ana izolat yetkilidir (bkz. `main.dart`).
+  ///
+  /// Ön plan servisi ve arka plan görevi, ana uygulamanın aynı anda yazdığı
+  /// depoyu geçici bir Keystore hatasında (`-1000`) bozuk sanıp SİLEBİLİRDİ;
+  /// onlar yalnızca hata döner, sıfırlamayı ana uygulama karar verir.
+  static bool allowReset = false;
+
   @override
   Future<String?> readPassword(int accountId) => _lock.synchronized(() async {
     await ensureSecureStorageReady();
     final cached = _cache[accountId];
     if (cached != null) return cached;
-    final value = await _storage.read(key: _passwordKey(accountId));
+    final value = await SecureStorageLock.run(
+      () => _storage.read(key: _passwordKey(accountId)),
+    );
     if (value != null) _cache[accountId] = value;
     return value;
   });
@@ -94,19 +116,36 @@ class FlutterSecureStore implements SecureStore {
   Future<void> writePassword(int accountId, String password) =>
       _lock.synchronized(() async {
         await ensureSecureStorageReady();
-        await _storage.write(key: _passwordKey(accountId), value: password);
+        await SecureStorageLock.run(
+          () => _storage.write(key: _passwordKey(accountId), value: password),
+        );
         _cache[accountId] = password;
+      });
+
+  @override
+  Future<bool> verifyPassword(int accountId, String password) =>
+      _lock.synchronized(() async {
+        await ensureSecureStorageReady();
+        _cache.remove(accountId);
+        final stored = await SecureStorageLock.run(
+          () => _storage.read(key: _passwordKey(accountId)),
+        );
+        if (stored != null) _cache[accountId] = stored;
+        return stored == password;
       });
 
   @override
   Future<void> deletePassword(int accountId) async {
     _cache.remove(accountId);
-    await _storage.delete(key: _passwordKey(accountId));
-    await _storage.delete(key: _legacyOauthKey(accountId));
+    await SecureStorageLock.run(() async {
+      await _storage.delete(key: _passwordKey(accountId));
+      await _storage.delete(key: _legacyOauthKey(accountId));
+    });
   }
 
   @override
   Future<bool> resetIfCorrupt(Object error) async {
+    if (!allowReset) return false;
     final text = '$error';
     final permanent =
         text.contains('Failed to unwrap key') ||
@@ -114,20 +153,31 @@ class FlutterSecureStore implements SecureStore {
         text.contains('-1000');
     if (!permanent) return false;
     try {
-      await _lock.synchronized(() async {
-        _cache.clear();
-        // Bozuk anahtarla `deleteAll` de aynı hatayı verir; `resetOnError`
-        // AÇIK bir örnekle depoya erişmek eklentiyi verileri silmeye zorlar.
-        const resetting = FlutterSecureStorage(
-          aOptions: AndroidOptions(resetOnError: true),
-        );
-        try {
-          await resetting.deleteAll();
-        } on Object catch (_) {
-          await resetting.read(key: 'kaydet_reset_probe');
-        }
-      });
-      return true;
+      return await _lock.synchronized(
+        () => SecureStorageLock.run(() async {
+          // Kilidi beklerken başka bir izolat anahtarı onarmış ya da hata
+          // geçici olmuş olabilir: depo şimdi okunabiliyorsa HİÇBİR ŞEY
+          // silinmez.
+          try {
+            await _storage.containsKey(key: 'kaydet_storage_probe');
+            return false;
+          } on Object catch (_) {}
+
+          _cache.clear();
+          _ready = null;
+          // Bozuk anahtarla `deleteAll` de aynı hatayı verir; `resetOnError`
+          // AÇIK bir örnekle depoya erişmek eklentiyi verileri silmeye zorlar.
+          const resetting = FlutterSecureStorage(
+            aOptions: AndroidOptions(resetOnError: true),
+          );
+          try {
+            await resetting.deleteAll();
+          } on Object catch (_) {
+            await resetting.read(key: 'kaydet_reset_probe');
+          }
+          return true;
+        }),
+      );
     } on Object catch (_) {
       return false;
     }
@@ -150,6 +200,10 @@ class InMemorySecureStore implements SecureStore {
   Future<void> deletePassword(int accountId) async {
     _passwords.remove(accountId);
   }
+
+  @override
+  Future<bool> verifyPassword(int accountId, String password) async =>
+      _passwords[accountId] == password;
 
   @override
   Future<bool> resetIfCorrupt(Object error) async => false;
