@@ -518,9 +518,8 @@ class MailRow extends StatelessWidget {
         'Teslim edilemedi: ${message.deliveryFailureReason ?? 'iade iletisi alındı'}',
         t.danger,
       ),
-      // SMTP kabulü teslim garantisi DEĞİLDİR; "başarı" rengi/ifadesi kullanılmaz.
       // `null` simge: kâğıt uçağı (`SentPlaneIcon`).
-      _ => (null, 'Gönderildi', t.textTertiary),
+      _ => (null, 'Gönderildi', sentColor(t)),
     };
 
     return Row(

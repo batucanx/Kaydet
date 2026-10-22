@@ -511,7 +511,7 @@ class _DeliveryInfoState extends State<_DeliveryInfo> {
     final failed = failedAt != null;
 
     final summary = failed ? 'Teslim edilemedi' : 'Gönderildi';
-    final color = failed ? t.danger : t.textTertiary;
+    final color = failed ? t.danger : sentColor(t);
 
     Widget line(String label, String value) => Padding(
       padding: const EdgeInsets.only(top: Space.xs),

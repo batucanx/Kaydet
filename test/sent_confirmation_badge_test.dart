@@ -8,6 +8,7 @@ import 'package:kaydet/data/services/app_settings.dart';
 import 'package:kaydet/domain/models/mail_models.dart';
 import 'package:kaydet/ui/core/theme/app_theme.dart';
 import 'package:kaydet/ui/core/theme/tokens.dart';
+import 'package:kaydet/ui/core/widgets/kaydet_widgets.dart' show sentColor;
 import 'package:kaydet/ui/features/mail_list/mail_row.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -102,7 +103,7 @@ void main() {
     );
     expect(find.text('Gönderildi'), findsOneWidget);
     expect(find.textContaining('doğrula'), findsNothing);
-    expect(_planeColor(tester), KaydetTokens.light.textTertiary);
+    expect(_planeColor(tester), sentColor(KaydetTokens.light));
   });
 
   testWidgets('iade iletisi gelmişse kırmızı "Teslim edilemedi" ve neden', (

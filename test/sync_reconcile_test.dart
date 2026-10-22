@@ -137,7 +137,7 @@ void main() {
       expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
     });
 
-    test('yeni ileti gelince silinenler de taranır', () async {
+    test('yalnızca yeni ileti gelince (sayı tutuyor) tarama atlanır', () async {
       imap.seedInbox([envelope(uid: 1)]);
       await syncInbox();
       imap.seedInbox([envelope(uid: 2)]);
@@ -146,7 +146,24 @@ void main() {
       final outcome = await syncInbox();
 
       expect(outcome.newMessageIds, hasLength(1));
+      expect(imap.commandLog.where((c) => c == 'search'), isEmpty);
+      expect(await db.uidsOf(inbox.id), unorderedEquals([1, 2]));
+    });
+
+    test('yeni ileti gelirken biri silinmişse (sayı tutmuyor) taranır', () async {
+      imap.seedInbox([envelope(uid: 1)]);
+      await syncInbox();
+      // Aynı turda: UID 1 silindi, UID 2 geldi. İleti sayısı 1 kaldı ama
+      // UIDNEXT 1 arttı; sayı UIDNEXT farkıyla uyuşmadığı için taranmalı.
+      imap.store['INBOX']!.remove(1);
+      imap.seedInbox([envelope(uid: 2)]);
+      imap.commandLog.clear();
+
+      final outcome = await syncInbox();
+
       expect(imap.commandLog.where((c) => c == 'search'), isNotEmpty);
+      expect(outcome.deletedCount, 1);
+      expect(await db.uidsOf(inbox.id), [2]);
     });
 
     test('bir iletinin silinmesi (yeni ileti olmadan) fark edilir', () async {

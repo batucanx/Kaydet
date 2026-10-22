@@ -552,10 +552,24 @@ class SyncEngine {
     // `uidNext`'i artırır; ikisi de aynı kalmışsa ne yeni ne silinmiş ileti
     // vardır ve klasördeki TÜM UID'leri (büyük klasörde yüzlerce KB)
     // getiren `UID SEARCH ALL` boşuna çalıştırılmaz.
+    //
+    // Yalnızca yeni ileti gelmişse tarama da atlanır: her UID tek bir ileti
+    // alır, UIDNEXT n arttıysa ve ileti sayısı da tam n arttıysa hiçbir ileti
+    // silinmemiştir (bir silme sayıyı mutlaka düşürürdü). Sayı tutmuyorsa
+    // (silme + yeni ileti aynı turda, UIDNEXT atlayan sunucu) tarama yapılır.
     var deleted = 0;
+    final previousNext = mailbox.uidNext;
+    final onlyArrivals =
+        !resynced &&
+        previousNext != null &&
+        previousNext > 0 &&
+        state.uidNext >= previousNext &&
+        state.messageCount ==
+            mailbox.totalCount + (state.uidNext - previousNext);
     final serverChanged =
-        mailbox.uidNext != state.uidNext ||
-        mailbox.totalCount != state.messageCount;
+        !onlyArrivals &&
+        (mailbox.uidNext != state.uidNext ||
+            mailbox.totalCount != state.messageCount);
     if (serverChanged) {
       final result = await _syncDeletions(mailbox);
       if (result is Ok<int>) {

@@ -664,11 +664,16 @@ class EnoughMailImapService implements ImapService {
       _guard(() async {
         if (uids.isEmpty) return <int>[];
         final found = <int>[];
-        const chunkSize = 150;
-        for (var i = 0; i < uids.length; i += chunkSize) {
-          final chunk = uids.sublist(i, min(i + chunkSize, uids.length));
+        // Sıralı UID'ler ardışık aralıklara sıkışır (`1:4000,4003:…`); sırasız
+        // liste sıkışmaz ve tamamı indirilmiş kutuda yüzlerce gidiş-dönüşe
+        // (her yeni iletide) yol açardı.
+        final sorted = [...uids]..sort();
+        const chunkSize = 1000;
+        for (var i = 0; i < sorted.length; i += chunkSize) {
+          final chunk = sorted.sublist(i, min(i + chunkSize, sorted.length));
+          final sequence = em.MessageSequence.fromIds(chunk, isUid: true);
           final result = await _requireClient.uidSearchMessages(
-            searchCriteria: 'UID ${chunk.join(',')}',
+            searchCriteria: 'UID ${sequence.toString()}',
           );
           final matches = result.matchingSequence?.toList();
           if (matches != null) {
@@ -750,7 +755,13 @@ class EnoughMailImapService implements ImapService {
     int? changedSinceModSeq,
   }) => _guard(() async {
     if (uids.isEmpty) return <RemoteFlagState>[];
-    final sequence = em.MessageSequence.fromIds(uids, isUid: true);
+    // CHANGEDSINCE yalnızca değişenleri döndürür: tüm yerel UID'leri tek
+    // komuta yazmak yerine `1:*` istenir. Büyük (tamamı indirilmiş) kutuda
+    // on binlerce UID'lik komut satırı birçok sunucuda "komut çok uzun" diye
+    // reddedilir ve bayrak eşitlemesi sessizce hiç ilerlemezdi.
+    final sequence = changedSinceModSeq != null
+        ? em.MessageSequence.fromRangeToLast(1, isUidSequence: true)
+        : em.MessageSequence.fromIds(uids, isUid: true);
     final result = await _requireClient.uidFetchMessages(
       sequence,
       '(UID FLAGS)',

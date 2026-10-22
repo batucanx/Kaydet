@@ -81,6 +81,12 @@ class KaydetAvatar extends StatelessWidget {
   }
 }
 
+/// "Gönderildi" bilgisinin yeşili. Tema `success` rengi marka mavisi olduğundan
+/// ayrı tutulur; koyu zeminde okunurluk için açık bir ton kullanılır.
+Color sentColor(KaydetTokens t) => t.brightness == Brightness.dark
+    ? const Color(0xFF4ADE80)
+    : const Color(0xFF16A34A);
+
 /// Gönderim onayı rozetinin kâğıt uçağı. PNG tek renkli çizgidir; [color]
 /// ile tema rengine boyanır (bkz. `assets/icons/send.png`).
 class SentPlaneIcon extends StatelessWidget {

@@ -787,6 +787,7 @@ class SyncController extends Notifier<SyncState> {
         _fireAndForget(ref.read(mailRepositoryProvider).detectBounces(accountId));
       }
       _startBodyPrefetch(engine, accountId, mailbox);
+      _fireAndForget(_resumeBackfills(accountId));
 
       // Açılan klasörün okunmamış sayısı sunucudan tazelenir (Gelen
       // Kutusu/Gönderilenler vb. yerel sayımla gösterildiğinden atlanır).
@@ -969,6 +970,25 @@ class SyncController extends Notifier<SyncState> {
         () => _backfilling.remove(mailboxId),
       ),
     );
+  }
+
+  /// Yarım kalmış geri doldurmaları sürdürür (Gelen Kutusu ve Gönderilenler).
+  ///
+  /// Geri doldurma uygulama arka plana alınınca ya da bir sayfa geçici bir
+  /// hatayla başarısız olunca sessizce durur ve yalnızca `syncAll` onu yeniden
+  /// başlatırdı; büyük bir kutuda kullanıcı uygulamadan çıkıp döndüğünde
+  /// indirme, süreç ölene kadar yarım kalırdı. Öne dönüşte ve açık klasörün her
+  /// başarılı eşitlemesinde çağrılır; zaten sürenler ya da bitenler için
+  /// ucuzdur (`_backfilling` ve `hasMoreOnServer`).
+  Future<void> _resumeBackfills(int accountId) async {
+    final db = ref.read(databaseProvider);
+    for (final use in const [SpecialUse.inbox, SpecialUse.sent]) {
+      if (_disposed || _paused || !_isCurrent(accountId)) return;
+      final box = await db.mailboxBySpecialUse(accountId, use);
+      if (box != null && box.isSelectable && box.hasMoreOnServer) {
+        _startBackfill(accountId, box.id);
+      }
+    }
   }
 
   Future<void> _backfill(int accountId, int mailboxId) async {
