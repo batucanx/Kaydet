@@ -79,8 +79,7 @@ class PrefsContactsArchive implements ContactsArchive {
       final decoded = jsonDecode(raw);
       if (decoded is! List) return const [];
       return [
-        for (final item in decoded)
-          if (ArchivedContact.tryParse(item) case final c?) c,
+        for (final item in decoded) ?ArchivedContact.tryParse(item),
       ];
     } on FormatException {
       return const [];

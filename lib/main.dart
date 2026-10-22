@@ -36,9 +36,10 @@ Future<void> main() async {
     ..maximumSize = 300
     ..maximumSizeBytes = 50 << 20;
 
-  // Uygulama yalnızca dikey çalışır: mail listesi ve yazma ekranı
-  // yatayda anlamlı bir kazanç sağlamıyor, klavye alanı daralıyor.
-  await SystemChrome.setPreferredOrientations([
+  // Uygulama yalnızca dikey çalışır: iOS'ta Info.plist'te zaten kilitlidir;
+  // platform kanal çağrısı açılışı ayrıca bekletmesin diye başlangıç işleriyle
+  // birlikte paralel beklenir.
+  final orientationLock = SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
@@ -50,12 +51,13 @@ Future<void> main() async {
   // erken kurulur (bkz. `AndroidPushChannel`). Android dışında etkisizdir.
   AndroidPushChannel.instance.install();
 
-  // Üçü birbirinden bağımsız platform kanalı çağrısıdır; art arda beklemek
+  // Bağımsız platform kanalı çağrıları; art arda beklemek
   // soğuk açılışta her birinin gecikmesini toplar. Birlikte beklenir.
-  final (settingsStore, quickTemplatesStore, _) = await (
+  final (settingsStore, quickTemplatesStore, _, _) = await (
     AppSettingsStore.create(),
     QuickTemplatesStore.create(),
     _initNotifications(),
+    orientationLock,
   ).wait;
 
   runApp(

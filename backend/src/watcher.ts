@@ -22,13 +22,16 @@ export function describeMessage(m: FetchMessageObject): NewMessage | null {
   const from = m.envelope?.from?.[0];
   const fromName = (from?.name || from?.address || 'Yeni ileti').trim();
   const subject = (m.envelope?.subject ?? '').trim() || '(Konu yok)';
-  const date = m.envelope?.date;
+  // Bozuk `Date` başlığı geçersiz bir Date üretir; `toISOString()` RangeError
+  // fırlatıp bildirimi düşürmesin — tarih yoksa uygulama kendi değerini kullanır.
+  const sentAt = m.envelope?.date ? new Date(m.envelope.date) : null;
+  const date = sentAt && !Number.isNaN(sentAt.getTime()) ? sentAt : null;
   const messageId = m.envelope?.messageId?.trim();
   return {
     uid: m.uid,
     fromName: clip(fromName),
     subject: clip(subject),
-    ...(date ? { date: new Date(date).toISOString() } : {}),
+    ...(date ? { date: date.toISOString() } : {}),
     ...(messageId ? { messageId } : {}),
   };
 }

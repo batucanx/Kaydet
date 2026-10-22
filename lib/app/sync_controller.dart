@@ -682,7 +682,11 @@ class SyncController extends Notifier<SyncState> {
 
     var synced = false;
     try {
-      for (final use in const [SpecialUse.trash, SpecialUse.junk]) {
+      for (final use in const [
+        SpecialUse.archive,
+        SpecialUse.trash,
+        SpecialUse.junk,
+      ]) {
         if (busy()) return;
         // Bayat satır değil: geciktirme sırasında başka bir tur güncellemiş olabilir.
         final box = await ref

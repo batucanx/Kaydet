@@ -307,7 +307,15 @@ class _RemoteSearchStatus extends ConsumerWidget {
             ],
           ),
         ),
-        data: (_) => const Divider(height: 1),
+        // Yüklenirken 2px'lik ilerleme çubuğu ile biten durumdaki ayırıcı aynı
+        // yüksekliktedir: durum değişince liste 1-2px kaymasın.
+        data: (_) => const SizedBox(
+          height: 2,
+          child: Align(
+            alignment: Alignment.bottomCenter,
+            child: Divider(height: 1),
+          ),
+        ),
       ),
     );
   }
@@ -381,11 +389,24 @@ class _SearchIdleView extends ConsumerWidget {
 
 // ------------------------------------------------------------- sonuçlar
 
-class _SearchResultsView extends ConsumerWidget {
+class _SearchResultsView extends ConsumerStatefulWidget {
   const _SearchResultsView();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_SearchResultsView> createState() => _SearchResultsViewState();
+}
+
+class _SearchResultsViewState extends ConsumerState<_SearchResultsView> {
+  /// Bu aramada ekrana daha önce çizilmiş ileti kimlikleri. İlk sonuç kümesi
+  /// (yerel eşleşmeler) animasyonsuz gelir; sonradan eklenenler (sunucu
+  /// aramasının bulduğu eski iletiler) açılarak yerleşir ve alttaki satırları
+  /// "sıçratmak" yerine yumuşakça aşağı iter.
+  final Set<int> _seen = <int>{};
+  String _signature = '';
+  bool _primed = false;
+
+  @override
+  Widget build(BuildContext context) {
     final filters = ref.watch(searchFiltersProvider);
     final query = ref.watch(searchQueryProvider);
 
@@ -400,7 +421,11 @@ class _SearchResultsView extends ConsumerWidget {
         ? ref.watch(contactSearchResultsProvider)
         : const AsyncData<List<ContactRow>>(<ContactRow>[]);
 
-    if (mail.isLoading || contacts.isLoading) {
+    // Yalnızca HİÇ sonuç yokken (ilk yükleme) spinner: sorgu/filtre değişince
+    // ya da sunucu bulguları gelip sağlayıcı yeniden kurulunca önceki liste
+    // ekranda kalır; aksi hâlde her seferinde liste kaybolup yeniden belirirdi.
+    if ((mail.isLoading && !mail.hasValue) ||
+        (contacts.isLoading && !contacts.hasValue)) {
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -409,8 +434,42 @@ class _SearchResultsView extends ConsumerWidget {
     final mailboxes =
         ref.watch(searchResultMailboxesProvider).value ??
         const <int, MailboxRow>{};
+    final accounts =
+        ref.watch(searchResultAccountsProvider).value ??
+        const <int, AccountRow>{};
+    final scope = ref.watch(searchScopeProvider);
+    final allAccounts =
+        ref.watch(allAccountsProvider).value ?? const <AccountRow>[];
+    final showAccountBadge = scope == null && allAccounts.length > 1;
+    final remoteSearching = ref.watch(remoteSearchProvider).isLoading;
+
+    // Hangi satırların animasyonla gireceği yalnızca "oturmuş" (yüklenmeyen)
+    // sonuç kümesinde belirlenir.
+    var revealIds = const <int>{};
+    if (!mail.isLoading) {
+      final signature = '$query|${filters.hashCode}|$scope';
+      if (signature != _signature) {
+        _signature = signature;
+        _seen.clear();
+        _primed = false;
+      }
+      final ids = [for (final m in mailRows) m.id];
+      if (_primed) {
+        revealIds = {
+          for (final id in ids)
+            if (!_seen.contains(id)) id,
+        };
+      }
+      _seen.addAll(ids);
+      _primed = true;
+    }
 
     if (mailRows.isEmpty && contactRows.isEmpty) {
+      // Sunucu araması sürerken "sonuç yok" demek, saniyeler sonra gelen
+      // sonuçlarla çelişirdi.
+      if (remoteSearching) {
+        return const _SearchingPlaceholder();
+      }
       return EmptyState(
         icon: LucideIcons.searchX,
         title: 'Sonuç bulunamadı',
@@ -436,21 +495,105 @@ class _SearchResultsView extends ConsumerWidget {
         if (mailRows.isNotEmpty) ...[
           SectionHeader('TÜM SONUÇLAR (${mailRows.length})'),
           for (final message in mailRows)
-            MailResultRow(
-              message: message,
-              mailbox: mailboxes[message.mailboxId],
-              onTap: () => _openMessageResult(context, ref, message),
+            _ResultReveal(
+              key: ValueKey('mail-${message.id}'),
+              animate: revealIds.contains(message.id),
+              child: MailResultRow(
+                message: message,
+                mailbox: mailboxes[message.mailboxId],
+                account: accounts[message.accountId],
+                showAccountBadge: showAccountBadge,
+                onTap: () => _openMessageResult(context, ref, message),
+              ),
             ),
         ],
         if (contactRows.isNotEmpty) ...[
           SectionHeader('KİŞİLER (${contactRows.length})'),
           for (final contact in contactRows)
             ContactResultRow(
+              key: ValueKey('contact-${contact.id}'),
               contact: contact,
               onTap: () => _openContactResult(context, ref, contact),
             ),
         ],
       ],
+    );
+  }
+}
+
+/// Sonradan gelen bir sonuç satırını yerine açarak yerleştirir: boyu 0'dan
+/// tam yüksekliğe büyür (altındaki satırlar yumuşakça kayar) ve aynı anda
+/// solarak belirir. [animate] yalnızca satır ilk oluşturulurken okunur;
+/// ilk sonuç kümesindeki satırlar animasyonsuz çizilir.
+class _ResultReveal extends StatefulWidget {
+  const _ResultReveal({super.key, required this.animate, required this.child});
+
+  final bool animate;
+  final Widget child;
+
+  @override
+  State<_ResultReveal> createState() => _ResultRevealState();
+}
+
+class _ResultRevealState extends State<_ResultReveal>
+    with SingleTickerProviderStateMixin {
+  AnimationController? _controller;
+  late final Animation<double> _curve;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_controller != null) return;
+    final duration = widget.animate
+        ? context.motion(Motion.slow)
+        : Duration.zero;
+    final controller = AnimationController(
+      vsync: this,
+      duration: duration,
+      value: widget.animate && duration > Duration.zero ? 0 : 1,
+    );
+    _controller = controller;
+    _curve = CurvedAnimation(parent: controller, curve: Motion.standard);
+    if (widget.animate && duration > Duration.zero) controller.forward();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    if (controller == null || controller.isCompleted) return widget.child;
+    return SizeTransition(
+      sizeFactor: _curve,
+      alignment: Alignment.topCenter,
+      child: FadeTransition(opacity: _curve, child: widget.child),
+    );
+  }
+}
+
+/// Yerelde eşleşme yokken sunucu araması sürerken gösterilen sakin durum.
+class _SearchingPlaceholder extends StatelessWidget {
+  const _SearchingPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(LucideIcons.search, size: IconSize.lg, color: t.textTertiary),
+          const SizedBox(height: Space.md),
+          Text(
+            'Sunucuda aranıyor…',
+            style: AppText.bodyMedium.copyWith(color: t.textSecondary),
+          ),
+        ],
+      ),
     );
   }
 }

@@ -80,7 +80,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 23;
+  int get schemaVersion => 25;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -267,6 +267,21 @@ class AppDatabase extends _$AppDatabase {
       if (from < 23) {
         await m.addColumn(messages, messages.isSearchHit);
       }
+      // v23 → v24: Bozuk `Date` başlıklı iletiler eşitleme anıyla (ya da 3 saat
+      // kayık) kaydedilmişti; sıralama ve saatleri yanlıştı. Düzeltilmiş
+      // ayrıştırıcıyla en yeni iletilerin zarfı yeniden çekilsin diye "ilk
+      // indirme" işareti (`uidNext`) sıfırlanır: var olan satırlar yerinde
+      // güncellenir (gövde/önizleme korunur), bildirim üretilmez. Tek seferliktir.
+      if (from < 24) {
+        await customStatement('UPDATE mailboxes SET uid_next = NULL');
+      }
+      // v24 → v25: Arama indeksine (messages_fts) alıcılar (to, cc, bcc)
+      // isim ve e-posta adresleriyle birlikte dahil edildi ("Gönderilenler"
+      // klasöründeki iletilerin alıcı adıyla/adresiyle bulunabilmesi için).
+      // Var olan dizin silinip yerel iletilerden baştan kurulur.
+      if (from < 25) {
+        await _rebuildFtsIndex();
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -390,7 +405,8 @@ class AppDatabase extends _$AppDatabase {
       while (true) {
         final rows = await customSelect(
           'SELECT m.id AS id, m.subject AS subject, m.from_name AS from_name, '
-          'm.from_email AS from_email, m.preview AS preview, '
+          'm.from_email AS from_email, m.to_addr_json AS to_addr_json, '
+          'm.cc_json AS cc_json, m.bcc_json AS bcc_json, m.preview AS preview, '
           'b.plain_text AS body '
           'FROM messages m '
           'LEFT JOIN message_bodies b ON b.message_id = m.id '
@@ -402,6 +418,11 @@ class AppDatabase extends _$AppDatabase {
         for (final row in rows) {
           final id = row.read<int>('id');
           lastId = id;
+          final recipients = _recipientsToFtsText(
+            row.read<String>('to_addr_json'),
+            row.read<String>('cc_json'),
+            row.read<String>('bcc_json'),
+          );
           await customStatement(
             'INSERT INTO messages_fts (rowid, content) VALUES (?, ?)',
             [
@@ -410,6 +431,7 @@ class AppDatabase extends _$AppDatabase {
                 row.read<String>('subject'),
                 row.read<String>('from_name'),
                 row.read<String>('from_email'),
+                recipients,
                 row.read<String>('preview'),
                 row.readNullable<String>('body') ?? '',
               ]),
@@ -934,15 +956,54 @@ class AppDatabase extends _$AppDatabase {
   /// toAddrJson...) tam `MessageRow` nesnesi olarak belleğe çekmek yerine
   /// yalnızca ihtiyaç duyulan tek sütunu okur — bu metot her senkronizasyonda
   /// (`_syncDeletions`, CONDSTORE'suz `_syncFlags`) çağrılır.
-  Future<List<int>> uidsOf(int mailboxId) async {
+  Future<List<int>> uidsOf(
+    int mailboxId, {
+    bool includeSearchHits = true,
+  }) async {
     final rows =
         await (selectOnly(messages)
               ..addColumns([messages.uid])
               ..where(
-                messages.mailboxId.equals(mailboxId) & messages.uid.isNotNull(),
+                messages.mailboxId.equals(mailboxId) &
+                    messages.uid.isNotNull() &
+                    messages.isDeleted.equals(false) &
+                    (includeSearchHits
+                        ? const Constant(true)
+                        : messages.isSearchHit.equals(false)),
               ))
             .get();
     return rows.map((r) => r.read(messages.uid)!).toList();
+  }
+
+  /// Klasördeki silinmiş veya UID'siz hayalet satırları kalıcı olarak temizler.
+  Future<void> purgeGhostMessages(int mailboxId) async {
+    // 1. \Deleted olarak işaretlenmiş satırlar
+    final deletedRows = await (selectOnly(messages)
+          ..addColumns([messages.id])
+          ..where(
+            messages.mailboxId.equals(mailboxId) &
+                messages.isDeleted.equals(true),
+          ))
+        .get();
+    if (deletedRows.isNotEmpty) {
+      await deleteMessages(
+        deletedRows.map((r) => r.read(messages.id)!).toList(),
+      );
+    }
+
+    // 2. Taslak ve giden kutusu olmayan klasörlerde UID'si olmayan satırlar (hayaletler)
+    final ghostRows = await (selectOnly(messages)
+          ..addColumns([messages.id])
+          ..where(
+            messages.mailboxId.equals(mailboxId) &
+                messages.uid.isNull() &
+                messages.isDraft.equals(false) &
+                messages.outboxState.equals(OutboxState.none.index),
+          ))
+        .get();
+    if (ghostRows.isNotEmpty) {
+      await deleteMessages(ghostRows.map((r) => r.read(messages.id)!).toList());
+    }
   }
 
   Future<int?> lowestUid(int mailboxId) async {
@@ -952,6 +1013,7 @@ class AppDatabase extends _$AppDatabase {
                 (m) =>
                     m.mailboxId.equals(mailboxId) &
                     m.uid.isNotNull() &
+                    m.isDeleted.equals(false) &
                     m.isSearchHit.equals(false),
               )
               ..orderBy([(m) => OrderingTerm(expression: m.uid)])
@@ -967,6 +1029,7 @@ class AppDatabase extends _$AppDatabase {
                 (m) =>
                     m.mailboxId.equals(mailboxId) &
                     m.uid.isNotNull() &
+                    m.isDeleted.equals(false) &
                     m.isSearchHit.equals(false),
               )
               ..orderBy([(m) => OrderingTerm(expression: m.uid)])
@@ -982,6 +1045,7 @@ class AppDatabase extends _$AppDatabase {
                 (m) =>
                     m.mailboxId.equals(mailboxId) &
                     m.uid.isNotNull() &
+                    m.isDeleted.equals(false) &
                     m.isSearchHit.equals(false),
               )
               ..orderBy([
@@ -999,6 +1063,7 @@ class AppDatabase extends _$AppDatabase {
               ..addColumns([count])
               ..where(
                 messages.mailboxId.equals(mailboxId) &
+                    messages.isDeleted.equals(false) &
                     messages.isSearchHit.equals(false),
               ))
             .getSingle();
@@ -1192,6 +1257,11 @@ class AppDatabase extends _$AppDatabase {
               row,
               preview: existing.preview,
               body: body?.plainText ?? '',
+              fallbackRecipients: _recipientsToFtsText(
+                existing.toAddrJson,
+                existing.ccJson,
+                existing.bccJson,
+              ),
             );
           }
         }
@@ -1204,17 +1274,13 @@ class AppDatabase extends _$AppDatabase {
   /// Sunucu aramasıyla bulunan iletileri "arama sonucu" olarak yazar
   /// (bkz. [Messages.isSearchHit]). Yerelde zaten olan (aynı klasör+UID) ileti
   /// ATLANIR — olağan bir satır arama sonucuna dönüştürülmez. Dönüş: yeni
-  /// yazılan sayısı.
-  ///
-  /// [matchedText]: sunucunun bu iletide bulduğu sözcükler. Gövde indirilmediği
-  /// için yerel dizinde yoktur; sunucu "bu iletide geçiyor" dediğinden dizine
-  /// eklenir — yoksa gövdede eşleşen bir sonuç, yerel aramada görünmezdi.
-  Future<int> upsertSearchHits(
+  /// yazılan iletilerin yerel id listesi.
+  Future<List<int>> upsertSearchHitsWithIds(
     List<MessagesCompanion> rows, {
     String matchedText = '',
   }) async {
-    if (rows.isEmpty) return 0;
-    var stored = 0;
+    if (rows.isEmpty) return const [];
+    final inserted = <int>[];
     await transaction(() async {
       for (final row in rows) {
         final uid = row.uid.value;
@@ -1225,10 +1291,51 @@ class AppDatabase extends _$AppDatabase {
           row.copyWith(isSearchHit: const Value(true)),
         );
         await _writeFts(id, row, body: matchedText);
-        stored++;
+        inserted.add(id);
       }
     });
-    return stored;
+    return inserted;
+  }
+
+  /// Sunucu aramasıyla bulunan iletileri "arama sonucu" olarak yazar.
+  /// Dönüş: yeni yazılan sayısı.
+  Future<int> upsertSearchHits(
+    List<MessagesCompanion> rows, {
+    String matchedText = '',
+  }) async {
+    final ids = await upsertSearchHitsWithIds(rows, matchedText: matchedText);
+    return ids.length;
+  }
+
+  /// Sunucu aramasında eşleşen var olan yerel iletilerin arama dizinine
+  /// eşleşen metni ekler/günceller. Böylece gövdesi henüz yerele indirilmemiş
+  /// veya kesilmiş olsa bile yerel FTS sorgusu (`messages_fts MATCH ?`) bu
+  /// iletileri bulur.
+  Future<void> updateSearchHitsFts(
+    List<int> messageIds,
+    String matchedText,
+  ) async {
+    if (messageIds.isEmpty || matchedText.trim().isEmpty) return;
+    for (final id in messageIds) {
+      final msg = await messageById(id);
+      if (msg == null) continue;
+      final body = await bodyOf(id);
+      final recipients = _recipientsToFtsText(
+        msg.toAddrJson,
+        msg.ccJson,
+        msg.bccJson,
+      );
+      final content = _ftsText([
+        msg.subject,
+        msg.fromName,
+        msg.fromEmail,
+        recipients,
+        msg.preview,
+        body?.plainText ?? '',
+        matchedText,
+      ]);
+      await _replaceFts(id, content);
+    }
   }
 
   /// [accountId] hesabının arama sonuçlarından en yeni [keep] tanesi dışındaki
@@ -1428,10 +1535,15 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteMessagesByUid(int mailboxId, List<int> uids) async {
     if (uids.isEmpty) return;
-    final rows = await (select(
-      messages,
-    )..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isIn(uids))).get();
-    await deleteMessages(rows.map((r) => r.id).toList());
+    final idsToDelete = <int>[];
+    for (var i = 0; i < uids.length; i += _sqlChunk) {
+      final chunk = uids.sublist(i, min(i + _sqlChunk, uids.length));
+      final rows = await (select(
+        messages,
+      )..where((m) => m.mailboxId.equals(mailboxId) & m.uid.isIn(chunk))).get();
+      idsToDelete.addAll(rows.map((r) => r.id));
+    }
+    await deleteMessages(idsToDelete);
   }
 
   /// Giden kutusundaki iletiler (gönderilmeyi bekleyen).
@@ -2419,34 +2531,71 @@ class AppDatabase extends _$AppDatabase {
   /// yapmıyorsa (bkz. [SearchFilters.selectsOnItsOwn]) sonuç boştur; filtre
   /// varsa metin olmadan da filtreye uyan en yeni iletiler döner ("Ekli",
   /// bir tarih penceresi, bir kişi ya da bir klasör tek başına tam bir
-  /// aramadır — web'deki `isRunnableSearch` ile aynı kural).
+  /// [query] metnini ve [filters] ölçütlerini sağlayan ileti kimliklerini
+  /// tarihe göre yeniden eskiye döner. [serverHitIds] verilirse bu iletiler
+  /// sunucuda zaten doğrulanmış eşleşmeler sayılır ve gövdesi yerelde
+  /// bulunmadığı için FTS MATCH sorgusunda elenmesi engellenir.
   Future<List<int>> searchMessageIds({
     int? accountId,
     required String query,
     SearchFilters filters = const SearchFilters(),
     int limit = 200,
+    int offset = 0,
+    Set<int> serverHitIds = const {},
   }) async {
     final match = buildFtsQuery(query);
-    if (match == null && !filters.selectsOnItsOwn) return const [];
+    if (match == null && !filters.selectsOnItsOwn && serverHitIds.isEmpty) {
+      return const [];
+    }
     final accountClause = accountId == null ? '' : 'AND m.account_id = ? ';
     final filter = _messageFilterSql(filters);
+
+    final String querySql;
+    final List<Variable<Object>> variables = [];
+
+    if (match == null) {
+      if (serverHitIds.isNotEmpty) {
+        final hitPlaceholders = List.filled(serverHitIds.length, '?').join(',');
+        querySql = 'SELECT m.id AS mid FROM messages m '
+            'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+            'WHERE m.id IN ($hitPlaceholders) $accountClause${filter.sql} '
+            'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
+        variables.addAll(serverHitIds.map((id) => Variable<int>(id)));
+      } else {
+        querySql = 'SELECT m.id AS mid FROM messages m '
+            'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+            'WHERE 1 = 1 $accountClause${filter.sql} '
+            'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
+      }
+    } else {
+      if (serverHitIds.isNotEmpty) {
+        final hitPlaceholders = List.filled(serverHitIds.length, '?').join(',');
+        querySql = 'SELECT m.id AS mid FROM messages m '
+            'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+            'WHERE (m.id IN (SELECT f.rowid FROM messages_fts f WHERE messages_fts MATCH ?) '
+            'OR m.id IN ($hitPlaceholders)) '
+            '$accountClause${filter.sql} '
+            'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
+        variables.add(Variable<String>(match));
+        variables.addAll(serverHitIds.map((id) => Variable<int>(id)));
+      } else {
+        querySql = 'SELECT f.rowid AS mid FROM messages_fts f '
+            'JOIN messages m ON m.id = f.rowid '
+            'JOIN mailboxes mb ON mb.id = m.mailbox_id '
+            'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
+            'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
+        variables.add(Variable<String>(match));
+      }
+    }
+
+    if (accountId != null) variables.add(Variable<int>(accountId));
+    variables.addAll(filter.variables);
+    variables.add(Variable<int>(limit));
+    variables.add(Variable<int>(offset));
+
     final rows = await customSelect(
-      match == null
-          ? 'SELECT m.id AS mid FROM messages m '
-                'JOIN mailboxes mb ON mb.id = m.mailbox_id '
-                'WHERE 1 = 1 $accountClause${filter.sql} '
-                'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?'
-          : 'SELECT f.rowid AS mid FROM messages_fts f '
-                'JOIN messages m ON m.id = f.rowid '
-                'JOIN mailboxes mb ON mb.id = m.mailbox_id '
-                'WHERE messages_fts MATCH ? $accountClause${filter.sql} '
-                'ORDER BY m.date_utc DESC, m.id DESC LIMIT ?',
-      variables: [
-        if (match != null) Variable<String>(match),
-        if (accountId != null) Variable<int>(accountId),
-        ...filter.variables,
-        Variable<int>(limit),
-      ],
+      querySql,
+      variables: variables,
       readsFrom: {messages, mailboxes},
     ).get();
     return rows.map((r) => r.read<int>('mid')).toList();
@@ -2723,29 +2872,75 @@ class AppDatabase extends _$AppDatabase {
   String _ftsText(Iterable<String> parts) =>
       foldForSearch(parts.where((part) => part.isNotEmpty).join(' '));
 
+  /// Alıcı JSON dizgelerinden (`toAddrJson`, `ccJson`, `bccJson`) arama dizinine
+  /// eklenecek tüm isim ve e-posta adreslerini ayıklar.
+  static String _recipientsToFtsText(
+    String? toAddrJson,
+    String? ccJson,
+    String? bccJson,
+  ) {
+    final parts = <String>[];
+    void addFromJson(String? json) {
+      if (json == null || json.isEmpty || json == '[]') return;
+      for (final addr in EmailAddress.decodeList(json)) {
+        final name = addr.name?.trim();
+        if (name != null && name.isNotEmpty) {
+          parts.add(name);
+        }
+        if (addr.email.isNotEmpty) {
+          parts.add(addr.email);
+        }
+      }
+    }
+
+    addFromJson(toAddrJson);
+    addFromJson(ccJson);
+    addFromJson(bccJson);
+    return parts.join(' ');
+  }
+
   /// Yeni/güncellenen bir iletinin dizin kaydını yazar. [preview] ve [body],
   /// [row] o alanları taşımadığında (zarf yenilemesi) mevcut değerleri
   /// korumak içindir; aksi hâlde dizindeki gövde metni kaybolurdu.
+  /// [fallbackRecipients] ise güncelleme companion'ı alıcı sütunlarını içermediğinde
+  /// var olan satırın alıcılarını korumak içindir.
   Future<void> _writeFts(
     int messageId,
     MessagesCompanion row, {
     String preview = '',
     String body = '',
-  }) => _replaceFts(
-    messageId,
-    _ftsText([
-      row.subject.present ? row.subject.value : '',
-      row.fromName.present ? row.fromName.value : '',
-      row.fromEmail.present ? row.fromEmail.value : '',
-      row.preview.present ? row.preview.value : preview,
-      body,
-    ]),
-  );
+    String? fallbackRecipients,
+  }) {
+    final to = row.toAddrJson.present ? row.toAddrJson.value : null;
+    final cc = row.ccJson.present ? row.ccJson.value : null;
+    final bcc = row.bccJson.present ? row.bccJson.value : null;
+    final recipientsText = (to != null || cc != null || bcc != null)
+        ? _recipientsToFtsText(to, cc, bcc)
+        : (fallbackRecipients ?? '');
+    return _replaceFts(
+      messageId,
+      _ftsText([
+        row.subject.present ? row.subject.value : '',
+        row.fromName.present ? row.fromName.value : '',
+        row.fromEmail.present ? row.fromEmail.value : '',
+        recipientsText,
+        row.preview.present ? row.preview.value : preview,
+        body,
+      ]),
+    );
+  }
 
   Future<void> _rebuildFtsForMessage(MessageRow row, String body) =>
       _replaceFts(
         row.id,
-        _ftsText([row.subject, row.fromName, row.fromEmail, row.preview, body]),
+        _ftsText([
+          row.subject,
+          row.fromName,
+          row.fromEmail,
+          _recipientsToFtsText(row.toAddrJson, row.ccJson, row.bccJson),
+          row.preview,
+          body,
+        ]),
       );
 
   /// Dizin kaydını `rowid` (= ileti kimliği) üzerinden değiştirir: doğrudan

@@ -178,6 +178,19 @@ describe('describeMessage', () => {
     expect(describeMessage(m)).toMatchObject({ fromName: 'ali@x.com', subject: '(Konu yok)' });
   });
 
+  it('geçerli tarihi ISO olarak taşır, geçersiz tarihi atlar (çökmez)', () => {
+    const valid = make({
+      envelope: { subject: 'k', from: [{ address: 'a@b.com' }], date: new Date('2026-10-21T10:18:00Z') } as any,
+    });
+    expect(describeMessage(valid)?.date).toBe('2026-10-21T10:18:00.000Z');
+
+    const broken = make({
+      envelope: { subject: 'k', from: [{ address: 'a@b.com' }], date: new Date('bozuk') } as any,
+    });
+    expect(() => describeMessage(broken)).not.toThrow();
+    expect(describeMessage(broken)?.date).toBeUndefined();
+  });
+
   it('uzun alanları kısaltır', () => {
     const m = make({ envelope: { subject: 'k'.repeat(500), from: [{ name: 'a' }] } as any });
     expect(describeMessage(m)!.subject.length).toBeLessThanOrEqual(160);

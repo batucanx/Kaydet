@@ -133,7 +133,7 @@ void main() {
         query: query,
         filters: f,
       );
-      return (result as Ok<int>).value;
+      return (result as Ok<RemoteSearchResult>).value.storedCount;
     }
 
     test(
@@ -154,8 +154,8 @@ void main() {
         final subjects = [
           for (final id in ids) (await db.messageById(id))!.subject,
         ];
-        // Tarihe göre yeniden eskiye.
-        expect(subjects, ['Yeni sözleşme', 'Eski sözleşme']);
+        // Tarihe göre yeniden eskiye (sunucu eşleşmesi olan yerel ileti 100 elenmez).
+        expect(subjects, ['Yeni sözleşme', 'Test konusu', 'Eski sözleşme']);
       },
     );
 
@@ -292,7 +292,7 @@ void main() {
         query: 'sozlesme',
         filters: filters,
       );
-      expect(result, isA<Err<int>>());
+      expect(result, isA<Err<RemoteSearchResult>>());
     });
 
     test(

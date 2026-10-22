@@ -13,16 +13,21 @@ import '../../core/widgets/kaydet_widgets.dart';
 /// Arama sonucundaki bir ileti kartı: avatar, gönderen (taslak/gönderilmiş
 /// iletilerde alıcı), konu — özet, tarih ve bulunduğu klasör etiketi.
 /// Taslaklar başlığın önünde kırmızı `[Taslak]` ile ayırt edilir.
+/// Çoklu hesap aramasında hesabın etiketi de gösterilir.
 class MailResultRow extends StatelessWidget {
   const MailResultRow({
     super.key,
     required this.message,
     required this.mailbox,
+    this.account,
+    this.showAccountBadge = false,
     required this.onTap,
   });
 
   final MessageRow message;
   final MailboxRow? mailbox;
+  final AccountRow? account;
+  final bool showAccountBadge;
   final VoidCallback onTap;
 
   @override
@@ -73,7 +78,7 @@ class MailResultRow extends StatelessWidget {
                       const SizedBox(width: Space.sm),
                       if (message.hasAttachments)
                         Padding(
-                          padding: const EdgeInsets.only(right: Space.xs),
+                           padding: const EdgeInsets.only(right: Space.xs),
                           child: Icon(
                             LucideIcons.paperclip,
                             size: 13,
@@ -110,10 +115,31 @@ class MailResultRow extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                  if (mailbox != null) ...[
-                    const SizedBox(height: Space.xs),
-                    _FolderTag(mailbox: mailbox!),
-                  ],
+                  // Etiketler (klasör/hesap) ayrı bir sağlayıcıdan, satırdan SONRA
+                  // yüklenir. Satır yüksekliği buna bağlı olursa her etiket
+                  // geldiğinde liste aşağı kayar; bu yüzden yer her zaman ayrılır.
+                  const SizedBox(height: Space.xs),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 20),
+                    child: AnimatedOpacity(
+                      duration: Motion.base,
+                      opacity:
+                          (mailbox != null ||
+                              (showAccountBadge && account != null))
+                          ? 1
+                          : 0,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (mailbox != null) _FolderTag(mailbox: mailbox!),
+                          if (showAccountBadge && account != null) ...[
+                            const SizedBox(width: Space.xs),
+                            _AccountTag(account: account!),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -123,6 +149,7 @@ class MailResultRow extends StatelessWidget {
     );
   }
 }
+
 
 /// Satırın başlığındaki kişi: gelen iletilerde gönderen; taslak ve
 /// gönderilmiş iletilerde (kendi adresiniz yerine) ilk alıcı — Gelen
@@ -192,6 +219,47 @@ class _FolderTag extends StatelessWidget {
     );
   }
 }
+
+class _AccountTag extends StatelessWidget {
+  const _AccountTag({required this.account});
+
+  final AccountRow account;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = context.tokens;
+    final name = account.displayName.trim().isNotEmpty
+        ? account.displayName
+        : account.email;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Space.sm, vertical: 2),
+      decoration: BoxDecoration(
+        color: t.surfaceElevated,
+        borderRadius: BorderRadius.circular(Radii.xs),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          KaydetAvatar(
+            name: account.displayName,
+            email: account.email,
+            size: 11,
+          ),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: AppText.labelSmall.copyWith(color: t.textTertiary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 /// Arama sonucundaki bir kişi kartı.
 class ContactResultRow extends StatelessWidget {

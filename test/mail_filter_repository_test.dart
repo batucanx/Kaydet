@@ -52,8 +52,8 @@ void main() {
   });
   tearDown(() => db.close());
 
-  test('şema 20: tablo oluşur, varsayılan filtre yoktur', () async {
-    expect(db.schemaVersion, 23);
+  test('şema 25: tablo oluşur, varsayılan filtre yoktur', () async {
+    expect(db.schemaVersion, 25);
     expect(await repo.list(accountId), isEmpty);
     expect(await repo.count(accountId), 0);
   });

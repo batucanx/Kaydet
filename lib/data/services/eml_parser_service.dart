@@ -8,6 +8,7 @@ import 'package:enough_mail/enough_mail.dart' as em;
 import '../../domain/models/eml_models.dart';
 import '../../domain/models/mail_models.dart';
 import 'inline_image_collector.dart';
+import 'mail_date_parser.dart';
 import 'mail_text_decoder.dart';
 
 /// EML (.eml, RFC 822 / RFC 2822 / MIME) dosyalarını ayrıştıran ve
@@ -614,7 +615,10 @@ abstract final class EmlParserService {
     final messageId = message.getHeaderValue('message-id');
     final inReplyTo = message.getHeaderValue('in-reply-to');
     final references = message.getHeaderValue('references');
-    final date = message.decodeDate() ?? DateTime.now();
+    final date =
+        parseMailDate(message.getHeaderValue('date')) ??
+        message.decodeDate() ??
+        DateTime.now();
 
     // 2. Gövde
     var rawHtml = MailTextDecoder.html(message);
@@ -880,7 +884,7 @@ abstract final class EmlParserService {
     DateTime date = DateTime.now();
     if (headersMap.containsKey('date')) {
       try {
-        date = em.DateCodec.decodeDate(headersMap['date']!) ?? DateTime.now();
+        date = parseMailDate(headersMap['date']) ?? DateTime.now();
       } catch (_) {}
     }
 

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'attachment_files.dart';
 import 'inline_image_collector.dart';
+import 'mail_date_parser.dart';
 import 'mail_text_decoder.dart';
 import 'package:enough_mail/enough_mail.dart' as em;
 import 'package:flutter/foundation.dart' show kDebugMode;
@@ -67,7 +68,10 @@ abstract class ImapService {
   Future<Result<int>> countUnseen({required String path, String? encodedPath});
 
   /// Klasördeki tüm UID'leri döner (silinenleri tespit etmek için).
-  Future<Result<List<int>>> searchAllUids();
+  ///
+  /// [undeletedOnly] true ise `\Deleted` bayraklı iletiler elenir (`SEARCH UNDELETED`).
+  /// Webmail/cPanel uyumluluğu için uzlaşmada kullanılır.
+  Future<Result<List<int>>> searchAllUids({bool undeletedOnly = false});
 
   /// Seçili klasörde sunucu tarafı `UID SEARCH` (bkz. `ImapSearchCriteria`);
   /// eşleşen UID'ler. Yerel kopyada olmayan (eski) iletileri bulmak içindir.
@@ -83,7 +87,12 @@ abstract class ImapService {
   });
 
   /// Verilen UID listesinden sunucuda hâlâ var olanları döner (silinenleri tespit etmek için).
-  Future<Result<List<int>>> searchUidsInSet(List<int> uids);
+  ///
+  /// [undeletedOnly] true ise `\Deleted` bayraklı iletiler elenir.
+  Future<Result<List<int>>> searchUidsInSet(
+    List<int> uids, {
+    bool undeletedOnly = false,
+  });
 
   /// Bir UID'nin IMAP sıra numarasını (sequence number) döner. Bulunamazsa `null` döner.
   Future<Result<int?>> searchSequenceByUid(int uid);
@@ -572,12 +581,13 @@ class EnoughMailImapService implements ImapService {
   });
 
   @override
-  Future<Result<List<int>>> searchAllUids() => _guard(() async {
-    final result = await _requireClient.uidSearchMessages(
-      searchCriteria: 'ALL',
-    );
-    return result.matchingSequence?.toList() ?? <int>[];
-  });
+  Future<Result<List<int>>> searchAllUids({bool undeletedOnly = false}) =>
+      _guard(() async {
+        final result = await _requireClient.uidSearchMessages(
+          searchCriteria: undeletedOnly ? 'UNDELETED' : 'ALL',
+        );
+        return result.matchingSequence?.toList() ?? <int>[];
+      });
 
   /// Metin aramaları gövdeyi de taradığından büyük klasörlerde saniyeler sürer.
   static const Duration _searchResponseTimeout = Duration(seconds: 45);
@@ -660,28 +670,33 @@ class EnoughMailImapService implements ImapService {
   }, timeout: _envelopeResponseTimeout + _outerSlack);
 
   @override
-  Future<Result<List<int>>> searchUidsInSet(List<int> uids) =>
-      _guard(() async {
-        if (uids.isEmpty) return <int>[];
-        final found = <int>[];
-        // Sıralı UID'ler ardışık aralıklara sıkışır (`1:4000,4003:…`); sırasız
-        // liste sıkışmaz ve tamamı indirilmiş kutuda yüzlerce gidiş-dönüşe
-        // (her yeni iletide) yol açardı.
-        final sorted = [...uids]..sort();
-        const chunkSize = 1000;
-        for (var i = 0; i < sorted.length; i += chunkSize) {
-          final chunk = sorted.sublist(i, min(i + chunkSize, sorted.length));
-          final sequence = em.MessageSequence.fromIds(chunk, isUid: true);
-          final result = await _requireClient.uidSearchMessages(
-            searchCriteria: 'UID ${sequence.toString()}',
-          );
-          final matches = result.matchingSequence?.toList();
-          if (matches != null) {
-            found.addAll(matches);
-          }
-        }
-        return found;
-      });
+  Future<Result<List<int>>> searchUidsInSet(
+    List<int> uids, {
+    bool undeletedOnly = false,
+  }) => _guard(() async {
+    if (uids.isEmpty) return <int>[];
+    final found = <int>[];
+    // Sıralı UID'ler ardışık aralıklara sıkışır (`1:4000,4003:…`); sırasız
+    // liste sıkışmaz ve tamamı indirilmiş kutuda yüzlerce gidiş-dönüşe
+    // (her yeni iletide) yol açardı.
+    final sorted = [...uids]..sort();
+    const chunkSize = 1000;
+    for (var i = 0; i < sorted.length; i += chunkSize) {
+      final chunk = sorted.sublist(i, min(i + chunkSize, sorted.length));
+      final sequence = em.MessageSequence.fromIds(chunk, isUid: true);
+      final criteria = undeletedOnly
+          ? 'UID ${sequence.toString()} UNDELETED'
+          : 'UID ${sequence.toString()}';
+      final result = await _requireClient.uidSearchMessages(
+        searchCriteria: criteria,
+      );
+      final matches = result.matchingSequence?.toList();
+      if (matches != null) {
+        found.addAll(matches);
+      }
+    }
+    return found;
+  });
 
   @override
   Future<Result<int?>> searchSequenceByUid(int uid) => _guard(() async {
@@ -702,9 +717,17 @@ class EnoughMailImapService implements ImapService {
             .toList();
 
     final envelope = message.envelope;
-    // `Date` başlığı eksik/bozuk iletiler 1970'e düşmesin: eşitleme anı,
-    // yeni gelen ileti için geliş zamanına en yakın değerdir.
-    final date = envelope?.date ?? message.decodeDate() ?? DateTime.now();
+    // Ham `Date` başlığı kendi toleranslı çözücümüzle okunur (`enough_mail`
+    // `+03:00` dilimini UTC sayıp saati kaydırır). Başlık eksik/bozuksa
+    // sunucunun geliş zamanı (INTERNALDATE) kullanılır; eşitleme anı yalnızca
+    // son çare — aksi hâlde ileti her eşitlemede "şimdi geldi" gibi en üstte
+    // görünür ve gerçek tarihinin üzerine yazılır.
+    final date =
+        parseMailDate(message.getHeaderValue('date')) ??
+        envelope?.date?.toUtc() ??
+        message.decodeDate()?.toUtc() ??
+        parseInternalDate(message.internalDate) ??
+        DateTime.now();
 
     var hasAttachments = false;
     try {

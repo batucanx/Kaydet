@@ -121,6 +121,31 @@ final searchFolderOptionsProvider =
 
 // --------------------------------------------------------- sunucu araması
 
+/// Sunucu aramasıyla bulunan ileti kimlikleri (hem yeni eklenenler hem de
+/// yerelde zaten var olan eşleşmeler). Sorgu/filtre/kapsam değiştiğinde sıfırlanır.
+class ServerSearchHitsNotifier extends Notifier<Set<int>> {
+  @override
+  Set<int> build() {
+    // Sorgu, filtre veya hesap kapsamı değişince önceki sonuçları sıfırla
+    ref.watch(searchQueryProvider);
+    ref.watch(searchFiltersProvider);
+    ref.watch(searchScopeProvider);
+    return const {};
+  }
+
+  void addHits(Iterable<int> ids) {
+    if (ids.isEmpty) return;
+    state = {...state, ...ids};
+  }
+
+  void clear() => state = const {};
+}
+
+final serverSearchHitsProvider =
+    NotifierProvider.autoDispose<ServerSearchHitsNotifier, Set<int>>(
+      ServerSearchHitsNotifier.new,
+    );
+
 /// Yazı yazmayı bıraktıktan sonra sunucu aramasının başlamasına kadar bekleme
 /// (her tuş vuruşunda yüzlerce klasörü taramamak için).
 const _remoteSearchDelay = Duration(milliseconds: 600);
@@ -160,30 +185,91 @@ final remoteSearchProvider = FutureProvider.autoDispose<int>((ref) async {
         query: query,
         filters: filters,
         isCancelled: () => cancelled,
+        onHitsFound: (hitIds) {
+          if (!cancelled) {
+            ref.read(serverSearchHitsProvider.notifier).addHits(hitIds);
+          }
+        },
       );
   return switch (result) {
-    Ok<int>(:final value) => value,
-    Err<int>(:final failure) => throw failure,
+    Ok<RemoteSearchResult>(:final value) => value.storedCount,
+    Err<RemoteSearchResult>(:final failure) => throw failure,
   };
 });
 
 // -------------------------------------------------------------- sonuçlar
 
-/// [run]'ı bir kez çalıştırır, ardından [tables]'ta HER değişiklikte yeniden
+/// [run]'ı bir kez çalıştırır, ardından [tables]'ta değişiklik oldukça yeniden
 /// çalıştırıp yeni sonucu yayar.
 ///
 /// Arama sonuçları tek seferlik sorgulardır; ekran açıkken bir taslak
 /// silinir, bir ileti taşınır ya da senkronizasyon bir ileti getirirse liste
 /// eski kalırdı (silinen taslak sonuçta görünmeye devam ederdi).
+///
+/// Sunucu araması her klasörde ayrı ayrı yazdığından değişiklikler art arda
+/// gelir; her biri için listeyi yeniden kurmak sonuçların "sıçrayarak"
+/// yerleşmesine yol açardı. Bu yüzden değişiklikler [settle] süresince
+/// birleştirilir ve tek bir sorgu çalıştırılır; sorgu sürerken gelen yeni
+/// değişiklik sorgu bitince bir kez daha çalıştırılır.
 Stream<T> _rerunOnChange<T>(
   AppDatabase db,
   Set<TableInfo<dynamic, dynamic>> tables,
-  Future<T> Function() run,
-) async* {
-  yield await run();
-  await for (final _ in db.tableUpdates(TableUpdateQuery.onAllTables(tables))) {
-    yield await run();
+  Future<T> Function() run, {
+  Duration settle = const Duration(milliseconds: 140),
+}) {
+  late final StreamController<T> controller;
+  StreamSubscription<void>? subscription;
+  Timer? timer;
+  var running = false;
+  var dirty = false;
+
+  Future<void> emit() async {
+    if (running) {
+      dirty = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        dirty = false;
+        final value = await run();
+        if (controller.isClosed) return;
+        controller.add(value);
+      } while (dirty && !controller.isClosed);
+    } on Object catch (error, stack) {
+      if (!controller.isClosed) controller.addError(error, stack);
+    } finally {
+      running = false;
+    }
   }
+
+  controller = StreamController<T>(
+    onListen: () {
+      emit();
+      subscription = db
+          .tableUpdates(TableUpdateQuery.onAllTables(tables))
+          .listen((_) {
+            timer?.cancel();
+            timer = Timer(settle, emit);
+          });
+    },
+    onCancel: () async {
+      timer?.cancel();
+      await subscription?.cancel();
+    },
+  );
+  return controller.stream;
+}
+
+/// İki ileti listesi birebir aynı mı (sıra ve içerik)? Aynı sonucu yeniden
+/// yayınlayıp listeyi boşuna yeniden çizmemek için.
+bool _sameRows(List<MessageRow> a, List<MessageRow> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 final mailSearchResultsProvider = StreamProvider.autoDispose<List<MessageRow>>((
@@ -198,22 +284,40 @@ final mailSearchResultsProvider = StreamProvider.autoDispose<List<MessageRow>>((
   }
   final scope = ref.watch(searchScopeProvider);
   final db = ref.watch(databaseProvider);
-  return _rerunOnChange(db, {db.messages, db.mailboxes}, () async {
+  final serverHits = ref.watch(serverSearchHitsProvider);
+
+  return _rerunOnChange<List<MessageRow>>(db, {db.messages, db.mailboxes}, () async {
     final ids = await db.searchMessageIds(
       accountId: scope,
       query: query,
       filters: filters,
+      serverHitIds: serverHits,
     );
-    if (ids.isEmpty) return const <MessageRow>[];
-    final rows = await db.messagesByIds(ids);
-    // Sorgunun tarih sırasını (yeniden eskiye) koru — `messagesByIds` id
-    // sırasını korumaz.
-    final byId = {for (final row in rows) row.id: row};
-    return [
-      for (final id in ids)
-        if (byId[id] != null) byId[id]!,
-    ];
-  });
+
+    // Sunucu eşleşmelerinin hesap kapsamına uyan ve silinmemiş olanlarının
+    // sonuç listesinde yer almasını garanti et (Search Hit korunumu).
+    final validServerHits = <int>[];
+    if (serverHits.isNotEmpty) {
+      final hitRows = await db.messagesByIds(serverHits.toList());
+      for (final row in hitRows) {
+        if (!row.isDeleted && (scope == null || row.accountId == scope)) {
+          validServerHits.add(row.id);
+        }
+      }
+    }
+
+    final combinedIds = <int>{...ids, ...validServerHits}.toList();
+    if (combinedIds.isEmpty) return const <MessageRow>[];
+
+    final rows = await db.messagesByIds(combinedIds);
+    // Sorgunun tarih sırasını (yeniden eskiye) koru.
+    rows.sort((a, b) {
+      final byDate = b.dateUtc.compareTo(a.dateUtc);
+      if (byDate != 0) return byDate;
+      return b.id.compareTo(a.id);
+    });
+    return rows;
+  }).distinct(_sameRows);
 });
 
 /// Sonuçtaki iletilerin klasör etiketi ("Taslak", "Gelen Kutusu"…) için.
@@ -226,6 +330,21 @@ final searchResultMailboxesProvider =
       final rows = await db.mailboxesByIds(ids);
       return {for (final row in rows) row.id: row};
     });
+
+/// Çoklu hesap aramasında ("Tüm Hesaplar") sonuç kartlarının üzerinde
+/// hangi hesaba ait olduğunu gösteren rozet için hesap eşlemesi.
+final searchResultAccountsProvider =
+    FutureProvider.autoDispose<Map<int, AccountRow>>((ref) async {
+      final messages = await ref.watch(mailSearchResultsProvider.future);
+      if (messages.isEmpty) return const {};
+      final ids = messages.map((m) => m.accountId).toSet();
+      final accounts = ref.watch(allAccountsProvider).value ?? const [];
+      return {
+        for (final a in accounts)
+          if (ids.contains(a.id)) a.id: a,
+      };
+    });
+
 
 final contactSearchResultsProvider =
     StreamProvider.autoDispose<List<ContactRow>>((ref) {

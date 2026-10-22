@@ -785,7 +785,10 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
     settingsProvider.select((settings) => settings.groupMessages),
   );
 
-  final sentMailboxId = groupMessages
+  // Gelen Kutusu'nda konuşmaları tamamlarken giden (sent) kutusundaki
+  // yanıtlar dahil edilir. Arşiv, İstenmeyen, Çöp ve diğer klasörlerde
+  // ise yalnızca o klasörün kendi iletileri listelenir (sunucuyla birebir eşitlik).
+  final sentMailboxId = (groupMessages && isInbox)
       ? ref.watch(
           mailboxesProvider.select(
             (m) => m.value
@@ -807,7 +810,7 @@ final messageListProvider = StreamProvider<List<MessageRow>>((ref) {
           mailboxId: folder.mailboxId!,
           sentMailboxId: sentMailboxId,
           limit: ref.watch(pageLimitProvider),
-          completeThreads: groupMessages,
+          completeThreads: groupMessages && isInbox,
           // Taslaklar yalnızca Taslaklar klasöründe görünür: sunucuda Gelen
           // Kutusu'na `\Draft` bayrağıyla düşen iletiler ve Taslaklar klasörü
           // bilinmediğinde Gelen Kutusu'na yazılan yerel taslaklar gizlenir.

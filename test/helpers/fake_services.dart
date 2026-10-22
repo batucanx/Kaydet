@@ -99,6 +99,14 @@ class FakeImapService implements ImapService {
     }
   }
 
+  /// Belirli bir posta kutusunu iletilerle doldurur.
+  void seedMailbox(String path, List<FetchedEnvelope> envelopes) {
+    final box = store.putIfAbsent(path, () => {});
+    for (final envelope in envelopes) {
+      box[envelope.uid] = envelope;
+    }
+  }
+
   void seedBody(String path, int uid, FetchedBody body) {
     bodies.putIfAbsent(path, () => {})[uid] = body;
   }
@@ -218,10 +226,16 @@ class FakeImapService implements ImapService {
   }
 
   @override
-  Future<Result<List<int>>> searchAllUids() async {
+  Future<Result<List<int>>> searchAllUids({bool undeletedOnly = false}) async {
     commandLog.add('search');
     final box = _box(selectedPath ?? 'INBOX');
-    return Ok(box.keys.toList()..sort());
+    return Ok(
+      box.entries
+          .where((e) => !undeletedOnly || !e.value.isDeleted)
+          .map((e) => e.key)
+          .toList()
+        ..sort(),
+    );
   }
 
   @override
@@ -268,20 +282,33 @@ class FakeImapService implements ImapService {
   /// `searchUids`un döneceği UID'ler ve aldığı ölçütler (sunucu araması).
   List<int> searchUidsResult = const [];
   final List<String> searchCriteriaLog = [];
+  AppFailure? Function(String criteria)? onSearchUids;
 
   @override
   Future<Result<List<int>>> searchUids(String criteria) async {
     commandLog.add('searchUids');
     searchCriteriaLog.add(criteria);
+    final fail = onSearchUids?.call(criteria);
+    if (fail != null) return Err(fail);
     final box = _box(selectedPath ?? 'INBOX');
     return Ok(searchUidsResult.where(box.containsKey).toList());
   }
 
   @override
-  Future<Result<List<int>>> searchUidsInSet(List<int> uids) async {
+  Future<Result<List<int>>> searchUidsInSet(
+    List<int> uids, {
+    bool undeletedOnly = false,
+  }) async {
     commandLog.add('search');
     final box = _box(selectedPath ?? 'INBOX');
-    return Ok(uids.where((u) => box.containsKey(u)).toList());
+    return Ok(
+      uids
+          .where(
+            (u) =>
+                box.containsKey(u) && (!undeletedOnly || !box[u]!.isDeleted),
+          )
+          .toList(),
+    );
   }
 
   @override

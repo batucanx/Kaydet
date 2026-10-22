@@ -205,8 +205,10 @@ class NotificationIntake {
 
   /// Süreç açılırken bekleyen tüm dokunuşları (APNs ve yerel) depoya alır.
   Future<void> pull() async {
-    await _pullRemote();
-    await _pullLaunchDetails();
+    await (
+      _pullRemote(),
+      _pullLaunchDetails(),
+    ).wait;
   }
 
   Future<void> _pullRemote() async {
