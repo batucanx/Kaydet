@@ -990,13 +990,14 @@ class AppDatabase extends _$AppDatabase {
   /// Klasördeki silinmiş veya UID'siz hayalet satırları kalıcı olarak temizler.
   Future<void> purgeGhostMessages(int mailboxId) async {
     // 1. \Deleted olarak işaretlenmiş satırlar
-    final deletedRows = await (selectOnly(messages)
-          ..addColumns([messages.id])
-          ..where(
-            messages.mailboxId.equals(mailboxId) &
-                messages.isDeleted.equals(true),
-          ))
-        .get();
+    final deletedRows =
+        await (selectOnly(messages)
+              ..addColumns([messages.id])
+              ..where(
+                messages.mailboxId.equals(mailboxId) &
+                    messages.isDeleted.equals(true),
+              ))
+            .get();
     if (deletedRows.isNotEmpty) {
       await deleteMessages(
         deletedRows.map((r) => r.read(messages.id)!).toList(),
@@ -1004,15 +1005,16 @@ class AppDatabase extends _$AppDatabase {
     }
 
     // 2. Taslak ve giden kutusu olmayan klasörlerde UID'si olmayan satırlar (hayaletler)
-    final ghostRows = await (selectOnly(messages)
-          ..addColumns([messages.id])
-          ..where(
-            messages.mailboxId.equals(mailboxId) &
-                messages.uid.isNull() &
-                messages.isDraft.equals(false) &
-                messages.outboxState.equals(OutboxState.none.index),
-          ))
-        .get();
+    final ghostRows =
+        await (selectOnly(messages)
+              ..addColumns([messages.id])
+              ..where(
+                messages.mailboxId.equals(mailboxId) &
+                    messages.uid.isNull() &
+                    messages.isDraft.equals(false) &
+                    messages.outboxState.equals(OutboxState.none.index),
+              ))
+            .get();
     if (ghostRows.isNotEmpty) {
       await deleteMessages(ghostRows.map((r) => r.read(messages.id)!).toList());
     }
@@ -1068,20 +1070,6 @@ class AppDatabase extends _$AppDatabase {
     return row?.uid;
   }
 
-  Future<int> countMessages(int mailboxId) async {
-    final count = countAll();
-    final row =
-        await (selectOnly(messages)
-              ..addColumns([count])
-              ..where(
-                messages.mailboxId.equals(mailboxId) &
-                    messages.isDeleted.equals(false) &
-                    messages.isSearchHit.equals(false),
-              ))
-            .getSingle();
-    return row.read(count) ?? 0;
-  }
-
   /// Klasörde UID'si [afterUid]'den büyük, hâlâ okunmamış sunucu iletilerinin
   /// yerel kimlikleri (bkz. `NotificationLedger`: eşitlenmiş ama bildirilmemiş
   /// iletileri bulmak için).
@@ -1103,6 +1091,20 @@ class AppDatabase extends _$AppDatabase {
     return [for (final row in rows) row.id];
   }
 
+  Future<int> countMessages(int mailboxId) async {
+    final count = countAll();
+    final row =
+        await (selectOnly(messages)
+              ..addColumns([count])
+              ..where(
+                messages.mailboxId.equals(mailboxId) &
+                    messages.isDeleted.equals(false) &
+                    messages.isSearchHit.equals(false),
+              ))
+            .getSingle();
+    return row.read(count) ?? 0;
+  }
+
   Future<int> countUnread(int mailboxId) async {
     final count = countAll();
     final row =
@@ -1111,7 +1113,7 @@ class AppDatabase extends _$AppDatabase {
               ..where(
                 messages.mailboxId.equals(mailboxId) &
                     messages.isSeen.equals(false) &
-                messages.isSearchHit.equals(false) &
+                    messages.isSearchHit.equals(false) &
                     messages.isDraft.equals(false) &
                     messages.isDeleted.equals(false),
               ))
@@ -1222,7 +1224,10 @@ class AppDatabase extends _$AppDatabase {
   /// Sunucudan gelen iletileri yazar; var olanı günceller.
   ///
   /// Dönüş: yeni eklenen iletilerin yerel kimlikleri (bildirim için).
-  Future<List<int>> upsertServerMessages(List<MessagesCompanion> rows) async {
+  Future<List<int>> upsertServerMessages(
+    List<MessagesCompanion> rows, {
+    Set<int>? activeServerUids,
+  }) async {
     if (rows.isEmpty) return const [];
     final inserted = <int>[];
 
@@ -1244,14 +1249,19 @@ class AppDatabase extends _$AppDatabase {
           );
           // Message-ID ile eşleştirme YALNIZCA şu durumlarda geçerlidir:
           //  - yerel satır henüz sunucuya yazılmamış (giden/taslak, UID yok),
-          //  - ya da taslak: web'de düzenlenen taslak yeni UID ile gelir.
+          //  - ya da taslak: web'de düzenlenen taslak yeni UID ile gelmiş ve eski UID sunucuda ARTIK YOK.
           // Aksi hâlde sunucuda AYRI bir UID'si olan iletiler (aynı Message-ID'li
-          // çift teslimatlar, yeniden gönderimler) tek satıra çöküp biri sessizce
+          // çift teslimatlar, yeniden gönderimler veya birden çok taslak) tek satıra çöküp biri sessizce
           // kaybolurdu — webmail ikisini de gösterirken uygulama birini gösterirdi.
+          final isOldDraftReplacedOnServer =
+              (row.isDraft.present && row.isDraft.value) &&
+              (byHeader?.uid == null ||
+                  (activeServerUids != null &&
+                      !activeServerUids.contains(byHeader!.uid)));
           if (byHeader != null &&
               (byHeader.isLocalOnly ||
                   byHeader.uid == null ||
-                  (row.isDraft.present && row.isDraft.value))) {
+                  isOldDraftReplacedOnServer)) {
             existing = byHeader;
           }
         }
@@ -1271,18 +1281,21 @@ class AppDatabase extends _$AppDatabase {
                 mailboxId: row.mailboxId,
                 isDraft: row.isDraft,
                 isSeen: row.isSeen,
+                isLocalOnly: const Value(false),
               ),
             );
           } else {
             // Normal eşitleme bir arama sonucunu da getirebilir: artık klasörün
             // olağan bir iletisidir.
-            await (update(messages)..where((m) => m.id.equals(existing!.id)))
-                .write(
-                  row.copyWith(
-                    id: const Value.absent(),
-                    isSearchHit: const Value(false),
-                  ),
-                );
+            await (update(
+              messages,
+            )..where((m) => m.id.equals(existing!.id))).write(
+              row.copyWith(
+                id: const Value.absent(),
+                isSearchHit: const Value(false),
+                isLocalOnly: const Value(false),
+              ),
+            );
             // Zarf yenilenirken dizindeki gövde ve önizleme metni KAYBOLMAMALI.
             final body = await bodyOf(existing.id);
             await _writeFts(
@@ -1317,12 +1330,13 @@ class AppDatabase extends _$AppDatabase {
     await transaction(() async {
       for (final row in rows) {
         final uid = row.uid.value;
-        if (uid != null && await messageByUid(row.mailboxId.value, uid) != null) {
+        if (uid != null &&
+            await messageByUid(row.mailboxId.value, uid) != null) {
           continue;
         }
-        final id = await into(messages).insert(
-          row.copyWith(isSearchHit: const Value(true)),
-        );
+        final id = await into(
+          messages,
+        ).insert(row.copyWith(isSearchHit: const Value(true)));
         await _writeFts(id, row, body: matchedText);
         inserted.add(id);
       }
@@ -2576,8 +2590,67 @@ class AppDatabase extends _$AppDatabase {
     return cancelPendingOperations(ops.map((o) => o.id).toList());
   }
 
-  Future<void> completeOperation(int id) =>
-      (delete(pendingOperations)..where((p) => p.id.equals(id))).go();
+  /// Sunucuda uygulanmış bir kaldırma işleminin (taşı/sil) eşitleme kilidini
+  /// tamamlandıktan sonra ne kadar tutacağı (bkz. [completeOperation]).
+  static const Duration removalTombstoneTtl = Duration(minutes: 2);
+
+  /// İşlemi kuyruktan çıkarır.
+  ///
+  /// [tombstone] verilirse satır silinmez, `done` olarak [tombstone] süresi
+  /// kadar saklanır ve süre sonu `nextAttemptAt`'ta tutulur (`done` satırlar
+  /// hiçbir sahiplenme sorgusuna girmez). Taşıma/silme işlemlerinde bu, işlem
+  /// biter bitmez kilidin düşmesini önler: başka bir bağlantının (ör. arka plan
+  /// isolate'u) işlemden ÖNCE aldığı bayat sunucu görüntüsü, işlemden SONRA
+  /// yerele yazılırsa silinen ileti geri gelirdi (bkz. `SyncEngine.lockedUids`).
+  Future<void> completeOperation(int id, {Duration? tombstone}) async {
+    final now = DateTime.now().toUtc();
+    await transaction(() async {
+      if (tombstone == null) {
+        await (delete(pendingOperations)..where((p) => p.id.equals(id))).go();
+      } else {
+        await (update(pendingOperations)..where((p) => p.id.equals(id))).write(
+          PendingOperationsCompanion(
+            status: const Value(PendingOpStatus.done),
+            nextAttemptAt: Value(now.add(tombstone)),
+          ),
+        );
+      }
+      await (delete(pendingOperations)..where(
+            (p) =>
+                p.status.equalsValue(PendingOpStatus.done) &
+                p.nextAttemptAt.isSmallerOrEqualValue(now),
+          ))
+          .go();
+    });
+  }
+
+  /// Yerel satırı iyimser olarak kaldırılmış ya da değiştirilmiş iletilerin
+  /// sunucu görüntüsüyle ezilmesini engelleyen kilit işlemleri: bekleyen
+  /// (geri çekilmedekiler dahil), çalışan ve — [includeRecentlyDone] ise —
+  /// az önce tamamlanmış (`done`, süresi dolmamış) işlemler.
+  ///
+  /// Sınır YOKTUR: art arda çok sayıda silme (özellikle çevrimdışı) kuyruğu
+  /// yüzlerce işleme çıkarabilir; sınırın dışında kalan işlemin iletisi bir
+  /// sonraki eşitlemede geri gelirdi.
+  Future<List<PendingOperationRow>> lockingOperations(
+    int accountId, {
+    bool includeRecentlyDone = false,
+  }) {
+    final now = DateTime.now().toUtc();
+    return (select(pendingOperations)..where(
+          (p) =>
+              p.accountId.equals(accountId) &
+              (p.status.isIn([
+                    PendingOpStatus.pending.index,
+                    PendingOpStatus.running.index,
+                  ]) |
+                  (includeRecentlyDone
+                      ? p.status.equalsValue(PendingOpStatus.done) &
+                            p.nextAttemptAt.isBiggerThanValue(now)
+                      : const Constant(false))),
+        ))
+        .get();
+  }
 
   Future<void> failOperation(
     int id, {
@@ -2638,13 +2711,15 @@ class AppDatabase extends _$AppDatabase {
     if (match == null) {
       if (serverHitIds.isNotEmpty) {
         final hitPlaceholders = List.filled(serverHitIds.length, '?').join(',');
-        querySql = 'SELECT m.id AS mid FROM messages m '
+        querySql =
+            'SELECT m.id AS mid FROM messages m '
             'JOIN mailboxes mb ON mb.id = m.mailbox_id '
             'WHERE m.id IN ($hitPlaceholders) $accountClause${filter.sql} '
             'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
         variables.addAll(serverHitIds.map((id) => Variable<int>(id)));
       } else {
-        querySql = 'SELECT m.id AS mid FROM messages m '
+        querySql =
+            'SELECT m.id AS mid FROM messages m '
             'JOIN mailboxes mb ON mb.id = m.mailbox_id '
             'WHERE 1 = 1 $accountClause${filter.sql} '
             'ORDER BY m.date_utc DESC, m.id DESC LIMIT ? OFFSET ?';
@@ -2652,7 +2727,8 @@ class AppDatabase extends _$AppDatabase {
     } else {
       if (serverHitIds.isNotEmpty) {
         final hitPlaceholders = List.filled(serverHitIds.length, '?').join(',');
-        querySql = 'SELECT m.id AS mid FROM messages m '
+        querySql =
+            'SELECT m.id AS mid FROM messages m '
             'JOIN mailboxes mb ON mb.id = m.mailbox_id '
             'WHERE (m.id IN (SELECT f.rowid FROM messages_fts f WHERE messages_fts MATCH ?) '
             'OR m.id IN ($hitPlaceholders)) '
@@ -2661,7 +2737,8 @@ class AppDatabase extends _$AppDatabase {
         variables.add(Variable<String>(match));
         variables.addAll(serverHitIds.map((id) => Variable<int>(id)));
       } else {
-        querySql = 'SELECT f.rowid AS mid FROM messages_fts f '
+        querySql =
+            'SELECT f.rowid AS mid FROM messages_fts f '
             'JOIN messages m ON m.id = f.rowid '
             'JOIN mailboxes mb ON mb.id = m.mailbox_id '
             'WHERE messages_fts MATCH ? $accountClause${filter.sql} '

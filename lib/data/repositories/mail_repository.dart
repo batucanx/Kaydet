@@ -81,7 +81,8 @@ class MailRepository {
        _connection = connection,
        _sync = syncEngine,
        _smtp = smtpService,
-       _draftRepository = draftRepository ??
+       _draftRepository =
+           draftRepository ??
            DraftRepositoryImpl(
              database: database,
              remoteDataSource: ImapDraftRemoteDataSource(connection),
@@ -285,7 +286,8 @@ class MailRepository {
     final actionableRows = rows
         .where(
           (row) =>
-              row.mailboxId != targetBox?.id && !_movesInFlight.contains(row.id),
+              row.mailboxId != targetBox?.id &&
+              !_movesInFlight.contains(row.id),
         )
         .toList();
     if (actionableRows.isEmpty) return null;
@@ -347,7 +349,10 @@ class MailRepository {
       kickQueue(accountId);
       return;
     }
-    Timer(delay + const Duration(milliseconds: 300), () => kickQueue(accountId));
+    Timer(
+      delay + const Duration(milliseconds: 300),
+      () => kickQueue(accountId),
+    );
   }
 
   MailActionHandle _undoHandle(
@@ -699,10 +704,12 @@ class MailRepository {
     if (existing != null && File(existing).existsSync()) {
       final file = File(existing);
       final length = file.lengthSync();
-      final isTruncated = attachment.sizeBytes > 0 && length < (attachment.sizeBytes / 2);
+      final isTruncated =
+          attachment.sizeBytes > 0 && length < (attachment.sizeBytes / 2);
       final nameLower = attachment.fileName.toLowerCase();
       var isCorruptOffice = false;
-      if ((nameLower.endsWith('.docx') || nameLower.endsWith('.xlsx')) && length >= 4) {
+      if ((nameLower.endsWith('.docx') || nameLower.endsWith('.xlsx')) &&
+          length >= 4) {
         try {
           final raf = file.openSync(mode: FileMode.read);
           try {
@@ -720,7 +727,8 @@ class MailRepository {
       // ("From: a@xTo: b@x…"): ilk KB'de hiç satır sonu yoksa bozuk sayılır ve
       // ek sunucudan yeniden alınır.
       var isCollapsedEml = false;
-      if ((nameLower.endsWith('.eml') || attachment.mimeType.toLowerCase().contains('rfc822')) &&
+      if ((nameLower.endsWith('.eml') ||
+              attachment.mimeType.toLowerCase().contains('rfc822')) &&
           length > 0) {
         try {
           final raf = file.openSync(mode: FileMode.read);
@@ -746,7 +754,8 @@ class MailRepository {
             await file.writeAsBytes(decodedBytes);
           }
           if (attachment.sizeBytes == 0 && length > 0) {
-            await (_db.update(_db.attachments)..where((a) => a.id.equals(attachmentId)))
+            await (_db.update(_db.attachments)
+                  ..where((a) => a.id.equals(attachmentId)))
                 .write(AttachmentsCompanion(sizeBytes: Value(length)));
           }
           return Ok(existing);
@@ -796,17 +805,21 @@ class MailRepository {
         p.join(folder.path, AttachmentFiles.safeFileName(attachment.fileName)),
       );
       final nameLower = attachment.fileName.toLowerCase();
-      final isEml = nameLower.endsWith('.eml') ||
+      final isEml =
+          nameLower.endsWith('.eml') ||
           attachment.mimeType.toLowerCase().contains('rfc822') ||
           attachment.mimeType.toLowerCase().contains('eml');
-      final decodedData = isEml ? data : AttachmentFiles.ensureBinaryDecoded(data);
+      final decodedData = isEml
+          ? data
+          : AttachmentFiles.ensureBinaryDecoded(data);
       if (decodedData.isEmpty) {
         return const Err(ServerFailure(detail: 'ek içeriği çözülemedi'));
       }
       await file.writeAsBytes(decodedData);
       await _db.setAttachmentPath(attachmentId, file.path);
       if (attachment.sizeBytes == 0 && decodedData.isNotEmpty) {
-        await (_db.update(_db.attachments)..where((a) => a.id.equals(attachmentId)))
+        await (_db.update(_db.attachments)
+              ..where((a) => a.id.equals(attachmentId)))
             .write(AttachmentsCompanion(sizeBytes: Value(decodedData.length)));
       }
       return Ok(file.path);
@@ -935,10 +948,7 @@ class MailRepository {
           accountId: accountId,
           type: PendingOpType.send,
           payloadJson: Value(
-            jsonEncode({
-              'messageId': id,
-              'draftServerUid': ?draftServerUid,
-            }),
+            jsonEncode({'messageId': id, 'draftServerUid': ?draftServerUid}),
           ),
           nextAttemptAt: Value(effectiveNextAttempt),
         ),
@@ -1000,8 +1010,10 @@ class MailRepository {
       if (cancelled == 0) return false;
     }
 
-    final draftsBox =
-        await _db.mailboxBySpecialUse(row.accountId, SpecialUse.drafts);
+    final draftsBox = await _db.mailboxBySpecialUse(
+      row.accountId,
+      SpecialUse.drafts,
+    );
 
     await _db.updateMessage(
       messageId,
@@ -1009,7 +1021,9 @@ class MailRepository {
         outboxState: const Value(OutboxState.none),
         isDraft: const Value(true),
         outboxError: const Value(null),
-        mailboxId: draftsBox == null ? const Value.absent() : Value(draftsBox.id),
+        mailboxId: draftsBox == null
+            ? const Value.absent()
+            : Value(draftsBox.id),
       ),
     );
 
@@ -1176,7 +1190,15 @@ class MailRepository {
       await result.fold(
         (_) async {
           MailLog.remote('op ${op.id} ${op.type.name} SUCCESS');
-          await _db.completeOperation(op.id);
+          // Sunucuda kaldırılan iletinin UID'si kısa süre kilitli kalır: işlemden
+          // ÖNCE sunucu görüntüsü almış başka bir bağlantının (ör. arka plan
+          // isolate'u) eşitlemesi iletiyi yerele geri yazamasın.
+          await _db.completeOperation(
+            op.id,
+            tombstone: _removalKindOf(op) != null
+                ? AppDatabase.removalTombstoneTtl
+                : null,
+          );
           MailLog.drift('op ${op.id} completed');
           if (op.type == PendingOpType.move) {
             final target = await _targetMailboxOf(accountId, _payloadOf(op));
@@ -1184,7 +1206,9 @@ class MailRepository {
           }
         },
         (failure) {
-          MailLog.remote('op ${op.id} ${op.type.name} FAILED ${failure.runtimeType}');
+          MailLog.remote(
+            'op ${op.id} ${op.type.name} FAILED ${failure.runtimeType}',
+          );
           return _handleFailure(op, failure);
         },
       );
@@ -1520,9 +1544,7 @@ class MailRepository {
           final targetPath = await _resolveTargetPath(accountId, payload);
           if (targetPath == null) return const Err(MailboxNotFoundFailure());
           final targetRow = await _db.mailboxByPath(accountId, targetPath);
-          MailLog.remote(
-            'MOVE $sourcePath -> $targetPath uids=$uids',
-          );
+          MailLog.remote('MOVE $sourcePath -> $targetPath uids=$uids');
           return _connection.imap.moveMessages(
             uids: uids,
             targetPath: targetPath,
@@ -1623,8 +1645,7 @@ class MailRepository {
     if (targetBox == null && explicitPath == null && isSentCopy) {
       final created = await _connection.exclusive<MailboxRow?>(
         accountId,
-        () async =>
-            Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
+        () async => Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
       );
       targetBox = created.valueOrNull;
       // Sunucu Gönderilenler'i oluşturamadı: işlem "başarılı" sayılıp
@@ -1796,11 +1817,14 @@ class MailRepository {
           continue;
         }
 
-        final fetched = await _connection.exclusive<String>(accountId, () async {
-          final selected = await _connection.selectVerified(inbox);
-          if (selected is Err<MailboxState>) return Err(selected.failure);
-          return _connection.imap.fetchRawSource(candidate.uid!);
-        });
+        final fetched = await _connection.exclusive<String>(
+          accountId,
+          () async {
+            final selected = await _connection.selectVerified(inbox);
+            if (selected is Err<MailboxState>) return Err(selected.failure);
+            return _connection.imap.fetchRawSource(candidate.uid!);
+          },
+        );
         // Bağlantı hatasında işaretlenmez: sonraki eşitlemede yeniden denenir.
         if (fetched is! Ok<String>) continue;
         _inspectedBounces.add(key);
@@ -2005,10 +2029,13 @@ class MailRepository {
     // Sunucuda Gönderilenler yoksa gönderilen ileti hiçbir yerde saklanmazdı
     // (başka istemcilerde görünmez). Klasör oluşturulur; olmazsa APPEND
     // yeniden denenmek üzere kuyruğa alınır.
-    sentBox ??= await _connection.exclusive<MailboxRow?>(
-      accountId,
-      () async => Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
-    ).then((r) => r.valueOrNull);
+    sentBox ??= await _connection
+        .exclusive<MailboxRow?>(
+          accountId,
+          () async =>
+              Ok(await _createSpecialMailbox(accountId, SpecialUse.sent)),
+        )
+        .then((r) => r.valueOrNull);
     if (sentBox == null) {
       await _queueSentCopyRetry(accountId, messageId, null);
       return;

@@ -279,6 +279,18 @@ class DraftRepositoryImpl implements DraftRepository {
         _log('[DRAFT_SYNC] IMAP APPEND BAŞARILI! Dönen UID: $newUid, Eski UID: $oldUid');
 
         // Sunucu UIDPLUS desteklemediği için APPENDUID dönmediyse UID'yi bulmayı dene
+        if (newUid == null &&
+            row.messageIdHeader != null &&
+            row.messageIdHeader!.isNotEmpty) {
+          final searchRes = await _connection.imap.searchUids(
+            'HEADER Message-ID "${row.messageIdHeader}"',
+          );
+          if (searchRes is Ok<List<int>> && searchRes.value.isNotEmpty) {
+            newUid = searchRes.value.last;
+            _log('[DRAFT_SYNC] Message-ID ile bulunan UID: $newUid');
+          }
+        }
+
         if (newUid == null) {
           final selectRes = await _connection.imap.selectMailbox(
             draftsBox.path,
@@ -310,10 +322,27 @@ class DraftRepositoryImpl implements DraftRepository {
           MessagesCompanion(
             uid: newUid == null ? const Value.absent() : Value(newUid),
             mailboxId: Value(draftsBox.id),
-            isLocalOnly: const Value(false),
+            isLocalOnly: Value(newUid == null),
             dateUtc: Value(DateTime.now().toUtc()),
           ),
         );
+
+        if (newUid != null) {
+          final currentDraftsBox = await _db.mailboxById(draftsBox.id);
+          if (currentDraftsBox != null) {
+            final newTotal =
+                currentDraftsBox.totalCount + (oldUid == null ? 1 : 0);
+            final nextUid = (currentDraftsBox.uidNext != null &&
+                    currentDraftsBox.uidNext! > newUid)
+                ? currentDraftsBox.uidNext!
+                : newUid + 1;
+            await _db.updateMailboxSync(
+              draftsBox.id,
+              uidNext: nextUid,
+              totalCount: newTotal,
+            );
+          }
+        }
 
         // Başarılı senkronizasyon sonrası kuyruğu temizle
         await _db.cancelPendingDraftOperations(draftId);

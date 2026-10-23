@@ -1036,7 +1036,10 @@ final mailListItemsProvider = Provider<AsyncValue<List<MailListItem>>>((ref) {
       return items;
     }
 
-    final listRows = groupMessages ? _groupMessageRows(visible) : visible;
+    final isDrafts = folder?.unifiedUse == SpecialUse.drafts ||
+        mailbox?.specialUse == SpecialUse.drafts;
+    final listRows =
+        (groupMessages && !isDrafts) ? _groupMessageRows(visible) : visible;
 
     if (!groupByDate) {
       for (final row in listRows) {

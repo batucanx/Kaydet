@@ -467,5 +467,38 @@ void main() {
       // 4. Driftte de taslak kalmamali
       expect(await db.uidsOf(draftsMailbox.id), isNot(contains(300)));
     });
+
+    test('Sunucuda 9 taslak varken (ayni Message-ID paylassalar bile) mobilde tam 9 taslak gorunur', () async {
+      final draftBox = imap.store['INBOX.Drafts'] ??= {};
+      draftBox.clear();
+
+      // 9 adet taslak sunucuya eklenir (bazi taslaklar ayni messageId paylassin)
+      for (var i = 1; i <= 9; i++) {
+        draftBox[500 + i] = FetchedEnvelope(
+          uid: 500 + i,
+          date: DateTime.utc(2026, 10, 14, 10, i),
+          subject: 'Taslak $i',
+          from: const EmailAddress(email: 'user@kaydet.app'),
+          to: const [EmailAddress(email: 'alici@example.com')],
+          cc: const [],
+          bcc: const [],
+          flags: const [r'\Draft'],
+          sizeBytes: 100 + i,
+          hasAttachments: false,
+          // 8. ve 9. taslak ayni messageId paylasiyor (ornegin ayni maile yanit verilmis iki taslak)
+          messageId: i >= 8 ? '<shared-thread-draft@kaydet.app>' : '<draft-$i@kaydet.app>',
+        );
+      }
+
+      await syncDrafts();
+
+      final drafts = await getDraftMessages();
+      expect(drafts.length, 9, reason: 'Sunucudaki 9 taslagin tamami mobilde bulunmali');
+      final uids = await db.uidsOf(draftsMailbox.id);
+      expect(uids.length, 9);
+      for (var i = 1; i <= 9; i++) {
+        expect(uids.contains(500 + i), isTrue);
+      }
+    });
   });
 }

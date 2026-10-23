@@ -136,6 +136,12 @@ class SyncController extends Notifier<SyncState> {
       }
     });
 
+    ref.listen<SelectedFolder?>(selectedFolderProvider, (previous, next) {
+      if (previous != next && next != null) {
+        scheduleMicrotask(() => syncCurrentFolder(allAccounts: next.isUnified));
+      }
+    });
+
     // Hesap hazır olduğunda ilk eşitleme kendiliğinden başlar.
     ref.listen(accountIdProvider, (previous, next) {
       if (next == null) {
@@ -683,6 +689,8 @@ class SyncController extends Notifier<SyncState> {
     var synced = false;
     try {
       for (final use in const [
+        SpecialUse.sent,
+        SpecialUse.drafts,
         SpecialUse.archive,
         SpecialUse.trash,
         SpecialUse.junk,
@@ -714,7 +722,10 @@ class SyncController extends Notifier<SyncState> {
   /// klasör seçme, aşağı çekme) her hesabın ilgili klasörü eşitlenir; arka
   /// plan yoklaması ve IDLE tetikleri yalnızca etkin hesabı eşitler (bkz.
   /// [_syncUnified]).
-  Future<void> syncCurrentFolder({bool allAccounts = false}) async {
+  Future<void> syncCurrentFolder({
+    bool allAccounts = false,
+    bool forceReconcile = false,
+  }) async {
     final accountId = ref.read(accountIdProvider);
     final unifiedUse = ref.read(selectedFolderProvider)?.unifiedUse;
     if (accountId == null) return;
@@ -728,7 +739,11 @@ class SyncController extends Notifier<SyncState> {
       return;
     }
     if (unifiedUse != null) {
-      await _syncUnified(unifiedUse, allAccounts: allAccounts);
+      await _syncUnified(
+        unifiedUse,
+        allAccounts: allAccounts,
+        forceReconcile: forceReconcile,
+      );
       return;
     }
     final mailbox = ref.read(currentMailboxProvider);
@@ -755,6 +770,7 @@ class SyncController extends Notifier<SyncState> {
       final outcome = await engine.syncMailbox(
         accountId: accountId,
         mailbox: mailbox,
+        forceReconcile: forceReconcile,
       );
       if (!_isCurrent(accountId)) return;
       if (outcome is Err<SyncOutcome>) {
@@ -830,7 +846,11 @@ class SyncController extends Notifier<SyncState> {
   /// yeniden bağlamak pahalıdır; onlar için [_unifiedFullSyncGap] dolunca
   /// (ya da [allAccounts] ile) tam tur yapılır. Etkin olmayan hesabın hatası
   /// afişe çıkmaz (bkz. [_reportFailure]).
-  Future<void> _syncUnified(SpecialUse use, {required bool allAccounts}) async {
+  Future<void> _syncUnified(
+    SpecialUse use, {
+    required bool allAccounts,
+    bool forceReconcile = false,
+  }) async {
     final activeId = ref.read(accountIdProvider);
     if (activeId == null) return;
 
@@ -860,7 +880,11 @@ class SyncController extends Notifier<SyncState> {
         if (_disposed || !_isCurrent(activeId)) return;
         final box = await db.mailboxBySpecialUse(id, use);
         if (box == null) continue;
-        final outcome = await engine.syncMailbox(accountId: id, mailbox: box);
+        final outcome = await engine.syncMailbox(
+          accountId: id,
+          mailbox: box,
+          forceReconcile: forceReconcile,
+        );
         if (!_isCurrent(activeId)) return;
         if (outcome is Err<SyncOutcome>) {
           _reportFailure(id, outcome.failure);
@@ -1242,7 +1266,7 @@ class SyncController extends Notifier<SyncState> {
     }
     if (_serverChangePending) {
       _serverChangePending = false;
-      scheduleMicrotask(() => _fireAndForget(syncCurrentFolder()));
+      scheduleMicrotask(() => _fireAndForget(syncCurrentFolder(allAccounts: true)));
       return;
     }
   }

@@ -589,7 +589,10 @@ class _MailListScreenState extends ConsumerState<MailListScreen>
                 final sync = ref.read(syncControllerProvider.notifier);
                 // Tüm Hesaplar'da kullanıcı çekip yenileyince her hesap
                 // eşitlenir; tek hesap görünümünde parametre etkisizdir.
-                await sync.syncCurrentFolder(allAccounts: true);
+                await sync.syncCurrentFolder(
+                  allAccounts: true,
+                  forceReconcile: true,
+                );
                 // Çekip yenileme klasör listesini de güncel tutar (web
                 // istemcisinde eklenen/silinen klasörler).
                 await sync.syncFolders(force: true);

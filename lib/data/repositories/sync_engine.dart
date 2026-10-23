@@ -352,17 +352,23 @@ class SyncEngine {
   Future<Result<SyncOutcome>> syncMailbox({
     required int accountId,
     required MailboxRow mailbox,
+    bool forceReconcile = false,
   }) {
     if (!mailbox.isSelectable) return Future.value(const Ok(SyncOutcome()));
     return _connection.exclusive<SyncOutcome>(
       accountId,
-      () => _syncMailbox(accountId: accountId, mailbox: mailbox),
+      () => _syncMailbox(
+        accountId: accountId,
+        mailbox: mailbox,
+        forceReconcile: forceReconcile,
+      ),
     );
   }
 
   Future<Result<SyncOutcome>> _syncMailbox({
     required int accountId,
     required MailboxRow mailbox,
+    bool forceReconcile = false,
   }) async {
     final caps = _connection.capabilities;
     final selected = await _connection.imap.selectMailbox(
@@ -434,6 +440,18 @@ class SyncEngine {
     }
     List<int> newIds = const [];
 
+    // Taslaklar klasöründe veya zorunlu uzlaşmada (pull-to-refresh) veya
+    // küçük klasörlerde (<= initialFetchCount) sunucudaki tüm geçerli UID'ler
+    // baştan alınır; böylece webmail'de düzenlenen taslakların eski UID'lerinin
+    // silindiği tespit edilip mevcut yerel satır güncellenir ve kopya oluşması engellenir.
+    Set<int>? activeServerUids;
+    if (mailbox.specialUse == SpecialUse.drafts || forceReconcile) {
+      final sRes = await _connection.imap.searchAllUids(undeletedOnly: true);
+      if (sRes is Ok<List<int>>) {
+        activeServerUids = sRes.value.toSet();
+      }
+    }
+
     final neverSynced = mailbox.uidNext == null;
     final needsInitialFetch =
         resynced ||
@@ -459,6 +477,7 @@ class SyncEngine {
           mailbox,
           fromSeq: fromSeq,
           toSeq: toSeq,
+          activeServerUids: activeServerUids,
         );
         if (fetched is Err<List<int>>) return Err(fetched.failure);
         newIds = (fetched as Ok<List<int>>).value;
@@ -475,10 +494,8 @@ class SyncEngine {
         ];
         // `uidNext` "ilk indirme tamamlandı" işaretidir (arayüz iskeleti buna
         // bakar, bkz. `mailListItemsProvider`): sunucu UIDNEXT bildirmese ya da
-        // Taslaklar hariç UID'siz veya silinmiş yerel hayaletleri temizle.
-        if (mailbox.specialUse != SpecialUse.drafts) {
-          await _db.purgeGhostMessages(mailbox.id);
-        }
+        // UID'siz veya silinmiş yerel hayaletleri temizle.
+        await _db.purgeGhostMessages(mailbox.id);
         if (localCount > 0) {
           final vanished = await _syncDeletions(mailbox, state);
           if (vanished is Ok<int>) {
@@ -547,6 +564,7 @@ class SyncEngine {
           fromUid: start,
           toUid: min(start + chunk - 1, lastUid),
           skipUids: skip,
+          activeServerUids: activeServerUids,
         );
         if (fetched is Err<List<int>>) return Err(fetched.failure);
         collected.addAll((fetched as Ok<List<int>>).value);
@@ -572,6 +590,7 @@ class SyncEngine {
           mailbox,
           fromSeq: fromSeq,
           toSeq: toSeq,
+          activeServerUids: activeServerUids,
         );
         if (fetched is Err<List<int>>) return Err(fetched.failure);
         newIds = (fetched as Ok<List<int>>).value;
@@ -610,22 +629,30 @@ class SyncEngine {
     // (silme + yeni ileti aynı turda, UIDNEXT atlayan sunucu) tarama yapılır.
     var deleted = 0;
     final previousNext = mailbox.uidNext;
+    final currentLocalCount = await _db.countMessages(mailbox.id);
     final onlyArrivals =
+        !forceReconcile &&
         !resynced &&
         previousNext != null &&
         previousNext > 0 &&
         state.uidNext >= previousNext &&
         state.messageCount ==
             mailbox.totalCount + (state.uidNext - previousNext) &&
-        localCount == mailbox.totalCount;
+        currentLocalCount == state.messageCount;
     final serverChanged =
-        !onlyArrivals &&
-        (mailbox.uidNext != state.uidNext ||
-            mailbox.totalCount != state.messageCount ||
-            localCount != state.messageCount);
+        forceReconcile ||
+        (!onlyArrivals &&
+            (mailbox.uidNext != state.uidNext ||
+                mailbox.totalCount != state.messageCount ||
+                currentLocalCount != state.messageCount));
     int? reconciledActiveCount;
     if (serverChanged) {
-      final recon = await _reconcileMailbox(accountId, mailbox, state);
+      final recon = await _reconcileMailbox(
+        accountId,
+        mailbox,
+        state,
+        knownServerUids: activeServerUids,
+      );
       if (recon is Ok<ReconcileOutcome>) {
         deleted = recon.value.deletedCount;
         reconciledActiveCount = recon.value.activeServerCount;
@@ -965,10 +992,7 @@ class SyncEngine {
     }
     if (searched == 0 && firstFailure != null) return Err(firstFailure);
     return Ok(
-      RemoteSearchResult(
-        storedCount: stored,
-        matchedMessageIds: allMatchedIds,
-      ),
+      RemoteSearchResult(storedCount: stored, matchedMessageIds: allMatchedIds),
     );
   }
 
@@ -1035,7 +1059,16 @@ class SyncEngine {
       );
     }
 
+    // Silinmek/taşınmak üzere kuyruktaki iletiler arama sonucu olarak da
+    // yerele geri yazılmaz (bkz. `_storeEnvelopes`).
+    final locked = await _lockedUids(
+      accountId,
+      current.id,
+      includeRecentlyRemoved: true,
+      uidValidity: current.uidValidity,
+    );
     final unknown = await _db.unknownUids(current.id, uids)
+      ..removeWhere(locked.contains)
       ..sort((a, b) => b.compareTo(a)); // en yeni önce
 
     final unknownSet = unknown.toSet();
@@ -1066,7 +1099,11 @@ class SyncEngine {
         ]..sort((a, b) => a.date.compareTo(b.date));
 
         if (envelopes.isNotEmpty) {
-          final companions = await _companionsFor(accountId, current, envelopes);
+          final companions = await _companionsFor(
+            accountId,
+            current,
+            envelopes,
+          );
           final insertedIds = await _db.upsertSearchHitsWithIds(
             companions,
             matchedText: matchedText,
@@ -1080,10 +1117,7 @@ class SyncEngine {
     }
 
     return Ok(
-      RemoteMailboxSearchResult(
-        storedCount: stored,
-        matchedIds: allMatchedIds,
-      ),
+      RemoteMailboxSearchResult(storedCount: stored, matchedIds: allMatchedIds),
     );
   }
 
@@ -1238,8 +1272,10 @@ class SyncEngine {
   Future<Result<List<int>>> _fetchAndStore(
     int accountId,
     MailboxRow mailbox,
-    List<int> uids,
-  ) async {
+    List<int> uids, {
+    Set<int>? activeServerUids,
+    bool ignoreLocks = false,
+  }) async {
     if (uids.isEmpty) return const Ok(<int>[]);
     final fetched = await _connection.imap.fetchEnvelopes(uids);
     if (fetched is Err<List<FetchedEnvelope>>) return Err(fetched.failure);
@@ -1248,6 +1284,8 @@ class SyncEngine {
         accountId,
         mailbox,
         (fetched as Ok<List<FetchedEnvelope>>).value,
+        activeServerUids: activeServerUids,
+        ignoreLocks: ignoreLocks,
       ),
     );
   }
@@ -1257,6 +1295,7 @@ class SyncEngine {
     MailboxRow mailbox, {
     required int fromSeq,
     required int toSeq,
+    Set<int>? activeServerUids,
   }) async {
     if (toSeq < fromSeq || fromSeq < 1) return const Ok(<int>[]);
     final fetched = await _connection.imap.fetchEnvelopeSequenceRange(
@@ -1269,6 +1308,7 @@ class SyncEngine {
         accountId,
         mailbox,
         (fetched as Ok<List<FetchedEnvelope>>).value,
+        activeServerUids: activeServerUids,
       ),
     );
   }
@@ -1279,6 +1319,7 @@ class SyncEngine {
     required int fromUid,
     required int toUid,
     Set<int> skipUids = const {},
+    Set<int>? activeServerUids,
   }) async {
     final fetched = await _connection.imap.fetchEnvelopeRange(
       fromUid: fromUid,
@@ -1293,6 +1334,7 @@ class SyncEngine {
         skipUids.isEmpty
             ? envelopes
             : envelopes.where((e) => !skipUids.contains(e.uid)).toList(),
+        activeServerUids: activeServerUids,
       ),
     );
   }
@@ -1317,24 +1359,69 @@ class SyncEngine {
       final selected = await _connection.selectVerified(current);
       if (selected is Err<MailboxState>) return Err(selected.failure);
 
-      final fetched = await _fetchAndStore(accountId, mailbox, uids);
+      // Geri yüklenen UID'ler kendi (hâlâ kuyrukta duran ya da başarısız
+      // olan) kaldırma işlemlerince kilitlidir; kilit bilerek yok sayılır.
+      final fetched = await _fetchAndStore(
+        accountId,
+        mailbox,
+        uids,
+        ignoreLocks: true,
+      );
       if (fetched is Err<List<int>>) return Err(fetched.failure);
       return Ok((fetched as Ok<List<int>>).value.length);
     });
   }
 
+  /// Zarfları yerele yazar — sunucudan yerel veritabanına iletinin girdiği TEK
+  /// nokta.
+  ///
+  /// Kullanıcının taşıma/silme/arşivleme eylemi yerelde iyimser olarak satırı
+  /// hemen siler, sunucu işlemi ise geri-alma penceresi (bkz.
+  /// `mailUndoWindowProvider`), bağlantı kesintisi ya da geri çekilme yüzünden
+  /// sonra uygulanır. O aralıkta sunucu iletiyi hâlâ listeler; kilit olmadan
+  /// her eşitleme yolu (artımlı, ilk indirme, uzlaştırma eksikleri, geri
+  /// çekerek yenileme) iletiyi yerele geri yazar, işlem bitince bir sonraki
+  /// eşitleme yeniden siler: ileti listede "geri gelip kaybolur". Kilit burada,
+  /// yazmadan hemen önce (ağ gecikmesinden SONRA) sorgulandığı için tüm yollar
+  /// tek yerden korunur.
+  ///
+  /// [ignoreLocks] yalnızca kaldırmayı bilerek geri alan yol içindir
+  /// ([restoreMessages]).
   Future<List<int>> _storeEnvelopes(
     int accountId,
     MailboxRow mailbox,
-    List<FetchedEnvelope> envelopes,
-  ) async {
+    List<FetchedEnvelope> envelopes, {
+    Set<int>? activeServerUids,
+    bool ignoreLocks = false,
+  }) async {
     if (envelopes.isEmpty) return const [];
+    if (!ignoreLocks) {
+      // Çağıranın elindeki satır bayat olabilir; UIDVALIDITY güncel değer
+      // veritabanındadır (eşitleme başında yazılır).
+      final current = await _db.mailboxById(mailbox.id);
+      final locked = await _lockedUids(
+        accountId,
+        mailbox.id,
+        includeRecentlyRemoved: true,
+        uidValidity: current?.uidValidity ?? mailbox.uidValidity,
+      );
+      if (locked.isNotEmpty) {
+        envelopes = [
+          for (final e in envelopes)
+            if (!locked.contains(e.uid)) e,
+        ];
+        if (envelopes.isEmpty) return const [];
+      }
+    }
 
     // Eski → yeni sırala: ata iletiler çocuklarından önce işlensin.
     final sorted = [...envelopes]..sort((a, b) => a.date.compareTo(b.date));
     final companions = await _companionsFor(accountId, mailbox, sorted);
 
-    final inserted = await _db.upsertServerMessages(companions);
+    final inserted = await _db.upsertServerMessages(
+      companions,
+      activeServerUids: activeServerUids,
+    );
 
     // Yalnızca Gelen Kutusu: Gereksiz (spam) göndericilerini veya kendi
     // adresimizi (Gönderilenler'in "from"ı) kişi olarak eklemek istemeyiz.
@@ -1522,8 +1609,9 @@ class SyncEngine {
   Future<Result<ReconcileOutcome>> _reconcileMailbox(
     int accountId,
     MailboxRow mailbox,
-    MailboxState state,
-  ) async {
+    MailboxState state, {
+    Set<int>? knownServerUids,
+  }) async {
     // Taslaklar hariç diğer klasörlerde UID'si olmayan veya \Deleted olan hayaletleri temizle.
     if (mailbox.specialUse != SpecialUse.drafts) {
       await _db.purgeGhostMessages(mailbox.id);
@@ -1543,32 +1631,40 @@ class SyncEngine {
       return const Ok(ReconcileOutcome(deletedCount: 0));
     }
 
-    // 1000 iletiye kadar olan klasörlerde doğrudan `searchAllUids(undeletedOnly: true)`
-    // (UID SEARCH UNDELETED) tüm sunucularda %100 evrensel ve en kararlı yoldur.
-    // cPanel/Dovecot ve Roundcube webmail altyapılarında silinen/taşınan iletiler
-    // sunucuda EXPUNGE edilene kadar `\Deleted` bayrağıyla tutulur; Webmail bunları
-    // arayüzde gizlerken `SEARCH ALL` silinmiş iletileri de döndürür. `undeletedOnly: true`
-    // sunucu webmail görünümüyle tam eşitlik sağlar ve silinmiş iletileri temizler.
-    Result<List<int>> serverResult;
-    if (localUids.length <= 1000 || state.messageCount <= 1000) {
-      serverResult = await _connection.imap.searchAllUids(undeletedOnly: true);
-      if (serverResult is Err<List<int>>) {
+    final Set<int> serverUids;
+    if (knownServerUids != null) {
+      serverUids = knownServerUids;
+    } else {
+      Result<List<int>> serverResult;
+      if (localUids.length <= 1000 || state.messageCount <= 1000) {
+        serverResult = await _connection.imap.searchAllUids(
+          undeletedOnly: true,
+        );
+        if (serverResult is Err<List<int>>) {
+          serverResult = await _connection.imap.searchAllUids(
+            undeletedOnly: false,
+          );
+        }
+        if (serverResult is Err<List<int>>) {
+          serverResult = await _connection.imap.searchUidsInSet(
+            localUids,
+            undeletedOnly: true,
+          );
+        }
+      } else {
         serverResult = await _connection.imap.searchUidsInSet(
           localUids,
           undeletedOnly: true,
         );
+        if (serverResult is Err<List<int>>) {
+          serverResult = await _connection.imap.searchAllUids(
+            undeletedOnly: true,
+          );
+        }
       }
-    } else {
-      serverResult = await _connection.imap.searchUidsInSet(
-        localUids,
-        undeletedOnly: true,
-      );
-      if (serverResult is Err<List<int>>) {
-        serverResult = await _connection.imap.searchAllUids(undeletedOnly: true);
-      }
+      if (serverResult is Err<List<int>>) return Err(serverResult.failure);
+      serverUids = (serverResult as Ok<List<int>>).value.toSet();
     }
-    if (serverResult is Err<List<int>>) return Err(serverResult.failure);
-    final serverUids = (serverResult as Ok<List<int>>).value.toSet();
     final localUidsSet = localUids.toSet();
 
     // 1. Silinenler (sunucuda OLMAYAN veya \Deleted olan yerel UID'ler)
@@ -1584,23 +1680,47 @@ class SyncEngine {
     // (!hasMoreOnServer) veya yüklü penceredeki (>= lowestUid) eksik iletiler tamamlanır.
     var fetchedIds = <int>[];
     if (serverUids.isNotEmpty) {
+      // Kuyrukta bekleyen (ya da az önce uygulanmış) taşıma/silme işlemi olan
+      // iletiler yerelden bilerek kaldırılmıştır; "eksik" sayılıp geri
+      // çekilmez (bkz. `_storeEnvelopes`). Burada elenmeleri ayrıca
+      // `initialFetchCount` sınırını boşa harcamalarını ve gereksiz FETCH'i
+      // önler.
+      final locked = await _lockedUids(
+        accountId,
+        mailbox.id,
+        includeRecentlyRemoved: true,
+        uidValidity: state.uidValidity,
+      );
       final missing = serverUids
-          .where((uid) => !localUidsSet.contains(uid))
+          .where((uid) => !localUidsSet.contains(uid) && !locked.contains(uid))
           .toList();
       if (missing.isNotEmpty) {
+        // En yeni eksik iletiler önce çekilsin
+        missing.sort((a, b) => b.compareTo(a));
         final shouldFetchAll =
             state.messageCount <= initialFetchCount || !mailbox.hasMoreOnServer;
         List<int> toFetch;
         if (shouldFetchAll) {
           toFetch = missing.take(initialFetchCount).toList();
         } else {
-          final lowest = (await _db.lowestUids(mailbox.id, limit: 1)).firstOrNull;
+          final lowest = (await _db.lowestUids(
+            mailbox.id,
+            limit: 1,
+          )).firstOrNull;
           toFetch = lowest != null
-              ? missing.where((u) => u >= lowest).take(initialFetchCount).toList()
+              ? missing
+                    .where((u) => u >= lowest)
+                    .take(initialFetchCount)
+                    .toList()
               : missing.take(initialFetchCount).toList();
         }
         if (toFetch.isNotEmpty) {
-          final fetched = await _fetchAndStore(accountId, mailbox, toFetch);
+          final fetched = await _fetchAndStore(
+            accountId,
+            mailbox,
+            toFetch,
+            activeServerUids: serverUids,
+          );
           if (fetched is Ok<List<int>>) {
             fetchedIds = fetched.value;
           }
@@ -1625,12 +1745,7 @@ class SyncEngine {
     final recon = await _reconcileMailbox(
       mailbox.accountId,
       mailbox,
-      state ??
-          const MailboxState(
-            messageCount: -1,
-            uidValidity: 0,
-            uidNext: 0,
-          ),
+      state ?? const MailboxState(messageCount: -1, uidValidity: 0, uidNext: 0),
     );
     return recon.map((r) => r.deletedCount);
   }
@@ -1750,20 +1865,45 @@ class SyncEngine {
 
   /// Bekleyen işlem kuyruğundaki iletilerin UID'leri.
   ///
-  /// `claimDueOperations` yerine `activeOperations` kullanılır:
+  /// `claimDueOperations` yerine `lockingOperations` kullanılır:
   /// `claimDueOperations` yalnızca zamanı GELMİŞ (backoff beklemeyen)
   /// işlemleri döner. Bir işlem geçici hatadan sonra geri çekilme (backoff)
   /// beklerken de kilitli kalmalıdır — aksi hâlde tam bu pencerede araya
   /// giren bir senkronizasyon, sunucudaki eski bayrağı yerelin üzerine
   /// yazıp kullanıcının az önceki değişikliğini sessizce geri alabilir.
-  Future<Set<int>> _lockedUids(int accountId, int mailboxId) async {
-    final pending = await _db.activeOperations(accountId, limit: 200);
+  ///
+  /// Sınırsızdır: art arda çok sayıda silme kuyruğu 200'ü aşabilir.
+  ///
+  /// [includeRecentlyRemoved]: sunucuda az önce uygulanmış taşıma/silmelerin
+  /// UID'leri de kilitli sayılır (bkz. `AppDatabase.completeOperation`). Yerele
+  /// İLETİ YAZAN yollar bunu açar; sayaç/bayrak yolları açmaz — tamamlanmış
+  /// işlemin hemen ardından yapılan sayaç yenilemesi atlanmamalı.
+  ///
+  /// [uidValidity] biliniyorsa, farklı UIDVALIDITY ile kuyruğa alınmış işlemler
+  /// yok sayılır: o UID'ler artık başka iletileri gösterir.
+  Future<Set<int>> _lockedUids(
+    int accountId,
+    int mailboxId, {
+    bool includeRecentlyRemoved = false,
+    int? uidValidity,
+  }) async {
+    final pending = await _db.lockingOperations(
+      accountId,
+      includeRecentlyDone: includeRecentlyRemoved,
+    );
     final locked = <int>{};
     for (final op in pending) {
       try {
         final payload = jsonDecode(op.payloadJson);
         if (payload is! Map<String, dynamic>) continue;
         if (payload['mailboxId'] != mailboxId) continue;
+        final queuedValidity = payload['uidValidity'];
+        if (uidValidity != null &&
+            uidValidity != 0 &&
+            queuedValidity is int &&
+            queuedValidity != uidValidity) {
+          continue;
+        }
         final uids = payload['uids'];
         if (uids is List) {
           locked.addAll(uids.whereType<int>());
