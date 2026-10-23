@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 /**
  * İşleri SIRAYLA, birer birer çalıştıran basit kapı (iş parçacığı güvenli

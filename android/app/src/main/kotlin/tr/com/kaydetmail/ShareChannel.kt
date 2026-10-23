@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.content.Context
 import android.content.Intent
@@ -29,7 +29,7 @@ import java.util.concurrent.RejectedExecutionException
  */
 class ShareChannel(context: Context, messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
     companion object {
-        const val CHANNEL_NAME = "tr.com.pazarlik.kaydet/share"
+        const val CHANNEL_NAME = "tr.com.kaydetmail/share"
         private const val TAG = "KaydetShare"
 
         /**

@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

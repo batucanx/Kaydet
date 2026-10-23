@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 /**
  * Sunucunun gönderdiği yalnızca-veri FCM mesajı (bkz. backend/src/notifier.ts

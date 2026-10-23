@@ -40,7 +40,7 @@ class AndroidPushChannel implements PushTokenSource {
   static final AndroidPushChannel instance = AndroidPushChannel._();
 
   static const MethodChannel _channel = MethodChannel(
-    'tr.com.pazarlik.kaydet/fcm',
+    'tr.com.kaydetmail/fcm',
   );
 
   final StreamController<String> _tokens = StreamController<String>.broadcast();

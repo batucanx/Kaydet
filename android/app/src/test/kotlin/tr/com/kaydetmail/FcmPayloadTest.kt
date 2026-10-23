@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull

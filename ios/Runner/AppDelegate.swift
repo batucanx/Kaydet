@@ -23,7 +23,7 @@ import workmanager_apple
   /// serbest bırakır.
   private var backgroundSyncEngines: [ObjectIdentifier: FlutterEngine] = [:]
 
-  private static let backgroundSyncChannelName = "tr.com.pazarlik.kaydet/push_background"
+  private static let backgroundSyncChannelName = "tr.com.kaydetmail/push_background"
   /// iOS'un arka plan push bütçesi ~30 sn; aşılırsa gelecekteki push'lar için
   /// bütçe kısıtlanır, bu yüzden erken pes edilir.
   private static let backgroundSyncTimeout: TimeInterval = 25
@@ -83,7 +83,7 @@ import workmanager_apple
       let shareRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "KaydetShare")
     else { return }
     let channel = FlutterMethodChannel(
-      name: "tr.com.pazarlik.kaydet/notifications",
+      name: "tr.com.kaydetmail/notifications",
       binaryMessenger: notificationsRegistrar.messenger()
     )
     notificationChannel = channel

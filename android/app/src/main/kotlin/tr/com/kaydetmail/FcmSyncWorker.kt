@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -44,7 +44,7 @@ class FcmSyncWorker(
 ) : ListenableWorker(context, params) {
     companion object {
         private const val TAG = "KaydetFcmSync"
-        private const val BACKGROUND_CHANNEL = "tr.com.pazarlik.kaydet/fcm_background"
+        private const val BACKGROUND_CHANNEL = "tr.com.kaydetmail/fcm_background"
         private const val ENTRY_LIBRARY = "package:kaydet/app/background_sync.dart"
         private const val ENTRY_FUNCTION = "fcmBackgroundSync"
 

@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.content.ClipData
 import android.content.ContentProvider

@@ -25,7 +25,7 @@ class DeviceDownloads {
   const DeviceDownloads();
 
   static const MethodChannel _channel = MethodChannel(
-    'tr.com.pazarlik.kaydet/downloads',
+    'tr.com.kaydetmail/downloads',
   );
 
   /// Dosyaların konulduğu alt klasör: `İndirilenler/Kaydet`. Diğer

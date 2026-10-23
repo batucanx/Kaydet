@@ -35,11 +35,11 @@ Bir senaryo "geçti" sayılması için tablodaki beklenen sonuç, **her hesap i�
 | 1 | Uygulama açık, A etkin | A listesi ekranda | A: liste anında güncellenir + bildirim. B–E: bildirim (hesap e-postası bildirimde yazar) |
 | 2 | Uygulama açık, **Tüm Hesaplar** görünümü | Birleşik Gelen Kutusu | Beş hesabın da iletisi bildirilir (**eski hata: yalnızca A**) |
 | 3 | Arka planda (Home) | Home tuşu | Beş hesap bildirir; çift bildirim yok |
-| 4 | Son kullanılanlardan **kaydırılmış** | Görev listesinden kaydır. Android: `adb shell am kill tr.com.pazarlik.kaydet` | Beş hesap bildirir (Android: FCM → `FcmSyncWorker`; iOS: APNs görünür bildirim) |
+| 4 | Son kullanılanlardan **kaydırılmış** | Görev listesinden kaydır. Android: `adb shell am kill tr.com.kaydetmail` | Beş hesap bildirir (Android: FCM → `FcmSyncWorker`; iOS: APNs görünür bildirim) |
 | 5 | Ekran kilitli / cihaz kilitli | Ekranı kapat | Beş hesap bildirir; Android'de şifre okunabilmeli (iOS: Keychain `first_unlock`) |
 | 6 | Cihaz **yeniden başlatıldı**, uygulama açılmadı | `adb reboot` / cihazı yeniden başlat; ilk kilit açılışından sonra bekle | Yeniden başlatma sırasında gelen iletiler dâhil beş hesap bildirir (FCM TTL 24 sa; ayrıca 15 dk'lık periyodik görev) |
 | 7 | Android **Doze** | `adb shell dumpsys deviceidle force-idle` sonra mail gönder | Yüksek öncelikli FCM Doze'u delip bildirir (birkaç sn). Sonunda `dumpsys deviceidle unforce` |
-| 8 | Android **Uygulama bekleme kovası** | `adb shell am set-standby-bucket tr.com.pazarlik.kaydet rare` | Bildirim gelir; gecikirse bkz. "Bilinen sınırlar" |
+| 8 | Android **Uygulama bekleme kovası** | `adb shell am set-standby-bucket tr.com.kaydetmail rare` | Bildirim gelir; gecikirse bkz. "Bilinen sınırlar" |
 | 9 | Uçak modu → kapat | Uçak modunda 5 hesaba mail gönder, sonra kapat | Ağ gelince beş hesabın hepsi bildirir (FCM'de 4'ten fazla `collapse_key` sorunu bulunmamalı) |
 | 10 | Ağ değişimi | Wi‑Fi ↔ mobil veri | Sonraki mailler bildirir; izleyici kopmaz (sunucu tarafı ağdan bağımsızdır) |
 | 11 | **Aynı anda 5 mail** | Beş hesaba ardışık hızlı mail | Beş bildirim, her biri kendi hesabında; hiçbiri düşmez; çift bildirim yok |

@@ -80,7 +80,7 @@
         <!-- Anlık bildirim servisinin durum çubuğu simgesi
              (bkz. PushService._iconMetaData). Ad birebir aynı olmalı. -->
         <meta-data
-            android:name="tr.com.pazarlik.kaydet.push_icon"
+            android:name="tr.com.kaydetmail.push_icon"
             android:resource="@drawable/ic_stat_kaydet" />
 
         <!-- Uyarı: servis adı değiştirilmemeli, flutter_foreground_task bunu

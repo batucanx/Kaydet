@@ -15,12 +15,12 @@ import Foundation
 /// `onShareReceived` dürtmesi YOKTUR: uzantı ana uygulamayı açtığında zaten
 /// yaşam döngüsü `resumed` olur.
 final class ShareChannel {
-    static let channelName = "tr.com.pazarlik.kaydet/share"
+    static let channelName = "tr.com.kaydetmail/share"
 
     private let channel: FlutterMethodChannel
 
     /// Tüm dosya G/Ç'si ana iş parçacığı dışında, sırayla yapılır.
-    private let queue = DispatchQueue(label: "tr.com.pazarlik.kaydet.share", qos: .userInitiated)
+    private let queue = DispatchQueue(label: "tr.com.kaydetmail.share", qos: .userInitiated)
 
     init(messenger: FlutterBinaryMessenger) {
         channel = FlutterMethodChannel(name: ShareChannel.channelName, binaryMessenger: messenger)

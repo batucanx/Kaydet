@@ -18,7 +18,7 @@ abstract final class PushService {
 
   /// Kalıcı bildirimin simgesi — `AndroidManifest.xml`deki `<meta-data>`
   /// adıyla birebir aynı olmalı.
-  static const String _iconMetaData = 'tr.com.pazarlik.kaydet.push_icon';
+  static const String _iconMetaData = 'tr.com.kaydetmail.push_icon';
 
   /// `main()` içinde, `runApp`ten önce bir kez çağrılır.
   static void initialize() {

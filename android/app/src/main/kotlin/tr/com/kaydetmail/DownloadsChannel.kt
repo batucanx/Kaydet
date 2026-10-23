@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.annotation.TargetApi
 import android.content.ContentResolver
@@ -37,7 +37,7 @@ import java.util.concurrent.RejectedExecutionException
  */
 class DownloadsChannel(context: Context, messenger: BinaryMessenger) : MethodChannel.MethodCallHandler {
     companion object {
-        const val CHANNEL_NAME = "tr.com.pazarlik.kaydet/downloads"
+        const val CHANNEL_NAME = "tr.com.kaydetmail/downloads"
         private const val TAG = "KaydetDownloads"
         private const val UNSAFE_NAME_CHARS = "[\\\\/:*?\"<>|\\p{Cntrl}]"
     }

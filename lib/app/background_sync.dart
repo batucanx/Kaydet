@@ -106,13 +106,13 @@ void backgroundCallbackDispatcher() {
 /// çağrılır: iOS'ta paralel bir senkron yolu yok, push yalnızca WorkManager
 /// yedeğinin de kullandığı turu ERKEN tetikleyen ikinci bir tetikleyici.
 /// Sonuç, native tarafın `UIBackgroundFetchResult`ü çözebilmesi için
-/// `tr.com.pazarlik.kaydet/push_background` kanalından geri bildirilir —
+/// `tr.com.kaydetmail/push_background` kanalından geri bildirilir —
 /// bildirilmezse ya da ~25 sn içinde bildirilmezse native taraf zaman
 /// aşımıyla başarısız sayar (bkz. AppDelegate.swift).
 @pragma('vm:entry-point')
 void pushBackgroundSync() {
   WidgetsFlutterBinding.ensureInitialized();
-  const channel = MethodChannel('tr.com.pazarlik.kaydet/push_background');
+  const channel = MethodChannel('tr.com.kaydetmail/push_background');
 
   Future<void> run() async {
     var success = false;
@@ -144,7 +144,7 @@ void pushBackgroundSync() {
 void fcmBackgroundSync() {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
-  const channel = MethodChannel('tr.com.pazarlik.kaydet/fcm_background');
+  const channel = MethodChannel('tr.com.kaydetmail/fcm_background');
 
   Future<void> run() async {
     var success = false;

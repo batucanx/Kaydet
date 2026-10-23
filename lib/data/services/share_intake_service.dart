@@ -35,7 +35,7 @@ class ShareIntakeService {
     : _channel = channel ?? const MethodChannel(channelName),
       _clock = clock ?? DateTime.now;
 
-  static const String channelName = 'tr.com.pazarlik.kaydet/share';
+  static const String channelName = 'tr.com.kaydetmail/share';
 
   /// iOS Share Extension'ın ana uygulamayı uyandırmak için açtığı URL şeması
   /// (`kaydetshare://open`). URL veri TAŞIMAZ; dosyalar App Group'tadır.

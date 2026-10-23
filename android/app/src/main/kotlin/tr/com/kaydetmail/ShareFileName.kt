@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 /**
  * Paylaşımla gelen dosya adlarının güvenli hâle getirilmesi.

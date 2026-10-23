@@ -37,7 +37,7 @@ beklemeden hemen görülür.
 Yalnızca Android bildirimi için gerekir; iOS bundan bağımsız çalışır.
 
 1. [Firebase Console](https://console.firebase.google.com) → proje oluştur (Analytics gerekmez).
-2. Projeye bir **Android uygulaması** ekle, paket adı: `tr.com.pazarlik.kaydet`.
+2. Projeye bir **Android uygulaması** ekle, paket adı: `tr.com.kaydetmail`.
    İndirilen `google-services.json` dosyasını `android/app/` altına koy (dosya yoksa
    derleme yine geçer, ama FCM kapalı kalır ve uygulama ön plan servisine düşer).
 3. Proje ayarları → **Hizmet hesapları** → "Yeni özel anahtar oluştur" ile JSON'u indir.

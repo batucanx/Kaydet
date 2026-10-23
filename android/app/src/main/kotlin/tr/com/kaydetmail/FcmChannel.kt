@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.content.Context
 import android.os.Handler
@@ -27,7 +27,7 @@ class FcmChannel(
     messenger: BinaryMessenger,
 ) : MethodChannel.MethodCallHandler {
     companion object {
-        const val CHANNEL_NAME = "tr.com.pazarlik.kaydet/fcm"
+        const val CHANNEL_NAME = "tr.com.kaydetmail/fcm"
         private const val TAG = "KaydetFcm"
 
         /** Ana motor ve etkin kanal; yoksa mesajlar işçiyle işlenir. */

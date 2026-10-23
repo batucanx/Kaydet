@@ -92,7 +92,7 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin;
 
   static const MethodChannel _iosChannel = MethodChannel(
-    'tr.com.pazarlik.kaydet/notifications',
+    'tr.com.kaydetmail/notifications',
   );
 
   /// iOS app icon rozetini mutlak okunmamış sayıya ayarlar; artımlı değildir.

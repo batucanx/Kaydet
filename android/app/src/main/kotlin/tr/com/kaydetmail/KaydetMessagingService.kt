@@ -1,4 +1,4 @@
-package tr.com.pazarlik.kaydet
+package tr.com.kaydetmail
 
 import android.util.Log
 import com.google.firebase.messaging.FirebaseMessagingService
