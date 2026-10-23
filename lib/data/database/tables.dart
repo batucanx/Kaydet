@@ -143,6 +143,15 @@ class Messages extends Table {
   DateTimeColumn get bodyFetchedAt => dateTime().nullable()();
   TextColumn get labelsJson => text().withDefault(const Constant('[]'))();
 
+  /// Sunucudaki ham IMAP anahtar kelimeleri (küçük harf, JSON dizisi; bkz.
+  /// `normalizedKeywords`). `labelsJson` bunlardan, hesabın O ANKİ etiketleriyle
+  /// türetilir. Ham değer saklanmazsa etiketi henüz yerelde olmayan bir
+  /// anahtar kelime (başka istemcide yeni oluşturulmuş etiket, ayar belgesi
+  /// henüz inmemiş) kalıcı olarak kaybolur: bayrak eşitlemesi o iletiyi bir
+  /// daha değişmedikçe okumaz. `null` = sunucudan henüz okunmadı (eski
+  /// satırlar, yerel taslaklar); bu iletilerin etiketleri yeniden çözülmez.
+  TextColumn get keywordsJson => text().nullable()();
+
   /// Sunucuda karşılığı olmayan yerel ileti (taslak / giden kutusu).
   BoolColumn get isLocalOnly => boolean().withDefault(const Constant(false))();
   IntColumn get outboxState =>

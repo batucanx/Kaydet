@@ -603,9 +603,27 @@ class MailRepository {
         } else {
           if (!labels.remove(labelName)) continue;
         }
+        // Ham anahtar kelime listesi de aynı değişikliği izler; yoksa bir
+        // sonraki etiket çözümlemesi (bkz. `AppDatabase.reapplyLabelNames`)
+        // bu yerel değişikliği sunucu onaylamadan geri alırdı. Bilinmeyen
+        // (`null`) liste olduğu gibi kalır.
+        String? keywordsJson;
+        final storedKeywords = row.keywordsJson;
+        if (storedKeywords != null) {
+          final raw = _decodeLabels(storedKeywords).toSet();
+          add
+              ? raw.add(keyword.toLowerCase())
+              : raw.remove(keyword.toLowerCase());
+          keywordsJson = jsonEncode(raw.toList()..sort());
+        }
         await _db.updateMessage(
           row.id,
-          MessagesCompanion(labelsJson: Value(jsonEncode(labels))),
+          MessagesCompanion(
+            labelsJson: Value(jsonEncode(labels)),
+            keywordsJson: keywordsJson == null
+                ? const Value.absent()
+                : Value(keywordsJson),
+          ),
         );
       }
 

@@ -80,7 +80,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase.forTesting(super.executor);
 
   @override
-  int get schemaVersion => 25;
+  int get schemaVersion => 26;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -281,6 +281,18 @@ class AppDatabase extends _$AppDatabase {
       // Var olan dizin silinip yerel iletilerden baştan kurulur.
       if (from < 25) {
         await _rebuildFtsIndex();
+      }
+      // v25 → v26: İletilerde sunucunun ham anahtar kelimeleri de saklanır
+      // (bkz. `Messages.keywordsJson`). Etiketi o an yerelde olmayan anahtar
+      // kelime eskiden eşitlemede sessizce atılıyor, etiket sonradan ayar
+      // belgesiyle gelse de ileti bir daha okunmuyordu: web'de etiketli
+      // iletiler telefonda etiketsiz kalıyordu. Var olan iletilerin ham
+      // anahtar kelimeleri bilinmediğinden CONDSTORE çıpası (`highest_mod_seq`)
+      // sıfırlanır: sonraki turda bayraklar baştan okunur, ham değerler dolar
+      // ve etiketler yeniden çözülür. Tek seferliktir.
+      if (from < 26) {
+        await m.addColumn(messages, messages.keywordsJson);
+        await customStatement('UPDATE mailboxes SET highest_mod_seq = NULL');
       }
     },
     beforeOpen: (details) async {
@@ -1828,6 +1840,55 @@ class AppDatabase extends _$AppDatabase {
       );
     }
     return previous;
+  }
+
+  /// Hesabın iletilerindeki `labelsJson` değerini, saklanan ham sunucu anahtar
+  /// kelimelerinden ([Messages.keywordsJson]) hesabın GÜNCEL etiketleriyle
+  /// yeniden türetir. Etiket satırları değiştikten sonra (ayar belgesinden yeni
+  /// etiket indi, etiket oluşturuldu/silindi) çağrılır: etiket iletiden SONRA
+  /// gelmiş olsa da ileti doğru etiketi gösterir. Değişen ileti sayısını döner.
+  ///
+  /// Ham anahtar kelimesi bilinmeyen (`null`) iletilere dokunulmaz. Sunucusu
+  /// özel anahtar kelime desteklemeyen hesapta etiketler yalnızca yereldir
+  /// (bkz. `MailRepository.setLabel`); sunucudan türetilen liste onları ezerdi,
+  /// bu yüzden o hesaplarda hiçbir şey yapılmaz.
+  Future<int> reapplyLabelNames(int accountId) async {
+    final account = await accountById(accountId);
+    if (account == null || account.supportsKeywords == false) return 0;
+
+    final byKeyword = <String, String>{
+      for (final label in await labelsOf(accountId))
+        (label.imapKeyword ?? labelImapKeyword(label.name)).toLowerCase():
+            label.name,
+    };
+    final rows =
+        await (select(messages)..where(
+              (m) => m.accountId.equals(accountId) & m.keywordsJson.isNotNull(),
+            ))
+            .get();
+
+    var changed = 0;
+    await batch((b) {
+      for (final row in rows) {
+        List<String> keywords;
+        try {
+          final parsed = jsonDecode(row.keywordsJson!);
+          if (parsed is! List) continue;
+          keywords = parsed.whereType<String>().toList();
+        } on FormatException {
+          continue;
+        }
+        final json = jsonEncode(labelNamesForKeywords(keywords, byKeyword));
+        if (json == row.labelsJson) continue;
+        changed++;
+        b.update(
+          messages,
+          MessagesCompanion(labelsJson: Value(json)),
+          where: (m) => m.id.equals(row.id),
+        );
+      }
+    });
+    return changed;
   }
 
   /// [rewriteLabelNames]'in döndürdüğü eski değerleri geri yazar.

@@ -11,6 +11,7 @@ import '../../core/turkish.dart';
 import '../../domain/models/mail_models.dart';
 import '../../domain/models/search_filters.dart';
 import '../../domain/use_cases/folder_mapping.dart';
+import '../../domain/use_cases/label_keywords.dart';
 import '../../domain/use_cases/settings_document.dart';
 import '../../domain/use_cases/text_extraction.dart';
 import '../../domain/use_cases/threading.dart';
@@ -1386,9 +1387,10 @@ class SyncEngine {
           sizeBytes: Value(envelope.sizeBytes),
           labelsJson: Value(
             jsonEncode(
-              _namesForKeywords(envelope.keywords, labelNamesByKeyword),
+              labelNamesForKeywords(envelope.keywords, labelNamesByKeyword),
             ),
           ),
+          keywordsJson: Value(jsonEncode(normalizedKeywords(envelope.flags))),
         ),
       );
     }
@@ -1498,22 +1500,20 @@ class SyncEngine {
   /// `messages.labelsJson`'a doğrudan yazılır ve arayüzde "Kişisel" yerine
   /// ham anahtar kelime görünür, etikete göre filtreleme de (adla
   /// karşılaştırdığı için) hiçbir sonuç bulamaz.
+  ///
+  /// Anahtarlar küçük harflidir (IMAP anahtar kelimeleri büyük/küçük harfe
+  /// duyarsızdır). Eşleşmeyen anahtar kelimeler `labelsJson`'dan elenir ama
+  /// iletide ham olarak saklanır (`Messages.keywordsJson`): etiket sonradan
+  /// gelirse (bkz. `AppDatabase.reapplyLabelNames`) ileti kendiliğinden
+  /// doğru etiketi alır.
   Future<Map<String, String>> _labelNamesByKeyword(int accountId) async {
     final labels = await _db.labelsOf(accountId);
     return {
       for (final label in labels)
-        if (label.imapKeyword != null) label.imapKeyword!: label.name,
+        if (label.imapKeyword != null)
+          label.imapKeyword!.toLowerCase(): label.name,
     };
   }
-
-  /// Bilinen anahtar kelimeleri görünen ada çevirir; bu hesaba ait hiçbir
-  /// etiketle eşleşmeyen anahtar kelimeler (ör. henüz yerelde oluşturulmamış
-  /// ya da başka bir istemciden gelen) sessizce elenir — ham hâliyle
-  /// gösterilmeleri kullanıcıya anlamsız gelir.
-  static List<String> _namesForKeywords(
-    List<String> keywords,
-    Map<String, String> namesByKeyword,
-  ) => keywords.map((k) => namesByKeyword[k]).whereType<String>().toList();
 
   /// Sunucuda artık olmayan iletileri yerelden siler.
   ///
@@ -1701,11 +1701,10 @@ class SyncEngine {
       // Başka bir istemci iletiyi sonradan `\Deleted` işaretlediyse (ya da
       // işareti kaldırdıysa) liste ve rozetler sunucudaki gerçeği izlemeli.
       final isDeleted = remote.flags.contains(r'\Deleted');
-      final keywords = remote.flags
-          .where((f) => !f.startsWith(r'\') && f.toLowerCase() != r'$forwarded')
-          .toList();
+      final keywords = normalizedKeywords(remote.flags);
+      final keywordsJson = jsonEncode(keywords);
       final labelsJson = jsonEncode(
-        _namesForKeywords(keywords, labelNamesByKeyword),
+        labelNamesForKeywords(keywords, labelNamesByKeyword),
       );
 
       if (row.isSeen == isSeen &&
@@ -1713,6 +1712,7 @@ class SyncEngine {
           row.isAnswered == isAnswered &&
           row.isForwarded == isForwarded &&
           row.isDeleted == isDeleted &&
+          row.keywordsJson == keywordsJson &&
           row.labelsJson == labelsJson) {
         continue;
       }
@@ -1725,6 +1725,7 @@ class SyncEngine {
           isAnswered: Value(isAnswered),
           isForwarded: Value(isForwarded),
           isDeleted: Value(isDeleted),
+          keywordsJson: Value(keywordsJson),
           labelsJson: Value(labelsJson),
         ),
       ));

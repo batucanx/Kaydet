@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kaydet/data/database/app_database.dart';
@@ -52,8 +53,8 @@ void main() {
   });
   tearDown(() => db.close());
 
-  test('şema 25: tablo oluşur, varsayılan filtre yoktur', () async {
-    expect(db.schemaVersion, 25);
+  test('şema 26: tablo oluşur, varsayılan filtre yoktur', () async {
+    expect(db.schemaVersion, 26);
     expect(await repo.list(accountId), isEmpty);
     expect(await repo.count(accountId), 0);
   });
@@ -197,6 +198,7 @@ void main() {
           'delivery_failed_at',
           'delivery_failure_reason',
           'is_search_hit', // v23'te eklendi
+          'keywords_json', // v26'da eklendi
         ]) {
           await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
         }
@@ -237,6 +239,7 @@ void main() {
           'delivery_failed_at',
           'delivery_failure_reason',
           'is_search_hit', // v23'te eklendi
+          'keywords_json', // v26'da eklendi
         ]) {
           await old.customStatement('ALTER TABLE messages DROP COLUMN $column');
         }
@@ -253,6 +256,57 @@ void main() {
             .get();
         expect(rows, isEmpty);
         expect((await old.allAccounts()).single.email, 'a@b.com');
+        await old.close();
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
+    "göç 25 → 26: ham anahtar kelime kolonu eklenir, CONDSTORE çıpası sıfırlanır",
+    () async {
+      final dir = Directory.systemTemp.createTempSync('kaydet_mig26');
+      final file = File('${dir.path}/k.sqlite');
+      try {
+        var old = AppDatabase.forTesting(NativeDatabase(file));
+        final id = await old.insertAccount(
+          AccountsCompanion.insert(
+            email: 'a@b.com',
+            username: 'a',
+            imapHost: 'h',
+            smtpHost: 'h',
+          ),
+        );
+        final mailboxId = await old.upsertMailbox(
+          MailboxesCompanion.insert(
+            accountId: id,
+            path: 'INBOX',
+            name: 'INBOX',
+            highestModSeq: const Value(42),
+          ),
+        );
+        await old.insertLocalMessage(
+          MessagesCompanion.insert(
+            accountId: id,
+            mailboxId: mailboxId,
+            dateUtc: DateTime.utc(2026, 10, 1),
+            labelsJson: const Value('["Kişisel"]'),
+          ),
+        );
+        await old.customStatement(
+          'ALTER TABLE messages DROP COLUMN keywords_json',
+        );
+        await old.customStatement('PRAGMA user_version = 25');
+        await old.close();
+
+        old = AppDatabase.forTesting(NativeDatabase(file));
+        final mailbox = await old.mailboxById(mailboxId);
+        expect(mailbox!.highestModSeq, isNull);
+        final message = (await old.select(old.messages).get()).single;
+        expect(message.keywordsJson, isNull);
+        // Ham anahtar kelimesi bilinmeyen iletinin etiketi korunur.
+        expect(message.labelsJson, '["Kişisel"]');
         await old.close();
       } finally {
         dir.deleteSync(recursive: true);

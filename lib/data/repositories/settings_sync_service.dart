@@ -915,6 +915,11 @@ class SettingsSyncService {
         await _db.deleteLabel(entry.value.id);
       }
     }
+    // Etiket, onu taşıyan iletiler eşitlendikten SONRA gelmiş olabilir (web'de
+    // yeni oluşturulup hemen atanan etiket): iletiler ham sunucu anahtar
+    // kelimelerinden yeni etiket kümesiyle yeniden çözülür. Silinen/yeniden
+    // adlandırılan etiketlerin eski adları da böylece iletilerden temizlenir.
+    await _db.reapplyLabelNames(accountId);
 
     // ---- imzalar
     final wanted = merged.signatures;

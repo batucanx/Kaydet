@@ -326,6 +326,9 @@ class AccountRepository {
         imapKeyword: Value(keyword),
       ),
     );
+    // Sunucuda bu anahtar kelimeyi hâlâ taşıyan iletiler olabilir (etiket
+    // silinip aynı adla yeniden oluşturulduğunda): görünür hâle gelirler.
+    await _db.reapplyLabelNames(accountId);
     _settingsSync?.schedule(accountId);
   }
 

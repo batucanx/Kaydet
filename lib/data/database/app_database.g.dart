@@ -2382,6 +2382,17 @@ class $MessagesTable extends Messages
     requiredDuringInsert: false,
     defaultValue: const Constant('[]'),
   );
+  static const VerificationMeta _keywordsJsonMeta = const VerificationMeta(
+    'keywordsJson',
+  );
+  @override
+  late final GeneratedColumn<String> keywordsJson = GeneratedColumn<String>(
+    'keywords_json',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _isLocalOnlyMeta = const VerificationMeta(
     'isLocalOnly',
   );
@@ -2517,6 +2528,7 @@ class $MessagesTable extends Messages
     sizeBytes,
     bodyFetchedAt,
     labelsJson,
+    keywordsJson,
     isLocalOnly,
     outboxState,
     outboxError,
@@ -2734,6 +2746,15 @@ class $MessagesTable extends Messages
         labelsJson.isAcceptableOrUnknown(data['labels_json']!, _labelsJsonMeta),
       );
     }
+    if (data.containsKey('keywords_json')) {
+      context.handle(
+        _keywordsJsonMeta,
+        keywordsJson.isAcceptableOrUnknown(
+          data['keywords_json']!,
+          _keywordsJsonMeta,
+        ),
+      );
+    }
     if (data.containsKey('is_local_only')) {
       context.handle(
         _isLocalOnlyMeta,
@@ -2924,6 +2945,10 @@ class $MessagesTable extends Messages
         DriftSqlType.string,
         data['${effectivePrefix}labels_json'],
       )!,
+      keywordsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}keywords_json'],
+      ),
       isLocalOnly: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_local_only'],
@@ -3021,6 +3046,15 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   final DateTime? bodyFetchedAt;
   final String labelsJson;
 
+  /// Sunucudaki ham IMAP anahtar kelimeleri (küçük harf, JSON dizisi; bkz.
+  /// `normalizedKeywords`). `labelsJson` bunlardan, hesabın O ANKİ etiketleriyle
+  /// türetilir. Ham değer saklanmazsa etiketi henüz yerelde olmayan bir
+  /// anahtar kelime (başka istemcide yeni oluşturulmuş etiket, ayar belgesi
+  /// henüz inmemiş) kalıcı olarak kaybolur: bayrak eşitlemesi o iletiyi bir
+  /// daha değişmedikçe okumaz. `null` = sunucudan henüz okunmadı (eski
+  /// satırlar, yerel taslaklar); bu iletilerin etiketleri yeniden çözülmez.
+  final String? keywordsJson;
+
   /// Sunucuda karşılığı olmayan yerel ileti (taslak / giden kutusu).
   final bool isLocalOnly;
   final OutboxState outboxState;
@@ -3069,6 +3103,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     required this.sizeBytes,
     this.bodyFetchedAt,
     required this.labelsJson,
+    this.keywordsJson,
     required this.isLocalOnly,
     required this.outboxState,
     this.outboxError,
@@ -3120,6 +3155,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       map['body_fetched_at'] = Variable<DateTime>(bodyFetchedAt);
     }
     map['labels_json'] = Variable<String>(labelsJson);
+    if (!nullToAbsent || keywordsJson != null) {
+      map['keywords_json'] = Variable<String>(keywordsJson);
+    }
     map['is_local_only'] = Variable<bool>(isLocalOnly);
     {
       map['outbox_state'] = Variable<int>(
@@ -3188,6 +3226,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ? const Value.absent()
           : Value(bodyFetchedAt),
       labelsJson: Value(labelsJson),
+      keywordsJson: keywordsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(keywordsJson),
       isLocalOnly: Value(isLocalOnly),
       outboxState: Value(outboxState),
       outboxError: outboxError == null && nullToAbsent
@@ -3248,6 +3289,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       sizeBytes: serializer.fromJson<int>(json['sizeBytes']),
       bodyFetchedAt: serializer.fromJson<DateTime?>(json['bodyFetchedAt']),
       labelsJson: serializer.fromJson<String>(json['labelsJson']),
+      keywordsJson: serializer.fromJson<String?>(json['keywordsJson']),
       isLocalOnly: serializer.fromJson<bool>(json['isLocalOnly']),
       outboxState: $MessagesTable.$converteroutboxState.fromJson(
         serializer.fromJson<int>(json['outboxState']),
@@ -3297,6 +3339,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'sizeBytes': serializer.toJson<int>(sizeBytes),
       'bodyFetchedAt': serializer.toJson<DateTime?>(bodyFetchedAt),
       'labelsJson': serializer.toJson<String>(labelsJson),
+      'keywordsJson': serializer.toJson<String?>(keywordsJson),
       'isLocalOnly': serializer.toJson<bool>(isLocalOnly),
       'outboxState': serializer.toJson<int>(
         $MessagesTable.$converteroutboxState.toJson(outboxState),
@@ -3342,6 +3385,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     int? sizeBytes,
     Value<DateTime?> bodyFetchedAt = const Value.absent(),
     String? labelsJson,
+    Value<String?> keywordsJson = const Value.absent(),
     bool? isLocalOnly,
     OutboxState? outboxState,
     Value<String?> outboxError = const Value.absent(),
@@ -3386,6 +3430,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
         ? bodyFetchedAt.value
         : this.bodyFetchedAt,
     labelsJson: labelsJson ?? this.labelsJson,
+    keywordsJson: keywordsJson.present ? keywordsJson.value : this.keywordsJson,
     isLocalOnly: isLocalOnly ?? this.isLocalOnly,
     outboxState: outboxState ?? this.outboxState,
     outboxError: outboxError.present ? outboxError.value : this.outboxError,
@@ -3456,6 +3501,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       labelsJson: data.labelsJson.present
           ? data.labelsJson.value
           : this.labelsJson,
+      keywordsJson: data.keywordsJson.present
+          ? data.keywordsJson.value
+          : this.keywordsJson,
       isLocalOnly: data.isLocalOnly.present
           ? data.isLocalOnly.value
           : this.isLocalOnly,
@@ -3515,6 +3563,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
           ..write('labelsJson: $labelsJson, ')
+          ..write('keywordsJson: $keywordsJson, ')
           ..write('isLocalOnly: $isLocalOnly, ')
           ..write('outboxState: $outboxState, ')
           ..write('outboxError: $outboxError, ')
@@ -3558,6 +3607,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     sizeBytes,
     bodyFetchedAt,
     labelsJson,
+    keywordsJson,
     isLocalOnly,
     outboxState,
     outboxError,
@@ -3600,6 +3650,7 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.sizeBytes == this.sizeBytes &&
           other.bodyFetchedAt == this.bodyFetchedAt &&
           other.labelsJson == this.labelsJson &&
+          other.keywordsJson == this.keywordsJson &&
           other.isLocalOnly == this.isLocalOnly &&
           other.outboxState == this.outboxState &&
           other.outboxError == this.outboxError &&
@@ -3640,6 +3691,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
   final Value<int> sizeBytes;
   final Value<DateTime?> bodyFetchedAt;
   final Value<String> labelsJson;
+  final Value<String?> keywordsJson;
   final Value<bool> isLocalOnly;
   final Value<OutboxState> outboxState;
   final Value<String?> outboxError;
@@ -3678,6 +3730,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
     this.labelsJson = const Value.absent(),
+    this.keywordsJson = const Value.absent(),
     this.isLocalOnly = const Value.absent(),
     this.outboxState = const Value.absent(),
     this.outboxError = const Value.absent(),
@@ -3717,6 +3770,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     this.sizeBytes = const Value.absent(),
     this.bodyFetchedAt = const Value.absent(),
     this.labelsJson = const Value.absent(),
+    this.keywordsJson = const Value.absent(),
     this.isLocalOnly = const Value.absent(),
     this.outboxState = const Value.absent(),
     this.outboxError = const Value.absent(),
@@ -3758,6 +3812,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Expression<int>? sizeBytes,
     Expression<DateTime>? bodyFetchedAt,
     Expression<String>? labelsJson,
+    Expression<String>? keywordsJson,
     Expression<bool>? isLocalOnly,
     Expression<int>? outboxState,
     Expression<String>? outboxError,
@@ -3797,6 +3852,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       if (sizeBytes != null) 'size_bytes': sizeBytes,
       if (bodyFetchedAt != null) 'body_fetched_at': bodyFetchedAt,
       if (labelsJson != null) 'labels_json': labelsJson,
+      if (keywordsJson != null) 'keywords_json': keywordsJson,
       if (isLocalOnly != null) 'is_local_only': isLocalOnly,
       if (outboxState != null) 'outbox_state': outboxState,
       if (outboxError != null) 'outbox_error': outboxError,
@@ -3839,6 +3895,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     Value<int>? sizeBytes,
     Value<DateTime?>? bodyFetchedAt,
     Value<String>? labelsJson,
+    Value<String?>? keywordsJson,
     Value<bool>? isLocalOnly,
     Value<OutboxState>? outboxState,
     Value<String?>? outboxError,
@@ -3878,6 +3935,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
       sizeBytes: sizeBytes ?? this.sizeBytes,
       bodyFetchedAt: bodyFetchedAt ?? this.bodyFetchedAt,
       labelsJson: labelsJson ?? this.labelsJson,
+      keywordsJson: keywordsJson ?? this.keywordsJson,
       isLocalOnly: isLocalOnly ?? this.isLocalOnly,
       outboxState: outboxState ?? this.outboxState,
       outboxError: outboxError ?? this.outboxError,
@@ -3978,6 +4036,9 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
     if (labelsJson.present) {
       map['labels_json'] = Variable<String>(labelsJson.value);
     }
+    if (keywordsJson.present) {
+      map['keywords_json'] = Variable<String>(keywordsJson.value);
+    }
     if (isLocalOnly.present) {
       map['is_local_only'] = Variable<bool>(isLocalOnly.value);
     }
@@ -4043,6 +4104,7 @@ class MessagesCompanion extends UpdateCompanion<MessageRow> {
           ..write('sizeBytes: $sizeBytes, ')
           ..write('bodyFetchedAt: $bodyFetchedAt, ')
           ..write('labelsJson: $labelsJson, ')
+          ..write('keywordsJson: $keywordsJson, ')
           ..write('isLocalOnly: $isLocalOnly, ')
           ..write('outboxState: $outboxState, ')
           ..write('outboxError: $outboxError, ')
@@ -10785,6 +10847,7 @@ typedef $$MessagesTableCreateCompanionBuilder =
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
       Value<String> labelsJson,
+      Value<String?> keywordsJson,
       Value<bool> isLocalOnly,
       Value<OutboxState> outboxState,
       Value<String?> outboxError,
@@ -10825,6 +10888,7 @@ typedef $$MessagesTableUpdateCompanionBuilder =
       Value<int> sizeBytes,
       Value<DateTime?> bodyFetchedAt,
       Value<String> labelsJson,
+      Value<String?> keywordsJson,
       Value<bool> isLocalOnly,
       Value<OutboxState> outboxState,
       Value<String?> outboxError,
@@ -11092,6 +11156,11 @@ class $$MessagesTableFilterComposer
 
   ColumnFilters<String> get labelsJson => $composableBuilder(
     column: $table.labelsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get keywordsJson => $composableBuilder(
+    column: $table.keywordsJson,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11427,6 +11496,11 @@ class $$MessagesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get keywordsJson => $composableBuilder(
+    column: $table.keywordsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isLocalOnly => $composableBuilder(
     column: $table.isLocalOnly,
     builder: (column) => ColumnOrderings(column),
@@ -11623,6 +11697,11 @@ class $$MessagesTableAnnotationComposer
 
   GeneratedColumn<String> get labelsJson => $composableBuilder(
     column: $table.labelsJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get keywordsJson => $composableBuilder(
+    column: $table.keywordsJson,
     builder: (column) => column,
   );
 
@@ -11881,6 +11960,7 @@ class $$MessagesTableTableManager
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
                 Value<String> labelsJson = const Value.absent(),
+                Value<String?> keywordsJson = const Value.absent(),
                 Value<bool> isLocalOnly = const Value.absent(),
                 Value<OutboxState> outboxState = const Value.absent(),
                 Value<String?> outboxError = const Value.absent(),
@@ -11919,6 +11999,7 @@ class $$MessagesTableTableManager
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,
                 labelsJson: labelsJson,
+                keywordsJson: keywordsJson,
                 isLocalOnly: isLocalOnly,
                 outboxState: outboxState,
                 outboxError: outboxError,
@@ -11959,6 +12040,7 @@ class $$MessagesTableTableManager
                 Value<int> sizeBytes = const Value.absent(),
                 Value<DateTime?> bodyFetchedAt = const Value.absent(),
                 Value<String> labelsJson = const Value.absent(),
+                Value<String?> keywordsJson = const Value.absent(),
                 Value<bool> isLocalOnly = const Value.absent(),
                 Value<OutboxState> outboxState = const Value.absent(),
                 Value<String?> outboxError = const Value.absent(),
@@ -11997,6 +12079,7 @@ class $$MessagesTableTableManager
                 sizeBytes: sizeBytes,
                 bodyFetchedAt: bodyFetchedAt,
                 labelsJson: labelsJson,
+                keywordsJson: keywordsJson,
                 isLocalOnly: isLocalOnly,
                 outboxState: outboxState,
                 outboxError: outboxError,

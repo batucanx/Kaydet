@@ -342,6 +342,37 @@ void main() {
     expect(await phone.signatures(), ['Web imza:Merhaba:D']);
   });
 
+  test("web'de yeni oluşturulan etiket, ondan önce eşitlenmiş iletilere de iner", () async {
+    // Telefon iletiyi etiketsiz/bilinmeyen anahtar kelimeyle zaten eşitlemiş:
+    // `kaydet_web_client` bayrağı var ama bu hesapta "Web Client" etiketi yok.
+    final phone = await _Device.create(imap);
+    final mailboxId = await phone.db.upsertMailbox(
+      MailboxesCompanion.insert(
+        accountId: phone.accountId,
+        path: 'INBOX',
+        name: 'INBOX',
+        delimiter: const Value('.'),
+        specialUse: const Value(SpecialUse.inbox),
+      ),
+    );
+    await phone.db.insertLocalMessage(
+      MessagesCompanion.insert(
+        accountId: phone.accountId,
+        mailboxId: mailboxId,
+        dateUtc: DateTime.utc(2026, 10, 19, 10, 8),
+        keywordsJson: const Value('["kaydet_web_client"]'),
+      ),
+    );
+
+    final web = await _Device.create(imap, writer: 'web');
+    await web.addLabel('Web Client', 0, keyword: 'kaydet_web_client');
+    await web.sync();
+    await phone.sync();
+
+    final row = (await phone.db.select(phone.db.messages).get()).single;
+    expect(row.labelsJson, '["Web Client"]');
+  });
+
   test('iki yönlü: ekleme, renk değişikliği ve silme', () async {
     final phone = await _Device.create(imap);
     final web = await _Device.create(imap, writer: 'web');
