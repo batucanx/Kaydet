@@ -873,10 +873,12 @@ class SyncController extends Notifier<SyncState> {
         }
         _fireAndForget(repository.trimMailbox(box.id));
         _startBackfill(id, box.id);
-        if (id == activeId) {
-          _startBodyPrefetch(engine, id, box);
-          _fireAndForget(_maybeNotify(box, (outcome as Ok<SyncOutcome>).value));
-        }
+        if (id == activeId) _startBodyPrefetch(engine, id, box);
+        // Bildirim HER hesabın Gelen Kutusu için üretilir, yalnızca etkin olanın
+        // değil. Eskiden etkin olmayan hesapların iletileri burada bildirimsiz
+        // yerele yazılıyordu; sonradan gelen push/arka plan görevi iletiyi artık
+        // "yeni" bulmadığından o hesaplar kalıcı olarak sessiz kalıyordu.
+        _fireAndForget(_maybeNotify(box, (outcome as Ok<SyncOutcome>).value));
       }
       if (full) _lastUnifiedFullSync = DateTime.now();
       state = state.copyWith(
@@ -1124,17 +1126,22 @@ class SyncController extends Notifier<SyncState> {
   /// düşse de) bildirim gösterilir.
   Future<void> _maybeNotify(MailboxRow mailbox, SyncOutcome outcome) async {
     if (mailbox.specialUse != SpecialUse.inbox) return;
-    if (outcome.initialDownload || outcome.newMessageIds.isEmpty) return;
     if (!ref.read(settingsProvider).notificationsEnabled) return;
 
-    final accountId = ref.read(accountIdProvider);
-    if (accountId == null) return;
-
+    // Hesap, EŞİTLENEN klasörün hesabıdır — etkin hesap DEĞİL. "Tüm Hesaplar"
+    // görünümünde etkin olmayan bir hesabın Gelen Kutusu da eşitlenir; etkin
+    // hesabın kimliğiyle bildirmek o iletileri yanlış hesaba bağlar (ya da hiç
+    // bildirmez).
+    //
+    // Yeni ileti olmasa da çağrılır: bildirim defteri (bkz.
+    // `NotificationLedger`) başka bir yolun bildirmeden bıraktığı iletileri
+    // yakalar.
+    //
     // Bildirim yalnızca zarf alanlarını (gönderen/konu) ve varsa önizlemeyi
     // kullanır; gövde beklenmez — `prefetchBodies` arka planda sürer.
     await ref
         .read(newMailNotifierProvider)
-        .notifyNew(accountId: accountId, outcome: outcome);
+        .notifyNew(accountId: mailbox.accountId, outcome: outcome);
   }
 
   /// Uygulama önplandayken IMAP IDLE ile anlık güncelleme alınır.

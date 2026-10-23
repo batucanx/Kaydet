@@ -125,7 +125,7 @@ void main() {
       final client = HttpPushBackendClient(
         config(_Fixed(const InstallCredentials(id: 'id-1', secret: 'sec-1'))),
       );
-      await client.listRegisteredAccountIds('ab' * 32);
+      await client.listRegisteredAccounts('ab' * 32);
       client.close();
       expect(seen.single.value('authorization'), 'Bearer key');
       expect(seen.single.value('x-install-id'), 'id-1');
@@ -153,7 +153,7 @@ void main() {
 
     test('kimlik kaynağı yoksa yalnızca Authorization gider', () async {
       final client = HttpPushBackendClient(config(null));
-      await client.listRegisteredAccountIds('ab' * 32);
+      await client.listRegisteredAccounts('ab' * 32);
       client.close();
       expect(seen.single.value('x-install-id'), isNull);
     });

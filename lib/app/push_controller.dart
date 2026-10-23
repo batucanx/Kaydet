@@ -159,12 +159,15 @@ class PushController extends Notifier<void> {
       final settings = ref.read(settingsProvider);
       // FCM (sunucu push'u) çalışırken ön plan servisi, kalıcı bildirim ve pil
       // maliyetiyle gereksizdir. Servis yalnızca FCM bu cihazda kullanılamıyorsa
-      // (Play hizmetleri yok, backend yapılandırılmamış) ya da kayıt
-      // başarısızsa yedek olarak çalışır.
+      // (Play hizmetleri yok, backend yapılandırılmamış), kayıt başarısızsa ya da
+      // sunucu bazı hesapları izleyemiyorsa (`degraded`: kimlik reddedildi,
+      // ulaşılamıyor) yedek olarak çalışır. Servis TÜM hesapları cihazdan IDLE ile
+      // izlediği için sunucunun kör kaldığı hesaplar da bildirimsiz kalmaz.
       final serverPush = ref.read(remotePushControllerProvider);
       final needsFallback =
           serverPush == ServerPushState.unavailable ||
-          serverPush == ServerPushState.failing;
+          serverPush == ServerPushState.failing ||
+          serverPush == ServerPushState.degraded;
       final wanted =
           settings.notificationsEnabled &&
           settings.syncFrequency == SyncFrequency.push &&

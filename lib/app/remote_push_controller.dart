@@ -114,8 +114,15 @@ enum ServerPushState {
   /// Henüz ilk kayıt denemesi sonuçlanmadı.
   pending,
 
-  /// Hesaplar sunucuya kayıtlı; push gelir.
+  /// Hesaplar sunucuya kayıtlı ve sunucu hepsini izliyor; push gelir.
   active,
+
+  /// Kayıt başarılı ama sunucu bazı hesapları İZLEYEMİYOR (posta sunucusu
+  /// kimlik bilgisini reddetti ya da ulaşılamıyor; bkz.
+  /// [serverPushUnhealthyAccountsProvider]). O hesapların push'u gelmez; Android'de
+  /// ön plan servisi (TÜM hesapları cihazdan IDLE ile izler) yedek olarak
+  /// çalışır.
+  degraded,
 
   /// Son kayıt denemesi başarısız (sunucu/ağ). Android'de ön plan servisi
   /// yedek olarak çalışır; deneme dakikada bir sürer.
@@ -133,6 +140,15 @@ enum ServerPushState {
 /// plan servisini bununla yönetir (sunucu push'u çalışıyorsa servis gereksiz).
 class RemotePushController extends Notifier<ServerPushState> {
   static const _retryDelay = Duration(minutes: 1);
+
+  /// Sunucu izlemesi herhangi bir anda bozulabilir (şifre başka yerde
+  /// değişti, sağlayıcı bağlantıyı reddetti); uygulama açık kaldığı sürece
+  /// durum bu aralıkla yeniden denetlenir.
+  static const _healthInterval = Duration(minutes: 15);
+
+  /// Bir hesap yeniden kaydedilince sunucunun yeni oturumu kurmasına tanınan
+  /// süre; sonra durum doğrulanır.
+  static const _verifyDelay = Duration(seconds: 45);
 
   String? _token;
   bool _tokenLoaded = false;
@@ -171,9 +187,11 @@ class RemotePushController extends Notifier<ServerPushState> {
       _tokenLoaded = true;
       _trigger();
     });
+    final healthTimer = Timer.periodic(_healthInterval, (_) => _trigger());
     ref.onDispose(() {
       subscription.cancel();
       _retryTimer?.cancel();
+      healthTimer.cancel();
     });
 
     ref.listen(allAccountsProvider, (_, _) => _trigger());
@@ -232,9 +250,9 @@ class RemotePushController extends Notifier<ServerPushState> {
         'hesap: ${accounts.length})',
       );
     }
-    var ok = false;
+    var result = const RemotePushSyncResult(ok: false);
     try {
-      ok = await sync.sync(
+      result = await sync.reconcile(
         token: _token,
         enabled: enabled,
         accounts: accounts,
@@ -245,21 +263,48 @@ class RemotePushController extends Notifier<ServerPushState> {
       // bildirimler) etkilememeli; yeniden denenir.
     }
     if (!ref.mounted) return;
+    final ok = result.ok;
     if (ok) {
       _force.removeAll(force);
+      if (result.repairedAccountIds.isNotEmpty) {
+        // Yeniden kaydedilen hesapların sunucudaki durumu henüz belirsiz.
+        _retryTimer = Timer(_verifyDelay, _trigger);
+      }
     } else {
       _retryTimer = Timer(_retryDelay, _trigger);
     }
+    ref
+        .read(serverPushUnhealthyAccountsProvider.notifier)
+        .replace(ok ? result.unhealthyAccountIds : const {});
 
     state = !enabled
         ? ServerPushState.disabled
         : _token == null
         ? (_tokenLoaded ? ServerPushState.unavailable : ServerPushState.pending)
-        : ok
-        ? ServerPushState.active
-        : ServerPushState.failing;
+        : !ok
+        ? ServerPushState.failing
+        : result.unhealthyAccountIds.isNotEmpty
+        ? ServerPushState.degraded
+        : ServerPushState.active;
   }
 }
+
+/// Sunucu push'unun şu an İZLEYEMEDİĞİ hesaplar (kimlik bilgisi reddedildi,
+/// posta sunucusuna ulaşılamıyor). Boşsa tüm hesaplar izleniyor demektir.
+class ServerPushUnhealthyAccounts extends Notifier<Set<int>> {
+  @override
+  Set<int> build() => const {};
+
+  void replace(Set<int> next) {
+    if (setEquals(state, next)) return;
+    state = Set.unmodifiable(next);
+  }
+}
+
+final serverPushUnhealthyAccountsProvider =
+    NotifierProvider<ServerPushUnhealthyAccounts, Set<int>>(
+      ServerPushUnhealthyAccounts.new,
+    );
 
 final remotePushControllerProvider =
     NotifierProvider<RemotePushController, ServerPushState>(

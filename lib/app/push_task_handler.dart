@@ -6,6 +6,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../data/database/app_database.dart';
 import '../data/repositories/account_watcher.dart';
 import '../data/repositories/new_mail_notifier.dart';
+import '../data/repositories/notification_ledger.dart';
 import '../data/services/imap_service.dart';
 import '../data/services/notification_service.dart';
 import '../data/services/secure_store.dart';
@@ -51,6 +52,7 @@ class PushTaskHandler extends TaskHandler {
       database: database,
       notifications: NotificationService(),
       remotePushShowsAlerts: remotePushShowsAlerts,
+      ledger: NotificationLedger(database: database),
     );
 
     // Ağ geri gelince ölü bağlantılar hemen fark edilip yenilensin; aksi
@@ -163,10 +165,10 @@ class PushTaskHandler extends TaskHandler {
     if (notifier == null) return;
     final outcome = sync.outcome;
 
-    if (outcome.newMessageIds.isNotEmpty && !outcome.initialDownload) {
-      // Kullanıcı listeye bakıyor olsa bile bildirilir.
-      await notifier.notifyNew(accountId: sync.accountId, outcome: outcome);
-    }
+    // Her turda çağrılır (yeni ileti olmasa da): bildirim defteri, başka bir
+    // yolun eşitleyip bildirmeden bıraktığı iletileri de yakalar. Kullanıcı
+    // listeye bakıyor olsa bile bildirilir.
+    await notifier.notifyNew(accountId: sync.accountId, outcome: outcome);
 
     // Başka bir cihazdan okunan/silinen iletilerin bildirimini kaldır.
     if (outcome.changedCount > 0 || outcome.deletedCount > 0) {

@@ -1070,6 +1070,27 @@ class AppDatabase extends _$AppDatabase {
     return row.read(count) ?? 0;
   }
 
+  /// Klasörde UID'si [afterUid]'den büyük, hâlâ okunmamış sunucu iletilerinin
+  /// yerel kimlikleri (bkz. `NotificationLedger`: eşitlenmiş ama bildirilmemiş
+  /// iletileri bulmak için).
+  Future<List<int>> unseenMessageIdsAfterUid(
+    int mailboxId,
+    int afterUid,
+  ) async {
+    final rows =
+        await (select(messages)..where(
+              (m) =>
+                  m.mailboxId.equals(mailboxId) &
+                  m.uid.isBiggerThanValue(afterUid) &
+                  m.isSeen.equals(false) &
+                  m.isDeleted.equals(false) &
+                  m.isDraft.equals(false) &
+                  m.isSearchHit.equals(false),
+            ))
+            .get();
+    return [for (final row in rows) row.id];
+  }
+
   Future<int> countUnread(int mailboxId) async {
     final count = countAll();
     final row =

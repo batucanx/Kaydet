@@ -171,6 +171,41 @@ açılışta siler.
    geçmeden önce `AZURE_TRANSLATOR_*_LIMIT` değerlerini ve bütçeyi gözden geçir.
 5. Sunucuyu yeniden başlat; `AZURE_TRANSLATOR_KEY` boşsa çeviri "kullanılamıyor" döner.
 
+## Çok hesaplı bildirim modeli (hesap başına bağımsız izleme)
+
+Bildirim **etkin hesaba bağlı değildir**. Cihazdaki her hesap sunucuda kendi satırıdır
+(`accounts`: `device_id` + `client_account_id`, UNIQUE) ve kendi IDLE izleyicisine sahiptir. Bir
+hesabı kaydetmek/silmek/yeniden kaydetmek yalnızca o satıra dokunur. Push her hesap için
+AYRI gönderilir ve yükte o hesabın `accountId`'si bulunur (iOS: `thread-id` hesap başınadır;
+Android: uygulama yalnızca o hesabı eşitler).
+
+**İzleme asla "sessizce" düşmez:**
+
+- Kimlik hatası (`AUTHENTICATIONFAILED`) izleyiciyi **öldürmez**: 5 → 15 → 30 → 60 dk aralıkla
+  (hesap kilitlenmesin diye seyrek) yeniden denenir. Eskiden izleyici bir kez reddedilince sunucu
+  yeniden başlayana dek hesap bildirimsiz kalıyordu.
+- `GET /v1/accounts` her hesabın **gerçek** durumunu döner: `watching`, `connecting`,
+  `auth_failed`, `unreachable`, `stopped` (`clientAccountIds` eski istemciler için durur).
+  "Kayıtlı" olmak "izleniyor" demek değildir; istemci `auth_failed`/`stopped` hesabı en çok her
+  10 dk'da bir taze şifreyle yeniden kaydeder, düzelmezse (Android) cihazdan IDLE yapan ön plan
+  servisi devreye girer ve Ayarlar > Bildirimler hangi hesabın etkilendiğini gösterir.
+- Push iletilemezse (ağ, APNs/FCM kesintisi) ileti imleci (`last_uid`) **ilerletilmez**; 30 sn →
+  2 dk → 5 dk → 15 dk aralıkla yeniden taranır. Kalıcı reddedilen (geçersiz token) push'ta imleç
+  ilerler.
+- Bir hesabın taraması (yeni ileti → push) hesap başına tek koşar: istemci hesabı yeniden
+  kaydedip izleyici yenilenirken eski ve yeni izleyici aynı iletiyi iki kez bildirmez.
+- Token yenilenince (FCM `onNewToken`, APNs) aynı kurulumun eski cihaz satırı silinmez, hesapları
+  yeni token'a **taşınır**: çalışan izleyici ve son görülen UID korunur (geçiş anında gelen ileti
+  atlanmaz, aynı posta kutusu iki kez izlenmez).
+- Android FCM mesajlarında `collapse_key` **yoktur**. FCM, çevrimdışı/Doze'daki cihaz için aynı
+  anda en çok 4 farklı collapse key saklar; hesap başına anahtar 5 hesapta bildirim kaybettirirdi.
+  Saklama süresi (TTL) 24 saattir. Cihazın bekleyen mesajları silinirse uygulama
+  `onDeletedMessages` ile tüm hesapları tarar.
+
+Sunucu günlüğünde hesap başına durum satırları görünür: `hesap N: INBOX açık, IDLE bekleniyor`
+(sağlıklı), `kimlik doğrulama başarısız ... dk sonra yeniden denenecek` (kimlik reddedildi),
+`push iletilemedi, ... yeniden denenecek` (sağlayıcı kesintisi).
+
 ## Sorun giderme
 
 - `/health` her zaman 200 döner, kimlik doğrulaması istemez — sunucunun ayakta olup olmadığını

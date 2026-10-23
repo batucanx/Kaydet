@@ -92,11 +92,61 @@ class PushBackendException implements Exception {
   String toString() => 'PushBackendException($statusCode)';
 }
 
+/// Sunucunun bir hesabı izleme durumu (bkz. `backend/src/watcher.ts`
+/// `WatchStatus`). "Kayıtlı" olmak "izleniyor" demek DEĞİLDİR: sunucu kimlik
+/// bilgisini reddedilmiş bulabilir ya da posta sunucusuna ulaşamayabilir.
+enum ServerWatchStatus {
+  /// Bağlanıyor ya da kademeli başlatma sırasında bekliyor; geçici.
+  connecting,
+
+  /// INBOX açık, IDLE'da bekleniyor: yeni ileti anında bildirilir.
+  watching,
+
+  /// Posta sunucusu kimlik bilgisini reddetti (şifre değişmiş ya da sağlayıcı
+  /// sunucunun IP'sini engelliyor). Sunucu seyrek yeniden dener; istemci taze
+  /// şifreyle yeniden kaydederek hemen deneyebilir.
+  authFailed,
+
+  /// Posta sunucusuna art arda bağlanılamadı.
+  unreachable,
+
+  /// Kayıt var ama sunucuda çalışan bir izleyici yok.
+  stopped,
+
+  /// Eski sunucu sürümü durum bildirmiyor.
+  unknown;
+
+  /// Sunucu bu hesabın yeni iletisini şu an yakalayamaz.
+  bool get isUnhealthy =>
+      this == authFailed || this == unreachable || this == stopped;
+
+  /// Hesabı taze bilgilerle yeniden kaydetmek durumu düzeltebilir.
+  bool get repairableByReupload => this == authFailed || this == stopped;
+
+  static ServerWatchStatus parse(Object? value) => switch (value) {
+    'watching' => watching,
+    'connecting' => connecting,
+    'auth_failed' => authFailed,
+    'unreachable' => unreachable,
+    'stopped' => stopped,
+    _ => unknown,
+  };
+}
+
+/// Sunucuda kayıtlı bir hesap ve izleme durumu.
+class RegisteredAccount {
+  const RegisteredAccount(this.clientAccountId, this.status);
+
+  final int clientAccountId;
+  final ServerWatchStatus status;
+}
+
 /// Push sunucusunun uygulamaya açtığı yüzey (bkz. `backend/src/app.ts`).
 abstract interface class RemotePushApi {
   String get baseUrl;
 
-  Future<List<int>> listRegisteredAccountIds(String pushToken);
+  /// Cihazın sunucuda kayıtlı hesapları ve her birinin izleme durumu.
+  Future<List<RegisteredAccount>> listRegisteredAccounts(String pushToken);
 
   Future<void> upsertAccount(RemotePushAccount account);
 
@@ -133,15 +183,32 @@ class HttpPushBackendClient implements RemotePushApi {
   String get baseUrl => _config.baseUrl;
 
   @override
-  Future<List<int>> listRegisteredAccountIds(String pushToken) async {
+  Future<List<RegisteredAccount>> listRegisteredAccounts(
+    String pushToken,
+  ) async {
     final res = await _send(
       'GET',
       '/v1/accounts?pushToken=${Uri.encodeQueryComponent(pushToken)}'
       '&platform=$platform',
     );
     final decoded = jsonDecode(res) as Map<String, dynamic>;
+    final detailed = decoded['accounts'];
+    if (detailed is List<dynamic>) {
+      return [
+        for (final entry in detailed)
+          if (entry is Map<String, dynamic>)
+            RegisteredAccount(
+              (entry['clientAccountId'] as num).toInt(),
+              ServerWatchStatus.parse(entry['status']),
+            ),
+      ];
+    }
+    // Durum bildirmeyen eski sunucu: yalnızca kimlikler.
     final list = decoded['clientAccountIds'] as List<dynamic>? ?? const [];
-    return list.map((e) => (e as num).toInt()).toList();
+    return [
+      for (final id in list)
+        RegisteredAccount((id as num).toInt(), ServerWatchStatus.unknown),
+    ];
   }
 
   @override

@@ -61,6 +61,18 @@ class FcmSyncWorker(
         private const val NOTIFICATION_CHANNEL = "kaydet_sync"
         private const val NOTIFICATION_ID = 4211
 
+        /**
+         * Aynı anda YALNIZCA BİR Flutter motoru çalışır (ana iş parçacığında erişilir).
+         *
+         * Hesap başına ayrı benzersiz iş (bir hesabın hatası ötekini geciktirmesin
+         * diye) WorkManager'da PARALEL koşar. Beş hesaba aynı anda ileti düşünce
+         * (gece telefon kapalıydı, sabah açıldı) beş motor birden açılırdı: düşük
+         * bellekli cihazda süreç öldürülür, Keystore/SQLite çekişmesi zaman aşımına
+         * (55 sn) yol açar ve işler hep birlikte başarısız olurdu. Kapı, motorları
+         * sıraya dizer; işler yine hesap başına bağımsız başarısız/yeniden dener.
+         */
+        private val gate = SerialGate()
+
         /** Aynı hesabın push'ları sıraya girer: devam eden eşitleme iptal edilmez. */
         fun enqueue(context: Context, accountId: Int?) {
             val key = if (accountId != null) "kaydet.fcm.sync.$accountId" else "kaydet.fcm.sync.all"
@@ -96,24 +108,41 @@ class FcmSyncWorker(
     private val finished = AtomicBoolean(false)
     private var engine: FlutterEngine? = null
 
+    // Yalnızca ana iş parçacığında erişilir (bkz. SerialGate).
+    private var gateTask: (() -> Unit)? = null
+    private var gateHeld = false
+
+    private fun gateFinish() {
+        if (!gateHeld) return
+        gateHeld = false
+        gate.release()
+    }
+
     override fun startWork(): ListenableFuture<Result> =
         CallbackToFutureAdapter.getFuture { completer ->
             mainHandler.post {
-                try {
-                    runEngine { success ->
-                        if (!finished.compareAndSet(false, true)) return@runEngine
-                        mainHandler.removeCallbacksAndMessages(null)
-                        destroyEngine()
-                        if (success) FcmChannel.notifySynced()
-                        completer.set(resultFor(success))
-                    }
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Arka plan eşitlemesi başlatılamadı", t)
-                    if (finished.compareAndSet(false, true)) {
-                        destroyEngine()
-                        completer.set(resultFor(false))
+                val task: () -> Unit = {
+                    gateHeld = true
+                    try {
+                        runEngine { success ->
+                            if (!finished.compareAndSet(false, true)) return@runEngine
+                            mainHandler.removeCallbacksAndMessages(null)
+                            destroyEngine()
+                            gateFinish()
+                            if (success) FcmChannel.notifySynced()
+                            completer.set(resultFor(success))
+                        }
+                    } catch (t: Throwable) {
+                        Log.e(TAG, "Arka plan eşitlemesi başlatılamadı", t)
+                        if (finished.compareAndSet(false, true)) {
+                            destroyEngine()
+                            gateFinish()
+                            completer.set(resultFor(false))
+                        }
                     }
                 }
+                gateTask = task
+                gate.acquire(task)
             }
             "FcmSyncWorker"
         }
@@ -128,8 +157,11 @@ class FcmSyncWorker(
     override fun onStopped() {
         // Sistem işi durdurdu (kota, kısıtlama): motoru bırak; iş yeniden denenir.
         mainHandler.post {
+            // Henüz sırasını beklemekteyse kuyruktan çıkar; çalışıyorsa kapıyı aç.
+            gateTask?.let { gate.remove(it) }
             finished.set(true)
             destroyEngine()
+            gateFinish()
         }
     }
 

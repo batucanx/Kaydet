@@ -122,8 +122,12 @@ describe('Notifier', () => {
 
   it('kalıcı hatada yeniden denemez', async () => {
     const t = setup([{ status: 'error', reason: 'PayloadTooLarge', retryable: false }]);
-    await t.notifier.notify(t.account, [msg(1)]);
+    expect(await t.notifier.notify(t.account, [msg(1)])).toBe('dropped');
     expect(t.send).toHaveBeenCalledOnce();
+  });
+
+  it('başarıda sent döner', async () => {
+    expect(await s.notifier.notify(s.account, [msg(1)])).toBe('sent');
   });
 
   it('geçici hata sürerse deneme sayısı sınırlıdır', async () => {
@@ -132,13 +136,14 @@ describe('Notifier', () => {
         status: 'error', reason: 'x', retryable: true,
       }) as ApnsResult),
     );
-    await t.notifier.notify(t.account, [msg(1)]);
+    // Geçici hata aşılamadı: çağıran imleci ilerletmeyip yeniden denemeli.
+    expect(await t.notifier.notify(t.account, [msg(1)])).toBe('failed');
     expect(t.send).toHaveBeenCalledTimes(3);
   });
 
   it('geçersiz token cihazı ve hesapları siler', async () => {
     const t = setup([{ status: 'invalid_token', reason: 'Unregistered' }]);
-    await t.notifier.notify(t.account, [msg(1)]);
+    expect(await t.notifier.notify(t.account, [msg(1)])).toBe('dropped');
     expect(t.repo.listAccounts()).toHaveLength(0);
     expect(t.removed).toHaveBeenCalledWith([t.account.id]);
   });
@@ -256,13 +261,43 @@ describe('Notifier (Android / FCM)', () => {
       uidValidity: '99',
     });
     expect(JSON.stringify(data)).not.toContain('Gizli');
-    expect(options.collapseKey).toBe('account-4');
+    // Hesap başına collapse key FCM'in 4 anahtar sınırına takılır (5 hesapta
+    // bildirim kaybı); anahtarsız gönderilir ve saklama süresi uzatılır.
+    expect(options.collapseKey).toBeUndefined();
+    expect(options.ttlSeconds).toBe(24 * 60 * 60);
   });
 
   it('geçici hatada yeniden dener', async () => {
     const s = androidSetup([{ status: 'error', reason: 'x', retryable: true }]);
-    await s.notifier.notify(s.account, [msg(1)]);
+    expect(await s.notifier.notify(s.account, [msg(1)])).toBe('sent');
     expect(s.fcmSend).toHaveBeenCalledTimes(2);
+  });
+
+  it('FCM geçici hatası aşılamazsa failed döner (bildirim kaybolmasın diye yeniden denenir)', async () => {
+    const s = androidSetup(
+      Array.from({ length: 5 }, () => ({ status: 'error', reason: 'UNAVAILABLE', retryable: true })),
+    );
+    expect(await s.notifier.notify(s.account, [msg(1)])).toBe('failed');
+  });
+
+  it('5 hesap için gönderimler birbirinden bağımsızdır: her hesap kendi accountId ile gider', async () => {
+    const s = androidSetup();
+    const accounts = [1, 2, 3, 4, 5].map((n) =>
+      s.repo.upsertAccount({
+        installId: 'a'.repeat(32), pushToken: FCM_TOKEN, platform: 'android', environment: 'production',
+        clientAccountId: n, host: 'imap.example.com', port: 993, secure: true,
+        username: `u${n}@example.com`, password: 'pw',
+      }),
+    );
+    for (const account of accounts) await s.notifier.notify(account, [msg(n(account))]);
+    const sent = s.fcmSend.mock.calls.map((c) => c[1] as Record<string, string>);
+    expect(sent.map((d) => d.accountId)).toEqual(['1', '2', '3', '4', '5']);
+    // Hiçbiri collapse key taşımaz: FCM'in 4 anahtar sınırı yüzünden düşemezler.
+    expect(s.fcmSend.mock.calls.every((c) => (c[2] as any).collapseKey === undefined)).toBe(true);
+
+    function n(account: { client_account_id: number }) {
+      return account.client_account_id;
+    }
   });
 
   it('geçersiz token cihazı siler', async () => {

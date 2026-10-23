@@ -9,11 +9,17 @@ import {
 } from './installs.js';
 import { InstallLimitError, type Repository } from './repository.js';
 import type { TranslationService } from './translation.js';
+import type { WatchStatus } from './watcher.js';
 
 /** İzleyici (IDLE) katmanının hesap değişikliklerinden haberdar olması için. */
 export interface AccountHooks {
   onAccountUpserted(account: AccountRow): void;
   onAccountsRemoved(accountIds: number[]): void;
+  /**
+   * Hesabın şu anki izleme durumu; izleyicisi yoksa `undefined`. Yoksa (testler,
+   * izleyicisiz kurulum) `GET /v1/accounts` durumu `stopped` bildirir.
+   */
+  statusOf?(accountId: number): WatchStatus | undefined;
 }
 
 const noopHooks: AccountHooks = {
@@ -178,8 +184,18 @@ export function buildApp(opts: {
         .code(400)
         .send({ error: 'invalid_request', issues: parsed.error.issues });
     }
-    const clientAccountIds = repo.listAccountClientIds(parsed.data.pushToken);
-    return reply.send({ clientAccountIds });
+    const rows = repo.listDeviceAccounts(parsed.data.pushToken);
+    return reply.send({
+      // Eski istemciler yalnızca bu alanı okur.
+      clientAccountIds: rows.map((r) => r.client_account_id),
+      // Her hesabın sunucudaki GERÇEK izleme durumu: "kayıtlı" olmak "izleniyor"
+      // demek değildir (kimlik reddedilmiş ya da sunucuya ulaşılamıyor olabilir).
+      // İstemci buna bakıp şifreyi yeniden gönderir ya da yedek izlemeye geçer.
+      accounts: rows.map((r) => ({
+        clientAccountId: r.client_account_id,
+        status: hooks.statusOf?.(r.id) ?? 'stopped',
+      })),
+    });
   });
 
   app.put('/v1/accounts', async (request, reply) => {
@@ -197,8 +213,9 @@ export function buildApp(opts: {
       return reply.code(503).send({ error: 'android_push_unavailable' });
     }
     let account: AccountRow;
+    let superseded: number[];
     try {
-      account = repo.upsertAccount({
+      ({ account, supersededAccountIds: superseded } = repo.upsertAccountDetailed({
         installId: request.installId,
         pushToken: b.pushToken,
         platform: b.platform,
@@ -209,13 +226,14 @@ export function buildApp(opts: {
         secure: b.imap.secure,
         username: b.username,
         password: b.password,
-      });
+      }));
     } catch (err) {
       if (err instanceof InstallLimitError) {
         return reply.code(429).send({ error: 'install_account_limit' });
       }
       throw err;
     }
+    if (superseded.length > 0) hooks.onAccountsRemoved(superseded);
     hooks.onAccountUpserted(account);
     return reply.code(204).send();
   });

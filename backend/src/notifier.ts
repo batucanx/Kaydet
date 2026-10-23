@@ -64,6 +64,17 @@ function targetData(
   };
 }
 
+/**
+ * Bir bildirim denemesinin sonucu.
+ * - `sent`: push sağlayıcıya (APNs/FCM) kabul ettirildi.
+ * - `dropped`: gönderilecek bir şey/yer yok ya da kalıcı hata (cihaz silinmiş,
+ *   token geçersiz, yük reddedildi); yeniden denemek anlamsız.
+ * - `failed`: geçici hata yeniden denemelerle de aşılamadı (ağ, sağlayıcı
+ *   kesintisi). Çağıran ileti imlecini İLERLETMEMELİ ve daha sonra yeniden
+ *   denemeli; aksi hâlde kısa bir kesinti bildirimi sonsuza dek kaybettirir.
+ */
+export type NotifyResult = 'sent' | 'dropped' | 'failed';
+
 export interface NotifierOptions {
   /** Android cihazlar için; yoksa Android kayıtlarına push gönderilmez. */
   fcm?: Pick<FcmClient, 'send'>;
@@ -73,6 +84,13 @@ export interface NotifierOptions {
   /** Sonuç günlüğü; cihaz token'ı ya da içerik ASLA yazılmaz. */
   log?: (message: string) => void;
 }
+
+/**
+ * Android push'u cihaza ulaşamazsa (kapalı, uçak modu) FCM'in saklama süresi.
+ * Varsayılan 1 saat, telefonu gece kapatan/uzun süre çevrimdışı kalan kullanıcıda
+ * bildirimi kaybettirirdi; bir günlük geç bildirim hiç gelmemesinden iyidir.
+ */
+export const ANDROID_PUSH_TTL_SECONDS = 24 * 60 * 60;
 
 // Geçici APNs hatalarında hızlı, kısa yeniden denemeler: bildirim gecikmesin
 // ama bir kesinti yüzünden de kaybolmasın.
@@ -100,14 +118,13 @@ export class Notifier {
     account: AccountRow,
     messages: NewMessage[],
     uidValidity?: number,
-  ): Promise<void> {
+  ): Promise<NotifyResult> {
     const latest = messages[messages.length - 1];
-    if (!latest) return;
+    if (!latest) return 'dropped';
     const device = this.repo.getDevice(account.device_id);
-    if (!device) return;
+    if (!device) return 'dropped';
     if (device.platform === 'android') {
-      await this.notifyAndroid(account, device, messages, uidValidity);
-      return;
+      return this.notifyAndroid(account, device, messages, uidValidity);
     }
 
     const badge = this.repo.deviceUnreadTotal(device.id);
@@ -140,7 +157,7 @@ export class Notifier {
       let result = await this.apns.send(device.push_token, currentEnv, payload);
       if (result.status === 'sent') {
         this.opts.log?.(`hesap ${account.id}: push gönderildi (${currentEnv})`);
-        return;
+        return 'sent';
       }
       if (result.status === 'invalid_token') {
         // Ortam uyuşmazlığında (geliştirici sertifikasıyla Release derlemesi vb.)
@@ -157,7 +174,7 @@ export class Notifier {
               `hesap ${account.id}: Alternatif ortamda (${altEnv}) push BAŞARIYLA gönderildi! Cihaz ortamı güncelleniyor.`,
             );
             this.repo.updateDeviceEnvironment(device.id, altEnv);
-            return;
+            return 'sent';
           }
         }
 
@@ -166,12 +183,12 @@ export class Notifier {
         );
         const ids = this.repo.deleteDevice(device.push_token);
         if (ids.length > 0) this.opts.onDevicesRemoved?.(ids);
-        return;
+        return 'dropped';
       }
       const delay = RETRY_DELAYS_MS[attempt];
       if (!result.retryable || delay === undefined) {
         this.opts.log?.(`hesap ${account.id}: push gönderilemedi (${result.reason})`);
-        return;
+        return result.retryable ? 'failed' : 'dropped';
       }
       await this.sleep(delay);
     }
@@ -189,11 +206,11 @@ export class Notifier {
     device: DeviceRow,
     messages: NewMessage[],
     uidValidity?: number,
-  ): Promise<void> {
+  ): Promise<NotifyResult> {
     const fcm = this.opts.fcm;
     if (!fcm) {
       this.opts.log?.(`hesap ${account.id}: FCM yapılandırılmamış, push atlandı`);
-      return;
+      return 'dropped';
     }
     const latest = messages[messages.length - 1]!;
     const data: Record<string, string> = {
@@ -204,15 +221,20 @@ export class Notifier {
       count: String(messages.length),
       ...(uidValidity !== undefined ? { uidValidity: String(uidValidity) } : {}),
     };
-    // Aynı hesaba art arda gelen push'lar tek mesaja indirgenir; uygulama
-    // zaten tüm yeni iletileri tek turda çeker.
-    const options = { collapseKey: `account-${account.client_account_id}` };
+    // collapse_key BİLEREK yok. FCM, çevrimdışı/Doze'daki bir cihaz için AYNI ANDA
+    // en çok 4 farklı collapse key saklar; hesap başına anahtar kullanınca 5
+    // hesapta fazlası ("hangileri korunur" belirsiz) sessizce düşerdi — yani
+    // uygulama kapalıyken bazı hesapların bildirimi hiç gelmezdi. Anahtarsız
+    // mesajlar ayrı ayrı saklanır (cihaz başına en çok 100; taşarsa istemci
+    // `onDeletedMessages` ile tüm hesapları tarar). Yinelenen push zararsızdır:
+    // istemci hesap başına eşitlemeyi birleştirir, ikinci tur yeni ileti bulmaz.
+    const options = { ttlSeconds: ANDROID_PUSH_TTL_SECONDS };
 
     for (let attempt = 0; ; attempt++) {
       const result = await fcm.send(device.push_token, data, options);
       if (result.status === 'sent') {
         this.opts.log?.(`hesap ${account.id}: FCM push gönderildi`);
-        return;
+        return 'sent';
       }
       if (result.status === 'invalid_token') {
         this.opts.log?.(
@@ -220,12 +242,12 @@ export class Notifier {
         );
         const ids = this.repo.deleteDevice(device.push_token);
         if (ids.length > 0) this.opts.onDevicesRemoved?.(ids);
-        return;
+        return 'dropped';
       }
       const delay = RETRY_DELAYS_MS[attempt];
       if (!result.retryable || delay === undefined) {
         this.opts.log?.(`hesap ${account.id}: FCM push gönderilemedi (${result.reason})`);
-        return;
+        return result.retryable ? 'failed' : 'dropped';
       }
       await this.sleep(delay);
     }

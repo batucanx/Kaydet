@@ -6,6 +6,9 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../app/providers.dart';
+import '../../../app/remote_push_controller.dart'
+    show serverPushUnhealthyAccountsProvider;
+import '../../../data/database/app_database.dart' show AccountRow;
 import '../../../data/services/app_settings.dart';
 import '../../core/theme/tokens.dart';
 import '../../core/widgets/kaydet_notice.dart';
@@ -65,6 +68,12 @@ class _NotificationsSettingsScreenState
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
     final isPush = settings.syncFrequency == SyncFrequency.push;
+    final unhealthyIds = ref.watch(serverPushUnhealthyAccountsProvider);
+    final unhealthyAccounts = [
+      for (final account
+          in ref.watch(allAccountsProvider).value ?? const <AccountRow>[])
+        if (unhealthyIds.contains(account.id)) account.email,
+    ];
 
     return Scaffold(
       appBar: AppBar(
@@ -105,6 +114,22 @@ class _NotificationsSettingsScreenState
                   onTap: () => ref
                       .read(notificationServiceProvider)
                       .openSystemSettings(),
+                ),
+              // Sunucu bu hesapların posta kutusunu izleyemiyor (kimlik bilgisi
+              // reddedildi ya da posta sunucusuna ulaşılamıyor): anlık bildirim
+              // bu hesaplar için çalışmaz. Sessizce bildirimsiz kalmasınlar diye
+              // hangi hesapların etkilendiği gösterilir.
+              if (settings.notificationsEnabled && unhealthyAccounts.isNotEmpty)
+                SettingsTile(
+                  icon: LucideIcons.triangleAlert,
+                  title: unhealthyAccounts.length == 1
+                      ? 'Bir hesabın bildirimi kurulamadı'
+                      : '${unhealthyAccounts.length} hesabın bildirimi kurulamadı',
+                  subtitle:
+                      '${unhealthyAccounts.join(', ')}\n'
+                      'Posta sunucusu bu hesabın kimlik bilgisini kabul etmiyor '
+                      'ya da ulaşılamıyor. Şifre değiştiyse hesap ayarlarından '
+                      'güncelleyin; bildirimler düzelince kendiliğinden başlar.',
                 ),
               MenuAnchor(
                 animated: true,

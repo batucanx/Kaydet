@@ -24,6 +24,8 @@ import '../data/repositories/dedicated_target_fetcher.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
+import '../data/repositories/notification_ledger.dart';
+import '../data/repositories/remote_push_sync.dart' show ServerPushCoverage;
 import '../data/repositories/notification_target_resolver.dart';
 import '../data/repositories/sync_engine.dart';
 import '../data/services/draft_remote_data_source.dart';
@@ -124,6 +126,8 @@ final newMailNotifierProvider = Provider<NewMailNotifier>(
     database: ref.watch(databaseProvider),
     notifications: ref.watch(notificationServiceProvider),
     remotePushShowsAlerts: remotePushShowsAlerts,
+    ledger: NotificationLedger(database: ref.watch(databaseProvider)),
+    serverCoversAccount: ServerPushCoverage().covers,
   ),
 );
 

@@ -24,6 +24,19 @@ class KaydetMessagingService : FirebaseMessagingService() {
     }
 
     /**
+     * FCM sunucusu bu cihaza ait bekleyen mesajları SİLDİ: cihaz uzun süre
+     * ulaşılamazdı (bekleyen mesaj sayısı 100'ü aştı, ya da bir aydan eski),
+     * ya da Doze/uçak modu sırasında saklama sınırları doldu. Hangi hesapların
+     * push'u düştüğü bilinemez; bu yüzden TÜM hesaplar eşitlenir (hesap
+     * kimliksiz iş). Bu çağrı olmasaydı düşen push'lar sessizce kaybolur,
+     * bildirimler ancak periyodik görev gelince (en erken ~15 dk) görünürdü.
+     */
+    override fun onDeletedMessages() {
+        Log.w(TAG, "FCM bekleyen mesajları sildi; tüm hesaplar eşitleniyor")
+        FcmSyncWorker.enqueue(applicationContext, null)
+    }
+
+    /**
      * Token yenilendi. Ana isolate canlıysa kendisi sunucuya bildirir; değilse
      * (ya da bildirim kaçarsa) eski token sunucuda UNREGISTERED alıp silinir ve
      * kullanıcı push'tan sessizce düşerdi. Bu yüzden arka planda da yeniden

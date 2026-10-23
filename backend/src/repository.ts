@@ -36,8 +36,32 @@ export class Repository {
 
   /** Cihazı ve hesabı kaydeder; aynı (cihaz, hesap) çifti tekrar gelirse günceller. */
   upsertAccount(input: AccountInput): AccountRow {
+    return this.upsertAccountDetailed(input).account;
+  }
+
+  /**
+   * [upsertAccount] ile aynıdır; ek olarak çakışma yüzünden SİLİNEN eski hesap
+   * satırlarının id'lerini döndürür (izleyicilerinin durdurulması için).
+   *
+   * Bir kurulumun (`install_id`) bir platformda aynı anda yalnızca TEK geçerli
+   * push token'ı olur. Token yenilenince (FCM `onNewToken`, APNs yeniden kayıt)
+   * eski cihaz satırı geride kalabilir (istemcinin silme isteği ağ yokken ya da
+   * uygulama öldürülmüşken başarısız olur). Kalırsa: (1) aynı posta kutuları iki
+   * kez izlenir, (2) her ileti ÖLÜ token'a da gönderilir, (3) kurulumun hesap
+   * kotasından düşer.
+   *
+   * Bu yüzden yeni token yazılırken aynı kurulumun aynı platformdaki eski token
+   * satırlarının hesapları YENİ cihaza TAŞINIR (satır kimliği, çalışan IDLE
+   * izleyicisi ve son görülen UID imleci korunur: geçiş anında gelen ileti
+   * "ilk kurulum" sayılıp atlanmaz), eski cihaz satırı silinir. Yeni cihazda
+   * aynı `client_account_id` zaten varsa eski kopya silinir ve id'si döner.
+   */
+  upsertAccountDetailed(input: AccountInput): {
+    account: AccountRow;
+    supersededAccountIds: number[];
+  } {
     const now = Date.now();
-    const tx = this.db.transaction((): AccountRow => {
+    const tx = this.db.transaction(() => {
       // Yeniden kurulumda aynı token yeni kuruluma geçebilir: son yazan sahiptir.
       this.db
         .prepare(
@@ -52,6 +76,28 @@ export class Repository {
       const device = this.db
         .prepare('SELECT * FROM devices WHERE push_token = ?')
         .get(input.pushToken) as DeviceRow;
+
+      const staleDevices = this.db
+        .prepare(
+          `SELECT id FROM devices
+           WHERE install_id = ? AND platform = ? AND id != ?`,
+        )
+        .all(input.installId, input.platform, device.id) as { id: number }[];
+      const supersededAccountIds: number[] = [];
+      for (const stale of staleDevices) {
+        const rows = this.db
+          .prepare('SELECT id FROM accounts WHERE device_id = ?')
+          .all(stale.id) as { id: number }[];
+        for (const row of rows) {
+          // UNIQUE(device_id, client_account_id) çakışırsa değişiklik olmaz.
+          const moved = this.db
+            .prepare('UPDATE OR IGNORE accounts SET device_id = ? WHERE id = ?')
+            .run(device.id, row.id);
+          if (moved.changes === 0) supersededAccountIds.push(row.id);
+        }
+        // Taşınamayan (çakışan) kalıntılar CASCADE ile birlikte silinir.
+        this.db.prepare('DELETE FROM devices WHERE id = ?').run(stale.id);
+      }
 
       const exists = this.db
         .prepare('SELECT 1 FROM accounts WHERE device_id = ? AND client_account_id = ?')
@@ -98,11 +144,12 @@ export class Repository {
           this.box.encrypt(input.password),
           now,
         );
-      return this.db
+      const account = this.db
         .prepare(
           'SELECT * FROM accounts WHERE device_id = ? AND client_account_id = ?',
         )
         .get(device.id, input.clientAccountId) as AccountRow;
+      return { account, supersededAccountIds };
     });
     return tx();
   }
@@ -138,14 +185,19 @@ export class Repository {
 
   /** Cihazın sunucuda kayıtlı hesaplarının client_account_id listesini döndürür. */
   listAccountClientIds(pushToken: string): number[] {
-    const rows = this.db
+    return this.listDeviceAccounts(pushToken).map((r) => r.client_account_id);
+  }
+
+  /** Cihazın hesapları: sunucu satır kimliği + istemci hesap kimliği. */
+  listDeviceAccounts(pushToken: string): { id: number; client_account_id: number }[] {
+    return this.db
       .prepare(
-        `SELECT a.client_account_id FROM accounts a
+        `SELECT a.id, a.client_account_id FROM accounts a
          JOIN devices d ON d.id = a.device_id
-         WHERE d.push_token = ?`,
+         WHERE d.push_token = ?
+         ORDER BY a.client_account_id`,
       )
-      .all(pushToken) as { client_account_id: number }[];
-    return rows.map((r) => r.client_account_id);
+      .all(pushToken) as { id: number; client_account_id: number }[];
   }
 
   getAccount(id: number): AccountRow | undefined {

@@ -21,11 +21,17 @@ class _FakeApi implements RemotePushApi {
   bool fail = false;
   final List<RemotePushAccount> upserted = [];
   final Set<int> registered = {};
+  final Map<int, ServerWatchStatus> statuses = {};
 
   @override
-  Future<List<int>> listRegisteredAccountIds(String pushToken) async {
+  Future<List<RegisteredAccount>> listRegisteredAccounts(
+    String pushToken,
+  ) async {
     if (fail) throw const PushBackendException(503);
-    return registered.toList();
+    return [
+      for (final id in registered)
+        RegisteredAccount(id, statuses[id] ?? ServerWatchStatus.watching),
+    ];
   }
 
   @override
@@ -166,6 +172,39 @@ void main() {
 
     await expectState(container, ServerPushState.disabled);
     expect(api.upserted, isEmpty);
+  });
+
+  test(
+    'sunucu bir hesabı izleyemiyorsa durum degraded olur ve hesap raporlanır '
+    '(Android\'de yedek ön plan servisi bunu bekler)',
+    () async {
+      final account = (await db.allAccounts()).single;
+      api.registered.add(account.id);
+      api.statuses[account.id] = ServerWatchStatus.unreachable;
+      final container = makeContainer(_FakeTokenSource('t' * 150));
+      container.listen(remotePushControllerProvider, (_, _) {});
+      container.listen(serverPushUnhealthyAccountsProvider, (_, _) {});
+
+      await expectState(container, ServerPushState.degraded);
+      expect(container.read(serverPushUnhealthyAccountsProvider), {account.id});
+    },
+  );
+
+  test('sunucu hesabı yeniden izlemeye başlayınca durum active\'e döner', () async {
+    final account = (await db.allAccounts()).single;
+    api.registered.add(account.id);
+    api.statuses[account.id] = ServerWatchStatus.unreachable;
+    final source = _FakeTokenSource('t' * 150);
+    final container = makeContainer(source);
+    container.listen(remotePushControllerProvider, (_, _) {});
+    container.listen(serverPushUnhealthyAccountsProvider, (_, _) {});
+    await expectState(container, ServerPushState.degraded);
+
+    api.statuses[account.id] = ServerWatchStatus.watching;
+    source.controller.add('t' * 150); // herhangi bir tetikleyici: yeniden denetim
+
+    await expectState(container, ServerPushState.active);
+    expect(container.read(serverPushUnhealthyAccountsProvider), isEmpty);
   });
 
   test('token yenilenince yeni token ile yeniden kaydedilir', () async {

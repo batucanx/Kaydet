@@ -133,7 +133,7 @@ describe('API', () => {
       headers: auth,
     });
     expect(emptyRes.statusCode).toBe(200);
-    expect(emptyRes.json()).toEqual({ clientAccountIds: [] });
+    expect(emptyRes.json()).toEqual({ clientAccountIds: [], accounts: [] });
 
     // 2 hesap ekle
     await put(body({ clientAccountId: 101 }));
@@ -145,7 +145,7 @@ describe('API', () => {
       headers: auth,
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ clientAccountIds: [101, 102] });
+    expect(res.json().clientAccountIds).toEqual([101, 102]);
 
     // Geçersiz token ile 400
     const badRes = await s.app.inject({
@@ -154,6 +154,108 @@ describe('API', () => {
       headers: auth,
     });
     expect(badRes.statusCode).toBe(400);
+  });
+
+  describe('çoklu hesap izleme durumu ve token yenileme', () => {
+    const list = (token = TOKEN) =>
+      s.app.inject({ method: 'GET', url: `/v1/accounts?pushToken=${token}&platform=ios`, headers: auth });
+
+    it('GET /v1/accounts her hesabın GERÇEK izleme durumunu bildirir', async () => {
+      const statuses = new Map<number, 'watching' | 'auth_failed'>();
+      s.hooks.statusOf = (id) => statuses.get(id);
+      await put(body({ clientAccountId: 1 }));
+      await put(body({ clientAccountId: 2, username: 'ikinci@example.com' }));
+      await put(body({ clientAccountId: 3, username: 'ucuncu@example.com' }));
+      const [a, b] = s.repo.listAccounts();
+      statuses.set(a!.id, 'watching');
+      statuses.set(b!.id, 'auth_failed'); // üçüncünün izleyicisi yok
+
+      const res = await list();
+      expect(res.json().clientAccountIds).toEqual([1, 2, 3]);
+      expect(res.json().accounts).toEqual([
+        { clientAccountId: 1, status: 'watching' },
+        { clientAccountId: 2, status: 'auth_failed' },
+        { clientAccountId: 3, status: 'stopped' },
+      ]);
+    });
+
+    it('bir hesabı silmek ya da yeniden kaydetmek diğer hesapların kaydına dokunmaz', async () => {
+      await put(body({ clientAccountId: 1 }));
+      await put(body({ clientAccountId: 2, username: 'b@example.com' }));
+      await put(body({ clientAccountId: 3, username: 'c@example.com' }));
+      s.db.prepare('UPDATE accounts SET last_uid = 7, unread = 2').run();
+      const before = s.repo.listAccounts().map((a) => ({ id: a.id, pw: s.repo.decryptPassword(a) }));
+
+      await put(body({ clientAccountId: 2, username: 'b@example.com', password: 'yeni' }));
+      await s.app.inject({
+        method: 'DELETE', url: '/v1/accounts', headers: auth,
+        payload: { apnsToken: TOKEN, clientAccountId: 3 },
+      });
+
+      const rows = s.repo.listAccounts();
+      expect(rows.map((r) => r.client_account_id)).toEqual([1, 2]);
+      expect(rows[0]!.id).toBe(before[0]!.id);
+      expect(s.repo.decryptPassword(rows[0]!)).toBe(before[0]!.pw);
+      expect(rows[0]!.last_uid).toBe(7); // imleç korunur
+      expect(s.repo.decryptPassword(rows[1]!)).toBe('yeni');
+    });
+
+    const TOKEN_B = 'cd'.repeat(32);
+
+    it('aynı kurulum yeni token ile kaydolunca eski token satırı silinmez, hesaplar TAŞINIR', async () => {
+      await put(body({ clientAccountId: 1 }));
+      await put(body({ clientAccountId: 2, username: 'b@example.com' }));
+      s.db.prepare('UPDATE accounts SET last_uid = 99').run();
+      const idsBefore = s.repo.listAccounts().map((a) => a.id);
+
+      // Token yenilendi; istemci eski kaydı silemeden yeni token ile yazıyor.
+      await put(body({ apnsToken: TOKEN_B, clientAccountId: 1 }));
+
+      // Eski cihaz satırı gitti, hesaplar yenisine geçti: izleyiciler/imleç aynı.
+      expect(s.db.prepare('SELECT push_token FROM devices').all()).toEqual([{ push_token: TOKEN_B }]);
+      const rows = s.repo.listAccounts();
+      expect(rows.map((r) => r.id).sort()).toEqual([...idsBefore].sort());
+      expect(rows.every((r) => r.last_uid === 99)).toBe(true);
+      expect(s.repo.listAccountClientIds(TOKEN)).toEqual([]);
+      expect(s.repo.listAccountClientIds(TOKEN_B)).toEqual([1, 2]);
+      // Taşınan hesapların izleyicisi durdurulmaz (yalnızca çakışanlar için çağrılır).
+      expect(s.hooks.onAccountsRemoved).not.toHaveBeenCalled();
+    });
+
+    it('token yenilemede çakışan hesap kopyası silinir ve izleyicisi durdurulur', async () => {
+      await put(body({ clientAccountId: 1 }));
+      const oldId = s.repo.listAccounts()[0]!.id;
+      // Yeni token'a hesap 1 önceden (başka yoldan) yazılmış; eski cihaz satırı hâlâ duruyor.
+      s.db
+        .prepare(
+          `INSERT INTO devices (push_token, platform, environment, created_at, install_id)
+           VALUES (?, 'ios', 'development', 0, ?)`,
+        )
+        .run(TOKEN_B, 'a'.repeat(32));
+      const newDevice = s.db.prepare('SELECT id FROM devices WHERE push_token = ?').get(TOKEN_B) as { id: number };
+      s.db
+        .prepare(
+          `INSERT INTO accounts (device_id, client_account_id, imap_host, imap_port, imap_secure,
+             username, password_enc, created_at) VALUES (?, 1, 'imap.example.com', 993, 1, 'me@example.com', 'x', 0)`,
+        )
+        .run(newDevice.id);
+
+      await put(body({ apnsToken: TOKEN_B, clientAccountId: 2, username: 'b@example.com' }));
+
+      expect(s.hooks.onAccountsRemoved).toHaveBeenCalledWith([oldId]);
+      expect(s.repo.listAccounts()).toHaveLength(2);
+    });
+
+    it('farklı kurulumların cihazları birbirini etkilemez', async () => {
+      await put(body({ clientAccountId: 1 }));
+      const other = { ...auth, 'x-install-id': 'c'.repeat(32), 'x-install-secret': 'd'.repeat(64) };
+      await s.app.inject({
+        method: 'PUT', url: '/v1/accounts', headers: other,
+        payload: body({ apnsToken: TOKEN_B, clientAccountId: 1 }),
+      });
+      expect(s.repo.listAccountClientIds(TOKEN)).toEqual([1]);
+      expect(s.repo.listAccountClientIds(TOKEN_B)).toEqual([1]);
+    });
   });
 
   describe('Android (FCM)', () => {
@@ -208,7 +310,7 @@ describe('API', () => {
       const res = await s.app.inject({
         method: 'GET', url: `/v1/accounts?pushToken=${TOKEN}&platform=ios`, headers: auth,
       });
-      expect(res.json()).toEqual({ clientAccountIds: [1] });
+      expect(res.json().clientAccountIds).toEqual([1]);
     });
 
     it('Android cihazı pushToken ile listelenir ve silinir', async () => {
@@ -217,7 +319,7 @@ describe('API', () => {
       const list = await a.app.inject({
         method: 'GET', url: `/v1/accounts?pushToken=${FCM}&platform=android`, headers: auth,
       });
-      expect(list.json()).toEqual({ clientAccountIds: [1] });
+      expect(list.json().clientAccountIds).toEqual([1]);
       const del = await a.app.inject({
         method: 'DELETE', url: '/v1/devices', headers: auth, payload: { pushToken: FCM, platform: 'android' },
       });

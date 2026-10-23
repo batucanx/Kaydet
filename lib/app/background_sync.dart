@@ -12,6 +12,9 @@ import '../domain/models/mail_models.dart';
 import '../data/repositories/mail_connection.dart';
 import '../data/repositories/mail_repository.dart';
 import '../data/repositories/new_mail_notifier.dart';
+import '../data/repositories/remote_push_sync.dart'
+    show ServerPushCoverage, SharedPrefsRegistrationStore;
+import '../data/repositories/notification_ledger.dart';
 import '../data/repositories/sync_engine.dart';
 import '../data/services/app_settings.dart';
 import '../data/services/imap_service.dart';
@@ -82,7 +85,15 @@ abstract final class BackgroundSync {
 void backgroundCallbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
     if (taskName != BackgroundSync.taskName) return true;
-    return runBackgroundSync();
+    final synced = await runBackgroundSync();
+    // Sunucu izlemesini denetler/onarır (uygulama kapalıyken de çalışan tek
+    // yer): şifre değişimi, sunucu sıfırlanması ya da reddedilen kimlik
+    // yüzünden bir hesabın push'u sessizce kesilmişse en geç bu turda fark
+    // edilir. Sonucu görevin başarısını etkilemez.
+    try {
+      await verifyRemotePushInBackground();
+    } on Object catch (_) {}
+    return synced;
   });
 }
 
@@ -149,6 +160,10 @@ void fcmBackgroundSync() {
         success = await runBackgroundSync(
           onlyAccountId: payload?['accountId'] as int?,
           retryOnError: true,
+          // Push'a bağlı tur MÜMKÜN OLDUĞUNCA KISA tutulur: Android hızlandırılmış
+          // iş kotası dardır ve kota dolunca iş Doze penceresine kadar ertelenir.
+          // Bakım (yerel önbellek budama, iade taraması) periyodik görevdedir.
+          maintenance: false,
         );
       }
     } on Object catch (_) {
@@ -170,6 +185,18 @@ void fcmBackgroundSync() {
 /// alamazdı. Dönüş `false` ise yeniden denenir.
 Future<bool> reconcileRemotePushInBackground({required String? token}) async {
   if (token == null || token.isEmpty) return true;
+  return _reconcileRemotePush(explicitToken: token);
+}
+
+/// Periyodik arka plan turunda, ANA UYGULAMA KAPALIYKEN sunucu kaydını denetler:
+/// sunucunun izleyemediği (kimlik reddedilmiş ya da izleyicisi düşmüş) hesaplar
+/// cihazdaki güncel şifreyle yeniden kaydedilir. Arka plan isolate'i push
+/// token'ını platformdan okuyamaz; en son kaydedilen token kullanılır (token
+/// yenilemesi zaten [reconcileRemotePushInBackground] ile kaydı günceller).
+Future<bool> verifyRemotePushInBackground() =>
+    _reconcileRemotePush(explicitToken: null);
+
+Future<bool> _reconcileRemotePush({required String? explicitToken}) async {
   final database = AppDatabase();
   try {
     final settingsStore = await AppSettingsStore.create();
@@ -180,6 +207,9 @@ Future<bool> reconcileRemotePushInBackground({required String? token}) async {
     );
     if (built == null) return true;
     try {
+      final token =
+          explicitToken ??
+          SharedPrefsRegistrationStore(settingsStore.preferences).read().token;
       return await built.sync.sync(
         token: token,
         enabled: wantsServerPush(settingsStore.read()),
@@ -203,6 +233,9 @@ Future<bool> reconcileRemotePushInBackground({required String? token}) async {
 /// hesap; diğer hesapların bağlantı kurma maliyeti ödenmez). Hesap artık
 /// cihazda yoksa iş yapılacak bir şey kalmamıştır.
 ///
+/// [maintenance] kapalıysa (push'a bağlı turlar) yerel önbellek budama ve iade
+/// taraması atlanır; yalnızca yeni ileti eşitlenip bildirilir.
+///
 /// Dönüş `false` olursa WorkManager görevi yeniden dener. [retryOnError]
 /// doluyken beklenmeyen hatalar da `false` döner (push tabanlı çağrılarda
 /// ileti kaybolmasın diye); periyodik görevde hata yutulur, çünkü bir sonraki
@@ -210,6 +243,7 @@ Future<bool> reconcileRemotePushInBackground({required String? token}) async {
 Future<bool> runBackgroundSync({
   int? onlyAccountId,
   bool retryOnError = false,
+  bool maintenance = true,
 }) async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -220,6 +254,8 @@ Future<bool> runBackgroundSync({
     database: database,
     notifications: NotificationService(),
     remotePushShowsAlerts: remotePushShowsAlerts,
+    ledger: NotificationLedger(database: database),
+    serverCoversAccount: ServerPushCoverage().covers,
   );
 
   try {
@@ -250,6 +286,17 @@ Future<bool> runBackgroundSync({
     var shouldRetry = false;
 
     for (final account in accounts) {
+      // Önceki bir tur iletiyi yerele yazıp bildirimi göstermeden kesildiyse
+      // (işçi durduruldu, zaman aşımı) o bildirim AĞ GEREKTİRMEDEN burada
+      // gösterilir: ileti artık sunucuda "yeni" görünmez, yalnızca bildirim
+      // defterinde bekliyordur (bkz. `NotificationLedger`).
+      if (settings.notificationsEnabled) {
+        await notifier.notifyNew(
+          accountId: account.id,
+          outcome: const SyncOutcome(),
+        );
+      }
+
       final connected = await connection.ensureConnected(account.id);
       if (connected is Err<void>) {
         // Kimlik hatası kalıcıdır, tekrar denemek işe yaramaz; diğer
@@ -282,7 +329,13 @@ Future<bool> runBackgroundSync({
           inbox: inbox,
           outcome: outcome.value,
         );
+      } else if (outcome is Err<SyncOutcome> &&
+          outcome.failure is! AuthFailure) {
+        // Geçici hata (ağ, zaman aşımı): görev yeniden denensin.
+        shouldRetry = true;
       }
+
+      if (!maintenance) continue;
 
       // `unawaited` DEĞİL: arka plan isolate'i bu fonksiyon dönünce
       // WorkManager tarafından kapatılabilir, fırlatılıp unutulan bir iş
@@ -317,16 +370,29 @@ Future<void> _notifyNewMessages({
   required MailboxRow inbox,
   required SyncOutcome outcome,
 }) async {
-  if (outcome.initialDownload || outcome.newMessageIds.isEmpty) return;
-
-  // Önizleme metni için gövdeleri çek, sonra bildir.
-  await engine.prefetchBodies(
-    accountId: accountId,
-    mailbox: inbox,
-    limit: outcome.newMessageIds.length.clamp(1, 10),
-  );
+  if (!outcome.initialDownload && outcome.newMessageIds.isNotEmpty) {
+    // Önizleme metni için gövdeleri çek — ama SÜRE SINIRLIYLA. Yavaş bir sunucu
+    // ya da büyük bir ileti, bildirimi dakikalarca geciktirir (ya da işçi
+    // bildirim gösterilmeden zaman aşımına uğrar). Süre dolarsa bildirim
+    // önizlemesiz, gönderen + konuyla çıkar.
+    try {
+      await engine
+          .prefetchBodies(
+            accountId: accountId,
+            mailbox: inbox,
+            limit: outcome.newMessageIds.length.clamp(1, 10),
+          )
+          .timeout(_previewBudget);
+    } on Object catch (_) {
+      // Önizleme yok; bildirim yine de gösterilir.
+    }
+  }
+  // Yeni ileti olmasa da çağrılır: defterdeki bildirilmemiş iletileri de yakalar.
   await notifier.notifyNew(accountId: accountId, outcome: outcome);
 }
+
+/// Bildirim önizlemesi için gövde indirmeye ayrılan en uzun süre.
+const Duration _previewBudget = Duration(seconds: 8);
 
 /// Bildirimdeki "Arşivle" / "Sil" eylemlerine dokunulunca çağrılır.
 ///
